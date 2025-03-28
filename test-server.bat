@@ -1,4 +1,5 @@
 @echo off
 echo Testing OpenRouter Research Agents MCP Server...
-cd C:\Users\tdesa\Documents\ai_projects\openrouter-agents
+REM IMPORTANT: Update the path below to point to where you installed this project
+cd /d C:\path\to\your\openrouter-agents
 node src/server/mcpServer.js --stdio < test-input.json
