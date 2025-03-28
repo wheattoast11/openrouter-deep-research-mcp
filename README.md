@@ -1,6 +1,6 @@
 # OpenRouter Agents MCP Server
 
-A Model Context Protocol (MCP) server implementation for OpenRouter that provides sophisticated research agent capabilities. This server allows Claude to delegate research to different specialized agents powered by various OpenRouter models.
+A Model Context Protocol (MCP) server implementation for OpenRouter that provides sophisticated research agent capabilities. This server allows your conversational LLM to delegate research to a Claude research orchestrator that uses different specialized agents powered by various OpenRouter models.
 
 ## Features
 
@@ -28,7 +28,7 @@ A Model Context Protocol (MCP) server implementation for OpenRouter that provide
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/openrouter-agents.git
+   git clone https://github.com/wheattoast11/openrouter-agents.git
    cd openrouter-agents
    ```
 
