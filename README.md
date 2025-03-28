@@ -6,9 +6,9 @@ A Model Context Protocol (MCP) server implementation for OpenRouter that provide
 
 If you find this project helpful, please consider giving it a star on GitHub! Your support helps make this project better.
 
-[![GitHub stars](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research.svg?style=social&label=Star)](https://github.com/wheattoast11/openrouter-agents)
-[![GitHub forks](https://img.shields.io/github/forks/wheattoast11/openrouter-deep-research?style=social&label=Fork)](https://github.com/wheattoast11/openrouter-agents/fork)
-[![GitHub issues](https://img.shields.io/github/issues/wheattoast11/openrouter-deep-research.svg?style=social&label=Issues)](https://github.com/wheattoast11/openrouter-agents/issues)
+[![GitHub stars](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research-mcp.svg?style=social&label=Star)](https://github.com/wheattoast11/openrouter-agents)
+[![GitHub forks](https://img.shields.io/github/forks/wheattoast11/openrouter-deep-research-mcp?style=social&label=Fork)](https://github.com/wheattoast11/openrouter-agents/fork)
+[![GitHub issues](https://img.shields.io/github/issues/wheattoast11/openrouter-deep-research-mcp.svg?style=social&label=Issues)](https://github.com/wheattoast11/openrouter-agents/issues)
 
 Your feedback and contributions are always welcome!
 
