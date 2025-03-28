@@ -39,7 +39,7 @@ This is the recommended method for integrating with MCP clients like Cline in VS
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/wheattoast11/openrouter-agents.git
+   git clone https://github.com/wheattoast11/openrouter-deep-research-mcp.git
    cd openrouter-agents
    ```
 
@@ -143,7 +143,7 @@ This method uses Docker and is suitable for running the server as a standalone c
 
 1.  Clone this repository (if not already done):
     ```bash
-    git clone https://github.com/wheattoast11/openrouter-agents.git
+    git clone https://github.com/wheattoast11/openrouter-deep-research-mcp.git
     cd openrouter-agents
     ```
 2.  Create and configure your `.env` file as described in the standard installation (Step 3 & 4).
