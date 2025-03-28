@@ -2,6 +2,16 @@
 
 A Model Context Protocol (MCP) server implementation for OpenRouter that provides sophisticated research agent capabilities. This server allows your conversational LLM to delegate research to a Claude research orchestrator that uses different specialized agents powered by various OpenRouter models.
 
+## 🌟 Support This Project
+
+If you find this project helpful, please consider giving it a star on GitHub! Your support helps make this project better.
+
+[![GitHub stars](https://img.shields.io/github/stars/wheattoast11/openrouter-agents.svg?style=social&label=Star)](https://github.com/wheattoast11/openrouter-agents)
+[![GitHub forks](https://img.shields.io/github/forks/wheattoast11/openrouter-agents.svg?style=social&label=Fork)](https://github.com/wheattoast11/openrouter-agents/fork)
+[![GitHub issues](https://img.shields.io/github/issues/wheattoast11/openrouter-agents.svg?style=social&label=Issues)](https://github.com/wheattoast11/openrouter-agents/issues)
+
+Your feedback and contributions are always welcome!
+
 ## Features
 
 - Research planning with Claude 3.7 Sonnet (thinking mode)
