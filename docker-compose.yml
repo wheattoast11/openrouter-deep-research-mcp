@@ -1,0 +1,13 @@
+version: '3'
+
+services:
+  openrouter-agents:
+    build: .
+    container_name: openrouter-agents
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs

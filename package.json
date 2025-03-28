@@ -1,0 +1,21 @@
+{
+  "name": "openrouter-agents",
+  "version": "1.0.0",
+  "description": "OpenRouter MCP server for research agents",
+  "main": "src/server/mcpServer.js",
+  "scripts": {
+    "start": "node src/server/mcpServer.js",
+    "dev": "nodemon src/server/mcpServer.js",
+    "stdio": "node src/server/mcpServer.js --stdio"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.4.0",
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
