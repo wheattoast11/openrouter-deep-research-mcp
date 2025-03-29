@@ -40,6 +40,9 @@ logs/
 # Coverage directory used by tools like istanbul
 coverage/
 
+# Database
+researchAgentDB/
+
 # Misc
 .cache/
 .temp/
