@@ -2,6 +2,44 @@
 
 A Model Context Protocol (MCP) server implementation for OpenRouter that provides sophisticated research agent capabilities. This server allows your conversational LLM to delegate research to a Claude research orchestrator that uses different specialized agents powered by various OpenRouter models.
 
+## 🚀 New Beta Branch (03-29-2025)
+
+### OpenRouter Agents MCP Server Technical Overview
+The OpenRouter Agents MCP Server implements a sophisticated orchestration system for AI-powered research. This summary highlights the key technical components and capabilities in the latest beta (03-29-2025).
+
+#### Core Architecture
+- **Model Context Protocol (MCP)**: Full implementation with both STDIO and HTTP/SSE transports
+- **Multi-Agent Orchestration**: Hierarchical system with planning, research, and context agent roles
+- **Vector Embedding Database**: PGLite with pgvector for semantic knowledge storage
+- **Round-Robin Load Balancing**: Distributes research tasks across different models for optimal results
+- **Adaptive Fallback System**: High to low-cost model degradation when primary research fails
+
+#### Research Capabilities
+- **Multi-Stage Planning**: Claude 3.7 Sonnet decomposes complex queries into specialized sub-questions
+- **Parallel Execution**: Concurrent research across multiple LLMs for comprehensive results
+- **Context-Aware Refinement**: Second-stage planning that identifies and fills gaps in initial research
+- **Semantic Knowledge Base**: Vector search finds relevant past research to enhance new queries
+- **Adaptive Synthesis**: Contextual agent integrates findings with customizable audience levels and formats
+
+#### Recent Enhancements
+- **Cross-Model Resilience**: Comprehensive error handling keeps research flowing despite individual model failures
+- **Dynamic Caching**: Intelligent TTL and cache optimization based on query complexity
+- **DB Resilience**: Retry logic with exponential backoff for database operations
+- **Defensive Programming**: Null-safe operations throughout the codebase
+- **Enhanced User Feedback**: Rating system with detailed error recovery
+- **Comprehensive Testing**: Verified functionality across all five MCP tools
+
+The beta improves both reliability and research quality through architectural enhancements while maintaining the plug-and-play simplicity of the original implementation. The system seamlessly integrates with Cline in VS Code and Claude Desktop App, providing enterprise-grade research capabilities in a self-contained package.
+
+These improvements deliver a more reliable and powerful research experience while maintaining the server's ease of use. To try the beta version:
+
+```bash
+git clone https://github.com/wheattoast11/openrouter-deep-research-mcp.git
+cd openrouter-agents
+git checkout beta
+npm install
+```
+
 ## 🌟 Support This Project
 
 If you find this project helpful, please consider giving it a star on GitHub! Your support helps make this project better.
