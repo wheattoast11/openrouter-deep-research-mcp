@@ -556,5 +556,63 @@ module.exports = {
   findReportsByQuery,
   addFeedbackToReport,
   findReportsBySimilarity,
-  listRecentReports
+  listRecentReports,
+  getReportById // Export the new function
 };
+
+// Function to retrieve a single report by its ID
+async function getReportById(reportId) {
+  // Validate reportId is a number
+  const reportIdNum = parseInt(reportId, 10);
+  if (isNaN(reportIdNum)) {
+    console.error(`[${new Date().toISOString()}] Invalid report ID format for retrieval: ${reportId}`);
+    return null; // Return null for invalid ID format
+  }
+
+  return executeWithRetry(
+    async () => {
+      const result = await db.query(
+        `SELECT 
+           id, 
+           original_query, 
+           parameters, 
+           final_report, 
+           research_metadata,
+           images,
+           text_documents,
+           structured_data,
+           based_on_past_report_ids,
+           created_at,
+           updated_at,
+           feedback_entries
+         FROM reports 
+         WHERE id = $1;`,
+        [reportIdNum]
+      );
+      
+      if (result.rows.length === 0) {
+        console.log(`[${new Date().toISOString()}] Report with ID ${reportId} not found.`);
+        return null; // Return null if report not found
+      }
+
+      const report = result.rows[0];
+      console.log(`[${new Date().toISOString()}] Successfully retrieved report ID: ${reportId}`);
+      
+      // Convert JSONB strings back to objects for consistency
+      return {
+        ...report,
+        _id: report.id, // Add _id field
+        parameters: typeof report.parameters === 'string' ? JSON.parse(report.parameters) : report.parameters,
+        researchMetadata: typeof report.research_metadata === 'string' ? JSON.parse(report.research_metadata) : report.research_metadata,
+        images: typeof report.images === 'string' ? JSON.parse(report.images) : report.images,
+        text_documents: typeof report.text_documents === 'string' ? JSON.parse(report.text_documents) : report.text_documents,
+        structured_data: typeof report.structured_data === 'string' ? JSON.parse(report.structured_data) : report.structured_data,
+        based_on_past_report_ids: typeof report.based_on_past_report_ids === 'string' ? JSON.parse(report.based_on_past_report_ids) : report.based_on_past_report_ids,
+        feedback_entries: typeof report.feedback_entries === 'string' ? JSON.parse(report.feedback_entries) : report.feedback_entries,
+        queryEmbedding: null // Explicitly exclude embedding
+      };
+    },
+    `getReportById(${reportId})`,
+    null // fallback value if operation fails
+  );
+}

@@ -12,13 +12,15 @@ const {
   getPastResearchSchema,
   rateResearchReportSchema,
   listResearchHistorySchema,
+  getReportContentSchema, // Import schema for new tool
   
   // Functions
   conductResearch,
   researchFollowUp,
   getPastResearch,
   rateResearchReport,
-  listResearchHistory
+  listResearchHistory,
+  getReportContent // Import function for new tool
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 
@@ -34,18 +36,18 @@ const server = new McpServer({
      "conduct_research",
      conductResearchSchema.shape,
      async (params, exchange) => { // Added exchange parameter
-       const startTime = Date.now();
-       console.log(`[${new Date().toISOString()}] conduct_research: Starting research for query "${params.query.substring(0, 50)}..."`); // Use log
-       console.log(`[${new Date().toISOString()}] conduct_research: Parameters: costPreference=${params.costPreference}, format=${params.outputFormat}, audience=${params.audienceLevel}`); // Use log
-       try {
-         // Pass the exchange context to conductResearch
-         const result = await conductResearch(params, exchange);
-         const duration = Date.now() - startTime;
-         // Log completion, the actual content is streamed via progress
-         console.log(`[${new Date().toISOString()}] conduct_research: Research stream finished successfully in ${duration}ms.`); // Use log
-         // Return the final confirmation message (which now includes the report ID)
-         return {
-        content: [{
+        const startTime = Date.now();
+        console.error(`[${new Date().toISOString()}] conduct_research: Starting research for query "${params.query.substring(0, 50)}..."`); // Use error
+        console.error(`[${new Date().toISOString()}] conduct_research: Parameters: costPreference=${params.costPreference}, format=${params.outputFormat}, audience=${params.audienceLevel}`); // Use error
+        try {
+          // Pass the exchange context to conductResearch
+          const result = await conductResearch(params, exchange);
+          const duration = Date.now() - startTime;
+          // Log completion, the actual content is streamed via progress
+          console.error(`[${new Date().toISOString()}] conduct_research: Research stream finished successfully in ${duration}ms.`); // Use error
+          // Return the final confirmation message (which now includes the report ID)
+          return {
+         content: [{
           type: 'text',
           text: result // e.g., "Research complete. Results streamed. Report ID: 6..."
         }]
@@ -71,15 +73,15 @@ server.tool(
   async (params, exchange) => {
     const startTime = Date.now();
     const toolName = "research_follow_up";
-    console.log(`[${new Date().toISOString()}] ${toolName}: Starting follow-up for original query "${params.originalQuery.substring(0, 50)}..."`);
-    console.log(`[${new Date().toISOString()}] ${toolName}: Follow-up question: "${params.followUpQuestion.substring(0, 50)}..."`);
-    console.log(`[${new Date().toISOString()}] ${toolName}: Parameters: costPreference=${params.costPreference}`);
+    console.error(`[${new Date().toISOString()}] ${toolName}: Starting follow-up for original query "${params.originalQuery.substring(0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] ${toolName}: Follow-up question: "${params.followUpQuestion.substring(0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] ${toolName}: Parameters: costPreference=${params.costPreference}`);
     
     try {
       // Call researchFollowUp from tools.js
       const result = await researchFollowUp(params, exchange);
       const duration = Date.now() - startTime;
-      console.log(`[${new Date().toISOString()}] ${toolName}: Follow-up research completed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] ${toolName}: Follow-up research completed in ${duration}ms.`);
       
       return {
         content: [{
@@ -108,13 +110,13 @@ server.tool(
   async (params, exchange) => {
     const startTime = Date.now();
     const toolName = "get_past_research";
-    console.log(`[${new Date().toISOString()}] ${toolName}: Searching for similar past reports for query "${params.query ? params.query.substring(0, 50) : 'N/A'}..."`);
+    console.error(`[${new Date().toISOString()}] ${toolName}: Searching for similar past reports for query "${params.query ? params.query.substring(0, 50) : 'N/A'}..."`);
     
     try {
       // Call getPastResearch from tools.js
       const result = await getPastResearch(params, exchange);
       const duration = Date.now() - startTime;
-      console.log(`[${new Date().toISOString()}] ${toolName}: Search completed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] ${toolName}: Search completed in ${duration}ms.`);
       
       return {
         content: [{
@@ -143,13 +145,13 @@ server.tool(
   async (params, exchange) => {
     const startTime = Date.now();
     const toolName = "rate_research_report";
-    console.log(`[${new Date().toISOString()}] ${toolName}: Processing rating ${params.rating} for report ${params.reportId}`);
+    console.error(`[${new Date().toISOString()}] ${toolName}: Processing rating ${params.rating} for report ${params.reportId}`);
     
     try {
       // Call rateResearchReport from tools.js
       const result = await rateResearchReport(params, exchange);
       const duration = Date.now() - startTime;
-      console.log(`[${new Date().toISOString()}] ${toolName}: Rating processed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] ${toolName}: Rating processed in ${duration}ms.`);
       
       return {
         content: [{
@@ -178,13 +180,13 @@ server.tool(
   async (params, exchange) => {
     const startTime = Date.now();
     const toolName = "list_research_history";
-    console.log(`[${new Date().toISOString()}] ${toolName}: Listing recent reports (limit: ${params.limit}, filter: "${params.queryFilter || 'None'}")`);
+    console.error(`[${new Date().toISOString()}] ${toolName}: Listing recent reports (limit: ${params.limit}, filter: "${params.queryFilter || 'None'}")`);
     
     try {
       // Call listResearchHistory from tools.js
       const result = await listResearchHistory(params, exchange);
       const duration = Date.now() - startTime;
-      console.log(`[${new Date().toISOString()}] ${toolName}: Listing completed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] ${toolName}: Listing completed in ${duration}ms.`);
       
       return {
         content: [{
@@ -206,22 +208,57 @@ server.tool(
   }
 );
 
+// Register tool to retrieve specific report content by ID
+server.tool(
+  "get_report_content",
+  getReportContentSchema.shape,
+  async (params, exchange) => {
+    const startTime = Date.now();
+    const toolName = "get_report_content";
+    console.error(`[${new Date().toISOString()}] ${toolName}: Retrieving content for report ID ${params.reportId}`);
+    
+    try {
+      // Call getReportContent from tools.js
+      const result = await getReportContent(params, exchange); // Pass exchange if needed later
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] ${toolName}: Retrieval completed in ${duration}ms.`);
+      
+      // Return the report content directly
+      return {
+        content: [{
+          type: 'text',
+          text: result // This is the report content string
+        }]
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      return {
+        content: [{
+          type: 'text',
+          text: `Error retrieving report content: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
 
  // Set up transports based on environment
  const setupTransports = async () => {
   // For command-line usage, use STDIO
   if (process.argv.includes('--stdio')) {
-    console.log('Starting MCP server with STDIO transport'); // Use log
+    console.error('Starting MCP server with STDIO transport'); // Use error
     const transport = new StdioServerTransport();
-    console.log('Attempting server.connect(transport)...'); // Add log before
+    console.error('Attempting server.connect(transport)...'); // Add error before
     await server.connect(transport);
-    console.log('server.connect(transport) completed.'); // Add log after
-    return;
-  }
-
-  // For HTTP usage, set up Express with SSE
-  const app = express();
-  const port = config.server.port;
+    console.error('server.connect(transport) completed.'); // Add error after
+    return; // Exit after setting up stdio, don't proceed to HTTP setup
+  } else { // Only setup HTTP/SSE if --stdio is NOT specified
+    // For HTTP usage, set up Express with SSE
+    const app = express();
+    const port = config.server.port;
   const serverApiKey = config.server.apiKey; // Get the API key from config
 
   // Authentication Middleware
@@ -259,19 +296,19 @@ server.tool(
     next();
   };
  
-  console.log(`Starting MCP server with HTTP/SSE transport on port ${port}`);
+  console.error(`Starting MCP server with HTTP/SSE transport on port ${port}`); // Use error
   if (serverApiKey) {
-    console.log(`[${new Date().toISOString()}] Basic API key authentication ENABLED for HTTP transport.`);
+    console.error(`[${new Date().toISOString()}] Basic API key authentication ENABLED for HTTP transport.`); // Use error
   } else if (process.env.ALLOW_NO_API_KEY === 'true') {
-    console.warn(`[${new Date().toISOString()}] SECURITY WARNING: Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true).`);
+    console.error(`[${new Date().toISOString()}] SECURITY WARNING: Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true).`); // Use error, keep as warning level
   } else {
-    console.error(`[${new Date().toISOString()}] CRITICAL: SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail.`);
+    console.error(`[${new Date().toISOString()}] CRITICAL: SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail.`); // Keep error
   }
  
  
    // Endpoint for SSE - Apply authentication middleware
    app.get('/sse', authenticate, async (req, res) => {
-     console.log('New SSE connection'); // Use log
+     console.error('New SSE connection'); // Use error
      const transport = new SSEServerTransport('/messages', res);
      global.currentTransport = transport;
     await server.connect(transport);
@@ -289,8 +326,9 @@ server.tool(
 
    // Start server
    app.listen(port, () => {
-     console.log(`MCP server listening on port ${port}`); // Use log
+     console.error(`MCP server listening on port ${port}`); // Use error
    });
+  } // Close the else block for HTTP setup
  };
 
  // Start the server

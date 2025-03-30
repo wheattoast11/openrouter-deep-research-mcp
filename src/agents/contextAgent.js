@@ -17,7 +17,8 @@ class ContextAgent {
       maxLength = null,
       images = null, 
       documents = null, // Renamed from textDocuments for consistency
-      structuredData = null 
+      structuredData = null,
+      inputEmbeddings = null // Add inputEmbeddings
     } = options;
 
     console.error(`[${new Date().toISOString()}] ContextAgent: Starting contextualization for query "${originalQuery.substring(0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${documents ? documents.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
@@ -89,7 +90,7 @@ Audience level: ${audienceLevel} (adjust depth and terminology accordingly)
 ${includeSources ? 'Maintain source attributions where provided by research agents' : 'Source attribution not required'}
 ${maxLength ? `Target length: Approximately ${maxLength} words` : 'Use appropriate length for comprehensive coverage'}
 
-Focus on providing genuine insights derived from the comparison and synthesis of ensemble results, rather than merely summarizing individual agent outputs. Explicitly mention when models agree or disagree on key points, and incorporate the confidence assessments provided by the research agents (if available in their results) into your synthesis and overall confidence assessment. If documents or structured data were provided, ensure the synthesis reflects their content appropriately.
+Focus on providing genuine insights derived from the comparison and synthesis of ensemble results, rather than merely summarizing individual agent outputs. Explicitly mention when models agree or disagree on key points, and incorporate the confidence assessments provided by the research agents (if available in their results) into your synthesis and overall confidence assessment. If documents, structured data, or their embeddings were provided, ensure the synthesis reflects their content and semantic meaning appropriately.
 `;
     
     // Prepare text document context for the user prompt
@@ -105,21 +106,29 @@ Focus on providing genuine insights derived from the comparison and synthesis of
     // Prepare structured data context for the user prompt
     let structuredDataContext = '';
      if (structuredData && structuredData.length > 0) {
-        structuredDataContext = `\n\nPROVIDED STRUCTURED DATA SUMMARIES FOR CONTEXT:\n`;
-        structuredData.forEach(data => {
+       structuredDataContext = `\n\nPROVIDED STRUCTURED DATA SUMMARIES FOR CONTEXT:\n`;
+       structuredData.forEach(data => {
            const summary = structuredDataParser.getStructuredDataSummary(data.content, data.type, data.name);
            structuredDataContext += `--- Data: ${data.name} (${data.type}) ---\n${summary}\n---\n`;
         });
      }
+     
+    // Add note about input embeddings if present
+    let embeddingContext = '';
+    if (inputEmbeddings && (inputEmbeddings.textDocuments?.length > 0 || inputEmbeddings.structuredData?.length > 0)) {
+       embeddingContext = `\n\nNOTE: Semantic embeddings were generated for the provided documents/data, indicating their potential relevance. Consider this semantic context during synthesis.`;
+    }
+
 
     const userPrompt = `
 ORIGINAL RESEARCH QUERY: ${originalQuery}
 ${textDocumentContext}
 ${structuredDataContext}
+${embeddingContext} 
 ENSEMBLE RESEARCH RESULTS (Multiple models may have answered each sub-query):
 ${formattedResults}
 
-Please perform a critical synthesis of these findings, considering the original query and any provided documents or structured data. For each sub-query, compare the ensemble results, then integrate these synthesized sub-query findings into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, and overall confidence.
+Please perform a critical synthesis of these findings, considering the original query and any provided documents, structured data, or their semantic embeddings. For each sub-query, compare the ensemble results, then integrate these synthesized sub-query findings into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, and overall confidence.
 `;
 
     // Construct user message content for synthesis, including images if provided
@@ -138,9 +147,9 @@ Please perform a critical synthesis of these findings, considering the original 
        systemPrompt += "\n\nSynthesize the research results in the context of the provided image(s) as well.";
     }
     
-    // Adjust system prompt if documents or structured data are present (already handled in user prompt, but can reinforce here)
-    if ((documents && documents.length > 0) || (structuredData && structuredData.length > 0)) {
-        systemPrompt += "\n\nEnsure your synthesis incorporates relevant information from the provided document and/or structured data context.";
+    // Adjust system prompt if documents, structured data, or embeddings are present
+    if ((documents && documents.length > 0) || (structuredData && structuredData.length > 0) || embeddingContext) {
+        systemPrompt += "\n\nEnsure your synthesis incorporates relevant information and semantic context from the provided documents, structured data, and their embeddings.";
     }
 
     const messages = [

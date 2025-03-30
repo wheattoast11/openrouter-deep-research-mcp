@@ -128,8 +128,8 @@ class ResearchAgent {
      return alternativePool[altIndex].name;
   }
 
-  // Updated to accept images, textDocuments, and structuredData parameters
-  async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null) {
+  // Updated to accept images, textDocuments, structuredData, and inputEmbeddings parameters
+  async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null) {
     // Classify domain and complexity first
     const domain = await this.classifyQueryDomain(query);
     const complexity = await this.assessQueryComplexity(query);
@@ -145,17 +145,17 @@ class ResearchAgent {
     
     console.error(`[${new Date().toISOString()}] ResearchAgent ${agentId}: Ensemble models for query "${query.substring(0, 50)}...": ${modelsToRun.join(', ')}`);
 
-    // Run research on each model in the ensemble - passing all context parameters
+    // Run research on each model in the ensemble - passing all context parameters (including inputEmbeddings, though not directly used in _executeSingleResearch prompt yet)
     const ensemblePromises = modelsToRun.map(model => 
-      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData)
+      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings)
     );
     
     // Return results for all models in the ensemble for this agentId
     return Promise.all(ensemblePromises);
   }
   
-  // Updated to include structuredData parameter 
-  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null) { 
+  // Updated to include structuredData and inputEmbeddings parameters (inputEmbeddings not used in prompt yet)
+  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null) { 
      // TODO: Add logic to check if the 'model' actually supports vision.
      // This might involve fetching model details from OpenRouter or maintaining a local list.
      // For now, use a hardcoded list based on common vision models.
@@ -287,34 +287,57 @@ Be precise, comprehensive, and intellectually rigorous in your analysis.
     }
   }
 
-  // Added images, textDocuments, and structuredData parameters here
-  async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null) { 
+  // Added images, textDocuments, structuredData, and inputEmbeddings parameters here
+  async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null, inputEmbeddings = null) { 
     console.error(`[${new Date().toISOString()}] ResearchAgent: Starting parallel ensemble research for ${queries.length} queries with costPreference=${costPreference}. Ensemble size: ${this.ensembleSize}. Images: ${images ? images.length : 0}, TextDocs: ${textDocuments ? textDocuments.length : 0}, StructuredData: ${structuredData ? structuredData.length : 0}`);
     const startTime = Date.now();
     
     // Map each query to its ensemble research promise, passing all context along
     const researchPromises = queries.map((query) => 
-      // Pass images, textDocuments, and structuredData to conductResearch
-      this.conductResearch(query.query, query.id, costPreference, 'intermediate', true, images, textDocuments, structuredData) 
+      // Pass images, textDocuments, structuredData, and inputEmbeddings to conductResearch
+      this.conductResearch(query.query, query.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings) 
     );
 
     try {
-      // Promise.all will now resolve to an array of arrays: [[agent1_model1_res, agent1_model2_res], [agent2_model1_res, agent2_model2_res], ...]
-      const nestedResults = await Promise.all(researchPromises);
+      // Use Promise.allSettled to ensure all promises complete, regardless of individual failures
+      const settledResults = await Promise.allSettled(researchPromises);
       
-      // Flatten the results for easier processing downstream, but keep agentId for grouping
-      const flatResults = nestedResults.flat(); 
+      // Process the results: extract values from fulfilled promises and handle rejected ones
+      const processedResults = settledResults.map(result => {
+        if (result.status === 'fulfilled') {
+          // result.value will be an array of results from the ensemble for one agentId
+          return result.value; 
+        } else {
+          // result.reason contains the error for a rejected promise (entire ensemble failed for one agentId)
+          console.error(`[${new Date().toISOString()}] ResearchAgent: Ensemble failed for one agent. Reason:`, result.reason);
+          // We need to know which agentId this was for, but the original query object isn't directly here.
+          // For now, return a generic error structure. Ideally, map queries to promises beforehand.
+          // Returning an array with a single error object to maintain structure.
+          return [{ 
+             agentId: 'unknown', // Placeholder - requires mapping queries to promises
+             model: 'N/A', 
+             query: 'unknown', // Placeholder
+             result: `Ensemble research failed: ${result.reason?.message || result.reason}`, 
+             error: true, 
+             errorMessage: result.reason?.message || result.reason 
+          }];
+        }
+      });
+
+      // Flatten the results (array of arrays)
+      const flatResults = processedResults.flat();
       
       const duration = Date.now() - startTime;
       const successfulTasks = flatResults.filter(r => !r.error).length;
       const failedTasks = flatResults.length - successfulTasks;
-      console.error(`[${new Date().toISOString()}] ResearchAgent: Parallel ensemble research completed in ${duration}ms. Total results: ${flatResults.length}. Success: ${successfulTasks}, Failed: ${failedTasks}.`);
-      return flatResults; // Return the flattened list
-    } catch (error) { // Keep only the second, more general catch block
-      // This catch block might be less likely to be hit if individual errors are caught in conductResearch,
-      // but it's good practice to have it for unexpected Promise.all failures.
+      console.error(`[${new Date().toISOString()}] ResearchAgent: Parallel ensemble research completed (allSettled) in ${duration}ms. Total results processed: ${flatResults.length}. Success: ${successfulTasks}, Failed: ${failedTasks}.`);
+      return flatResults; // Return the flattened list of results/errors
+      
+    } catch (error) { 
+      // This catch block is less likely with allSettled, but kept for safety
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ResearchAgent: Unexpected error during parallel research execution after ${duration}ms. Error:`, error);
+      console.error(`[${new Date().toISOString()}] ResearchAgent: Unexpected error during parallel research execution (allSettled) after ${duration}ms. Error:`, error);
+      // If Promise.allSettled itself fails (unlikely), rethrow
       throw new Error(`Critical error during parallel research execution: ${error.message}`);
     }
   }
