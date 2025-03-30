@@ -4,8 +4,8 @@ const NodeCache = require('node-cache');
 const planningAgent = require('../agents/planningAgent');
 const researchAgent = require('../agents/researchAgent');
 const contextAgent = require('../agents/contextAgent');
-const { parseAgentXml } = require('../utils/xmlParser');
-const dbClient = require('../utils/dbClient');
+// const { parseAgentXml } = require('../utils/xmlParser'); // No longer needed
+const dbClient = require('../utils/dbClient'); // Already imports necessary functions
 const config = require('../../config');
 
 // In-memory Cache Configuration
@@ -94,6 +94,11 @@ const conductResearchSchema = z.object({
   _mcpExchange: z.any().optional().describe("Internal MCP exchange context for progress reporting")
 });
 
+// Schema for the new get_report_content tool
+const getReportContentSchema = z.object({
+  reportId: z.string().describe("The ID of the report to retrieve content for (obtained from conduct_research result).")
+});
+
 async function conductResearch(params, mcpExchange = null) {
   // Destructure all potential inputs, with safety checks
   const query = params.query || ''; // Ensure query is at least an empty string
@@ -147,11 +152,44 @@ async function conductResearch(params, mcpExchange = null) {
   console.log(`[${new Date().toISOString()}] conductResearch: Starting iterative research process for query "${safeSubstring(query, 0, 50)}...". Max iterations: ${MAX_ITERATIONS}`);
 
   const totalStages = MAX_ITERATIONS * 3 + 1; // Define totalStages before the main try block
-  let relevantPastReports = [];
+    let relevantPastReports = [];
+    let inputEmbeddings = {}; // Object to hold embeddings for input data
 
-  try {
-    // --- Knowledge Base Lookup (Semantic Search) ---
-    console.log(`[${new Date().toISOString()}] conductResearch: Performing semantic search in knowledge base for query "${safeSubstring(query, 0, 50)}..."`);
+    try {
+      // --- Generate Embeddings for Input Data (Optional) ---
+      if (textDocuments && textDocuments.length > 0) {
+        console.log(`[${new Date().toISOString()}] conductResearch: Generating embeddings for ${textDocuments.length} input text document(s)...`);
+        inputEmbeddings.textDocuments = await Promise.all(
+          textDocuments.map(async (doc) => ({
+            name: doc.name,
+            embedding: await dbClient.generateEmbedding(doc.content.substring(0, 1000)) // Embed first 1k chars
+          }))
+        );
+        // Filter out null embeddings
+        inputEmbeddings.textDocuments = inputEmbeddings.textDocuments.filter(e => e.embedding !== null);
+        console.log(`[${new Date().toISOString()}] conductResearch: Generated ${inputEmbeddings.textDocuments.length} text document embeddings.`);
+      }
+      if (structuredData && structuredData.length > 0) {
+         console.log(`[${new Date().toISOString()}] conductResearch: Generating embeddings for ${structuredData.length} input structured data item(s)...`);
+         inputEmbeddings.structuredData = await Promise.all(
+           structuredData.map(async (data) => {
+             const summary = structuredDataParser.getStructuredDataSummary(data.content, data.type, data.name, 10); // Embed summary
+             return {
+               name: data.name,
+               type: data.type,
+               embedding: await dbClient.generateEmbedding(summary)
+             };
+           })
+         );
+         // Filter out null embeddings
+         inputEmbeddings.structuredData = inputEmbeddings.structuredData.filter(e => e.embedding !== null);
+         console.log(`[${new Date().toISOString()}] conductResearch: Generated ${inputEmbeddings.structuredData.length} structured data embeddings.`);
+      }
+      // --- End Input Embedding Generation ---
+
+
+      // --- Knowledge Base Lookup (Semantic Search) ---
+      console.log(`[${new Date().toISOString()}] conductResearch: Performing semantic search in knowledge base for query "${safeSubstring(query, 0, 50)}..."`);
     const similarReports = await dbClient.findReportsBySimilarity(query, 3, 0.75);
     if (similarReports && similarReports.length > 0) {
       relevantPastReports = similarReports.map(r => {
@@ -201,11 +239,12 @@ async function conductResearch(params, mcpExchange = null) {
           maxAgents: params.maxAgents || 5,
           focusAreas: params.focusAreas,
           images: images,
-          documents: textDocuments, // Pass text documents
-          structuredData: structuredData, // Pass structured data
-          pastReports: relevantPastReports
+          documents: textDocuments, 
+          structuredData: structuredData, 
+          pastReports: relevantPastReports,
+          inputEmbeddings: inputEmbeddings // Pass generated input embeddings
         },
-        previousResultsForRefinement
+        previousResultsForRefinement // Pass previous results for refinement context
       );
       const planningDuration = Date.now() - planningStartTime;
       console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixPlan} - Planning completed in ${planningDuration}ms.`);
@@ -215,23 +254,56 @@ async function conductResearch(params, mcpExchange = null) {
         break;
       }
 
-      // Step 2: Parse the XML output
+      // Step 2: Parse the JSON output from the planning agent
       const parsingStartTime = Date.now();
       const stagePrefixParse = `Stage ${currentStageBase + 2}/${totalStages}`;
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixParse} (Iter ${currentIteration}) - Parsing research plan...`);
-      const currentAgentQueries = parseAgentXml(planningResultXml).map(q => ({ ...q, id: nextAgentId++ }));
+      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixParse} (Iter ${currentIteration}) - Parsing research plan (JSON)...`);
+      let currentAgentQueries = [];
+      try {
+        // Attempt to parse the JSON output directly
+        const parsedPlan = JSON.parse(planningResultXml); // Assuming planningResultXml is now a JSON string
+        if (Array.isArray(parsedPlan)) {
+          // Validate structure and assign new IDs based on nextAgentId
+          currentAgentQueries = parsedPlan
+            .filter(item => item && typeof item.query === 'string' && item.query.trim() !== '')
+            .map(item => ({ 
+              id: nextAgentId++, // Assign sequential ID
+              query: item.query.trim() 
+            }));
+        } else {
+           console.error(`[${new Date().toISOString()}] conductResearch: Parsed plan is not an array:`, parsedPlan);
+           throw new Error('Parsed plan is not a valid JSON array.');
+        }
+      } catch (parseError) {
+         console.error(`[${new Date().toISOString()}] conductResearch: Failed to parse research plan JSON. Raw output:`, planningResultXml, 'Error:', parseError);
+         // Handle specific case where refinement might return "<plan_complete>"
+         if (planningResultXml.includes("<plan_complete>")) {
+            console.log(`[${new Date().toISOString()}] conductResearch: Plan complete signal detected during parsing.`);
+            break; // Exit loop as plan is complete
+         }
+         // If not plan complete and parsing failed
+         if (!previousResultsForRefinement) {
+            throw new Error(`Failed to parse initial research plan JSON: ${parseError.message}`);
+         } else {
+            // If refinement fails parsing, maybe just stop iterating
+            console.warn(`[${new Date().toISOString()}] conductResearch: Failed to parse refinement plan JSON. Stopping iterations.`);
+            break;
+         }
+      }
       const parsingDuration = Date.now() - parsingStartTime;
 
-      if (!currentAgentQueries || currentAgentQueries.length === 0) {
+      if (currentAgentQueries.length === 0) {
         if (previousResultsForRefinement) {
           console.warn(`[${new Date().toISOString()}] conductResearch: Refinement yielded no new queries. Stopping iterations.`);
           break;
         } else {
-          console.error(`[${new Date().toISOString()}] conductResearch: Failed to parse initial research plan XML:`, planningResultXml);
-          throw new Error('Failed to parse initial research plan. No agent queries found.');
+          // This case should be less likely if parsing throws an error, but kept for safety
+          console.error(`[${new Date().toISOString()}] conductResearch: No valid agent queries found after parsing JSON.`);
+          throw new Error('Failed to extract valid agent queries from the plan.');
         }
       }
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixParse} - Parsing completed in ${parsingDuration}ms. Found ${currentAgentQueries.length} new sub-queries.`);
+      
+      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixParse} - JSON Parsing completed in ${parsingDuration}ms. Found ${currentAgentQueries.length} new sub-queries.`);
       allAgentQueries.push(...currentAgentQueries);
 
       // Step 3: Conduct parallel research
@@ -240,15 +312,29 @@ async function conductResearch(params, mcpExchange = null) {
       console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixResearch} (Iter ${currentIteration}) - Conducting parallel research for ${currentAgentQueries.length} agents...`);
       let currentResearchResults;
       try {
-        // Pass images and documents down to parallel research
-        currentResearchResults = await researchAgent.conductParallelResearch(currentAgentQueries, costPreference, images, textDocuments, structuredData); // Pass structuredData
+        // Pass images, documents, structuredData, and inputEmbeddings down to parallel research
+        currentResearchResults = await researchAgent.conductParallelResearch(
+           currentAgentQueries, 
+           costPreference, 
+           images, 
+           textDocuments, 
+           structuredData,
+           inputEmbeddings // Pass input embeddings
+        ); 
       } catch (researchError) {
         console.error(`[${new Date().toISOString()}] conductResearch: Parallel research failed in iteration ${currentIteration} with costPreference=${costPreference}. Error:`, researchError);
         if (costPreference === 'high') {
           console.warn(`[${new Date().toISOString()}] conductResearch: High-cost research failed (Iteration ${currentIteration}), falling back to low-cost models.`);
           try {
-            // Pass images and documents to fallback research as well
-            currentResearchResults = await researchAgent.conductParallelResearch(currentAgentQueries, 'low', images, textDocuments, structuredData); // Pass structuredData
+            // Pass context to fallback research as well
+            currentResearchResults = await researchAgent.conductParallelResearch(
+               currentAgentQueries, 
+               'low', 
+               images, 
+               textDocuments, 
+               structuredData,
+               inputEmbeddings // Pass input embeddings
+            ); 
           } catch (fallbackError) {
             console.error(`[${new Date().toISOString()}] conductResearch: Low-cost fallback research also failed (Iteration ${currentIteration}). Error:`, fallbackError);
             currentResearchResults = currentAgentQueries.map(q => ({
@@ -285,11 +371,20 @@ async function conductResearch(params, mcpExchange = null) {
     let streamError = null;
 
     try {
-      // Pass images, documents, and structuredData to the context agent
+      // Pass images, documents, structuredData, and inputEmbeddings to the context agent
       const contextStream = contextAgent.contextualizeResultsStream(
         query,
         allResearchResults,
-        { audienceLevel, outputFormat, includeSources, maxLength, images, documents: textDocuments, structuredData } // Pass structuredData
+        { 
+          audienceLevel, 
+          outputFormat, 
+          includeSources, 
+          maxLength, 
+          images, 
+          documents: textDocuments, 
+          structuredData,
+          inputEmbeddings // Pass input embeddings
+        } 
       );
 
       for await (const chunk of contextStream) {
@@ -538,5 +633,36 @@ module.exports = {
   researchFollowUp,
   getPastResearch,
   rateResearchReport,
-  listResearchHistory
+  listResearchHistory,
+
+  // Export schema and add function for the new tool
+  getReportContentSchema,
+  getReportContent // This will be the wrapper calling dbClient.getReportById
 };
+
+// Implementation for get_report_content tool
+async function getReportContent(params, mcpExchange = null) {
+  const { reportId } = params;
+  try {
+    console.log(`[${new Date().toISOString()}] getReportContent: Attempting to retrieve report ID: ${reportId}`);
+    
+    // Call the dbClient function
+    const report = await dbClient.getReportById(reportId);
+    
+    if (report && report.final_report) {
+      console.log(`[${new Date().toISOString()}] getReportContent: Successfully retrieved report ID: ${reportId}`);
+      // Return only the final report content for simplicity, or the full object if needed
+      return report.final_report; 
+      // Alternatively, return JSON.stringify(report, null, 2); for the full object
+    } else if (report) {
+      console.warn(`[${new Date().toISOString()}] getReportContent: Report ID ${reportId} found, but it has no final_report content.`);
+      throw new Error(`Report ID ${reportId} found but contains no content.`);
+    } else {
+      console.warn(`[${new Date().toISOString()}] getReportContent: Report ID ${reportId} not found.`);
+      throw new Error(`Report ID ${reportId} not found.`);
+    }
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] getReportContent: Error retrieving report ID ${reportId}:`, error);
+    throw new Error(`Error retrieving report content: ${error.message}`);
+  }
+}

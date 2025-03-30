@@ -37,17 +37,17 @@ class PlanningAgent {
     }
   }
 
-  // Added previousResults, images, documents, structuredData, and pastReports parameters
+  // Added previousResults, images, documents, structuredData, pastReports, and inputEmbeddings parameters
   async planResearch(query, options = {}, previousResults = null) {
-    const { images, documents, structuredData, pastReports } = options; // Extract all context
+    const { images, documents, structuredData, pastReports, inputEmbeddings } = options; // Extract all context including embeddings
     let systemPrompt;
     let classifiedDomain = 'general'; // Default domain
 
     if (!previousResults) {
        // Classify the domain only for the initial planning step
        classifiedDomain = await this.classifyQueryDomain(query);
-       // Pass past reports, documents, and structured data to the prompt generation method
-       systemPrompt = this.getInitialPlanningPrompt(classifiedDomain, query, pastReports, documents, structuredData);
+       // Pass past reports, documents, structured data, and input embeddings to the prompt generation method
+       systemPrompt = this.getInitialPlanningPrompt(classifiedDomain, query, pastReports, documents, structuredData, inputEmbeddings);
        // Add image consideration note if applicable
        if (images && images.length > 0) {
           systemPrompt += "\n\nConsider the provided image(s) when formulating research questions.";
@@ -74,7 +74,7 @@ Refinement Guidelines:
 - Do NOT repeat the original sub-queries.
 - Ensure new queries are highly specific and build upon the initial findings.
 - If the initial results sufficiently answer the original query and no further detail is needed, respond with only "<plan_complete>".
-- Otherwise, output ONLY the new XML tags for the refined queries (e.g., <agent_6>...</agent_6>, <agent_7>...</agent_7>). Use new agent IDs starting from the next available number.
+- Otherwise, output ONLY a JSON array containing objects for the new queries, like: [{"id": 6, "query": "..." }, {"id": 7, "query": "..."}]. Use new agent IDs starting from the next available number.
 `;
     }
 
@@ -135,8 +135,8 @@ Refinement Guidelines:
     }
   }
 
-  // Method to get the appropriate initial planning prompt based on domain, past reports, documents, and structured data
-  getInitialPlanningPrompt(domain, query, pastReports = [], documents = [], structuredData = []) {
+  // Method to get the appropriate initial planning prompt based on domain, past reports, documents, structured data, and input embeddings
+  getInitialPlanningPrompt(domain, query, pastReports = [], documents = [], structuredData = [], inputEmbeddings = {}) {
     let knowledgeBaseContext = '';
     if (pastReports && pastReports.length > 0) {
       knowledgeBaseContext = `
@@ -154,8 +154,12 @@ ${pastReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateString()
      if (structuredData && structuredData.length > 0) {
        documentContextInstruction += `The user has provided ${structuredData.length} structured data source(s) (${structuredData.map(d=>d.type).join(', ')}) for context. `;
     }
+    // Add note about input embeddings if present
+    if (inputEmbeddings && (inputEmbeddings.textDocuments?.length > 0 || inputEmbeddings.structuredData?.length > 0)) {
+       documentContextInstruction += `Semantic embeddings for these inputs are available; leverage this deeper understanding. `;
+    }
     if (documentContextInstruction) {
-       documentContextInstruction += `Ensure your research plan considers and potentially analyzes the content of these provided data sources in relation to the main query.`;
+       documentContextInstruction += `Ensure your research plan considers and potentially analyzes the content and semantic meaning of these provided data sources in relation to the main query.`;
     }
 
 
@@ -222,9 +226,12 @@ Analyze the research query: "${query}" carefully. Identify distinct aspects requ
     let finalPrompt = `${basePrompt}\n\n${specificInstructions}\n\n${dimensions}\n\n`;
 
     finalPrompt += `
-For each distinct aspect, create an XML tag with format:
-<agent_1>First research question focusing on [specific aspect]</agent_1>
-<agent_2>Second research question focusing on [specific aspect]</agent_2>
+For each distinct aspect, create a JSON object within a main JSON array. Assign sequential IDs starting from 1.
+Example format:
+[
+  { "id": 1, "query": "First research question focusing on [specific aspect]" },
+  { "id": 2, "query": "Second research question focusing on [specific aspect]" }
+]
 
 Ensure each question is:
 - Self-contained and specific
@@ -232,7 +239,7 @@ Ensure each question is:
 - Focused on a distinct aspect with minimal overlap
 - Appropriate for query complexity
 
-Use 2-5 agents depending on complexity. OUTPUT ONLY THE XML TAGS (e.g., <agent_1>...</agent_1>, <agent_2>...</agent_2>).`;
+Use 2-5 agents (JSON objects) depending on complexity. OUTPUT ONLY THE JSON ARRAY. Do not include any other text or markdown formatting.`;
 
     return finalPrompt;
   }
