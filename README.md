@@ -1,5 +1,4 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/wheattoast11-openrouter-deep-research-mcp-badge.png)](https://mseep.ai/app/wheattoast11-openrouter-deep-research-mcp)
-
+[![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/673d036f-d9e8-4fd7-9352-566c61d365f5)
 # OpenRouter Agents MCP Server
 
 A Model Context Protocol (MCP) server implementation for OpenRouter that provides sophisticated research agent capabilities. This server allows your conversational LLM to delegate research to a Claude research orchestrator that uses different specialized agents powered by various OpenRouter models.
