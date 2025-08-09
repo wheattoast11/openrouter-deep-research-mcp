@@ -4,6 +4,7 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const express = require('express');
 const { z } = require('zod');
+const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
 const config = require('../../config');
 const { 
   // Schemas
@@ -12,7 +13,10 @@ const {
   getPastResearchSchema,
   rateResearchReportSchema,
   listResearchHistorySchema,
-  getReportContentSchema, // Import schema for new tool
+  getReportContentSchema,
+  getServerStatusSchema, // Import schema for status tool
+  executeSqlSchema, // Import schema for SQL tool
+  listModelsSchema, // New: schema for listing models
   
   // Functions
   conductResearch,
@@ -20,7 +24,10 @@ const {
   getPastResearch,
   rateResearchReport,
   listResearchHistory,
-  getReportContent // Import function for new tool
+  getReportContent,
+  getServerStatus, // Import function for status tool
+  executeSql, // Import function for SQL tool
+  listModels // New: function for listing models
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 
@@ -35,16 +42,16 @@ const server = new McpServer({
    server.tool(
      "conduct_research",
      conductResearchSchema.shape,
-     async (params, exchange) => { // Added exchange parameter
+     async (params, exchange) => { 
         const startTime = Date.now();
-        console.error(`[${new Date().toISOString()}] conduct_research: Starting research for query "${params.query.substring(0, 50)}..."`); // Use error
-        console.error(`[${new Date().toISOString()}] conduct_research: Parameters: costPreference=${params.costPreference}, format=${params.outputFormat}, audience=${params.audienceLevel}`); // Use error
+        const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`; // Simple request ID
+        console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Starting research for query "${params.query.substring(0, 50)}..."`); 
+        console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Parameters: costPreference=${params.costPreference}, format=${params.outputFormat}, audience=${params.audienceLevel}`); 
         try {
-          // Pass the exchange context to conductResearch
-          const result = await conductResearch(params, exchange);
+          // Pass the exchange context and requestId to conductResearch
+          const result = await conductResearch(params, exchange, requestId); 
           const duration = Date.now() - startTime;
-          // Log completion, the actual content is streamed via progress
-          console.error(`[${new Date().toISOString()}] conduct_research: Research stream finished successfully in ${duration}ms.`); // Use error
+          console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Research stream finished successfully in ${duration}ms.`); 
           // Return the final confirmation message (which now includes the report ID)
           return {
          content: [{
@@ -54,7 +61,7 @@ const server = new McpServer({
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] conduct_research: Error after ${duration}ms. Query: "${params.query.substring(0, 50)}...". Error:`, error);
+      console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Error after ${duration}ms. Query: "${params.query.substring(0, 50)}...". Error:`, error);
       return {
         content: [{
           type: 'text',
@@ -72,16 +79,17 @@ server.tool(
   researchFollowUpSchema.shape,
   async (params, exchange) => {
     const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
     const toolName = "research_follow_up";
-    console.error(`[${new Date().toISOString()}] ${toolName}: Starting follow-up for original query "${params.originalQuery.substring(0, 50)}..."`);
-    console.error(`[${new Date().toISOString()}] ${toolName}: Follow-up question: "${params.followUpQuestion.substring(0, 50)}..."`);
-    console.error(`[${new Date().toISOString()}] ${toolName}: Parameters: costPreference=${params.costPreference}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Starting follow-up for original query "${params.originalQuery.substring(0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Follow-up question: "${params.followUpQuestion.substring(0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Parameters: costPreference=${params.costPreference}`);
     
     try {
-      // Call researchFollowUp from tools.js
-      const result = await researchFollowUp(params, exchange);
+      // Call researchFollowUp from tools.js, passing requestId
+      const result = await researchFollowUp(params, exchange, requestId); 
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Follow-up research completed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Follow-up research completed in ${duration}ms.`);
       
       return {
         content: [{
@@ -91,7 +99,7 @@ server.tool(
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
       return {
         content: [{
           type: 'text',
@@ -109,14 +117,15 @@ server.tool(
   getPastResearchSchema.shape,
   async (params, exchange) => {
     const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
     const toolName = "get_past_research";
-    console.error(`[${new Date().toISOString()}] ${toolName}: Searching for similar past reports for query "${params.query ? params.query.substring(0, 50) : 'N/A'}..."`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Searching for similar past reports for query "${params.query ? params.query.substring(0, 50) : 'N/A'}..."`);
     
     try {
-      // Call getPastResearch from tools.js
-      const result = await getPastResearch(params, exchange);
+      // Call getPastResearch from tools.js, passing requestId
+      const result = await getPastResearch(params, exchange, requestId); 
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Search completed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Search completed in ${duration}ms.`);
       
       return {
         content: [{
@@ -126,7 +135,7 @@ server.tool(
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
       return {
         content: [{
           type: 'text',
@@ -144,14 +153,15 @@ server.tool(
   rateResearchReportSchema.shape,
   async (params, exchange) => {
     const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
     const toolName = "rate_research_report";
-    console.error(`[${new Date().toISOString()}] ${toolName}: Processing rating ${params.rating} for report ${params.reportId}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Processing rating ${params.rating} for report ${params.reportId}`);
     
     try {
-      // Call rateResearchReport from tools.js
-      const result = await rateResearchReport(params, exchange);
+      // Call rateResearchReport from tools.js, passing requestId
+      const result = await rateResearchReport(params, exchange, requestId); 
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Rating processed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Rating processed in ${duration}ms.`);
       
       return {
         content: [{
@@ -161,7 +171,7 @@ server.tool(
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
       return {
         content: [{
           type: 'text',
@@ -179,14 +189,15 @@ server.tool(
   listResearchHistorySchema.shape,
   async (params, exchange) => {
     const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
     const toolName = "list_research_history";
-    console.error(`[${new Date().toISOString()}] ${toolName}: Listing recent reports (limit: ${params.limit}, filter: "${params.queryFilter || 'None'}")`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Listing recent reports (limit: ${params.limit}, filter: "${params.queryFilter || 'None'}")`);
     
     try {
-      // Call listResearchHistory from tools.js
-      const result = await listResearchHistory(params, exchange);
+      // Call listResearchHistory from tools.js, passing requestId
+      const result = await listResearchHistory(params, exchange, requestId); 
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Listing completed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Listing completed in ${duration}ms.`);
       
       return {
         content: [{
@@ -196,7 +207,7 @@ server.tool(
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
       return {
         content: [{
           type: 'text',
@@ -214,14 +225,15 @@ server.tool(
   getReportContentSchema.shape,
   async (params, exchange) => {
     const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
     const toolName = "get_report_content";
-    console.error(`[${new Date().toISOString()}] ${toolName}: Retrieving content for report ID ${params.reportId}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Retrieving content for report ID ${params.reportId}`);
     
     try {
-      // Call getReportContent from tools.js
-      const result = await getReportContent(params, exchange); // Pass exchange if needed later
+      // Call getReportContent from tools.js, passing requestId
+      const result = await getReportContent(params, exchange, requestId); 
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Retrieval completed in ${duration}ms.`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Retrieval completed in ${duration}ms.`);
       
       // Return the report content directly
       return {
@@ -232,7 +244,7 @@ server.tool(
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
       return {
         content: [{
           type: 'text',
@@ -244,19 +256,118 @@ server.tool(
   }
 );
 
+// Register tool to get server status
+server.tool(
+  "get_server_status",
+  getServerStatusSchema.shape,
+  async (params, exchange) => {
+    const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
+    const toolName = "get_server_status";
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Request received.`);
+
+    try {
+      // Call getServerStatus from tools.js, passing requestId
+      const result = await getServerStatus(params, exchange, requestId);
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Status retrieval completed in ${duration}ms.`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: result // This is the status JSON string
+        }]
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      return {
+        content: [{
+          type: 'text',
+          text: `Error retrieving server status: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Register tool to execute SQL queries
+server.tool(
+  "execute_sql",
+  executeSqlSchema.shape,
+  async (params, exchange) => {
+    const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
+    const toolName = "execute_sql";
+    // Avoid logging full SQL in production if sensitive
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Attempting to execute SQL (Params: ${params.params?.length ?? 0})`);
+
+    try {
+      // Call executeSql from tools.js, passing requestId
+      const result = await executeSql(params, exchange, requestId);
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: SQL execution completed in ${duration}ms.`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: result // This is the JSON string of results
+        }]
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      return {
+        content: [{
+          type: 'text',
+          text: `Error executing SQL: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Register tool to list available models (dynamic catalog)
+server.tool(
+  "list_models",
+  listModelsSchema.shape,
+  async (params, exchange) => {
+    const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
+    const toolName = "list_models";
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Request received (refresh=${params.refresh === true}).`);
+
+    try {
+      const result = await listModels(params, exchange, requestId);
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Completed in ${duration}ms.`);
+      return { content: [{ type: 'text', text: result }] };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
+      return { content: [{ type: 'text', text: `Error listing models: ${error.message}` }], isError: true };
+    }
+  }
+);
+
 
  // Set up transports based on environment
  const setupTransports = async () => {
+  let lastSseTransport = null; // Variable to hold the last SSE transport
+  const sseConnections = new Map(); // Map to store active SSE connections
+
   // For command-line usage, use STDIO
   if (process.argv.includes('--stdio')) {
-    console.error('Starting MCP server with STDIO transport'); // Use error
+    // console.error('Starting MCP server with STDIO transport'); // Commented out: Logs interfere with STDIO JSON-RPC
     const transport = new StdioServerTransport();
-    console.error('Attempting server.connect(transport)...'); // Add error before
+    // console.error('Attempting server.connect(transport)...'); // Commented out: Logs interfere with STDIO JSON-RPC
     await server.connect(transport);
-    console.error('server.connect(transport) completed.'); // Add error after
+    // console.error('server.connect(transport) completed.'); // Commented out: Logs interfere with STDIO JSON-RPC
     return; // Exit after setting up stdio, don't proceed to HTTP setup
   } else { // Only setup HTTP/SSE if --stdio is NOT specified
-    // For HTTP usage, set up Express with SSE
+  // For HTTP usage, set up Express with SSE
     const app = express();
     const port = config.server.port;
   const serverApiKey = config.server.apiKey; // Get the API key from config
@@ -307,21 +418,71 @@ server.tool(
  
  
    // Endpoint for SSE - Apply authentication middleware
+   // Endpoint for SSE - Apply authentication middleware
    app.get('/sse', authenticate, async (req, res) => {
-     console.error('New SSE connection'); // Use error
-     const transport = new SSEServerTransport('/messages', res);
-     global.currentTransport = transport;
-    await server.connect(transport);
-  });
+     const connectionId = uuidv4(); // Generate a unique ID for this connection
+     console.error(`[${new Date().toISOString()}] New SSE connection established with ID: ${connectionId}`); // Use error
 
-  // Endpoint for messages
-  app.post('/messages', express.json(), (req, res) => {
-    // This will be populated by the SSE transport
-    if (!global.currentTransport) {
-      return res.status(500).json({ error: 'No active transport' });
+     // Set headers for SSE
+     res.writeHead(200, {
+       'Content-Type': 'text/event-stream',
+       'Cache-Control': 'no-cache',
+       'Connection': 'keep-alive',
+     });
+
+     const transport = new SSEServerTransport('/messages', res); // Pass the response object
+     sseConnections.set(connectionId, transport); // Store transport keyed by ID
+     lastSseTransport = transport; // Keep track of the last one for the simple POST handler
+
+     try {
+       await server.connect(transport); // Connect the server to this specific transport
+       console.error(`[${new Date().toISOString()}] MCP Server connected to SSE transport for connection ID: ${connectionId}`);
+     } catch (error) {
+       console.error(`[${new Date().toISOString()}] Error connecting MCP Server to SSE transport for ID ${connectionId}:`, error);
+       sseConnections.delete(connectionId); // Clean up on connection error
+       if (!res.writableEnded) {
+         res.end();
+       }
+       return; // Stop further processing for this request
+     }
+
+     // Handle client disconnect
+     req.on('close', () => {
+       console.error(`[${new Date().toISOString()}] SSE connection closed for ID: ${connectionId}`);
+       sseConnections.delete(connectionId);
+       if (lastSseTransport === transport) {
+         lastSseTransport = null; // Clear if it was the last one
+       }
+       // Optionally notify the server instance if needed, though transport might handle this
+       // server.disconnect(transport); // If SDK supports targeted disconnect
+     });
+   });
+
+  // Endpoint for messages with per-connection routing and authentication
+  // Supports both legacy (no connectionId) and new path/query param routing
+  app.post(['/messages', '/messages/:connectionId'], authenticate, express.json(), (req, res) => {
+    // Prefer explicit connectionId via route param or query
+    const routeId = req.params.connectionId;
+    const queryId = req.query.connectionId;
+    const connectionId = routeId || queryId || null;
+
+    if (connectionId) {
+      const transport = sseConnections.get(connectionId);
+      if (!transport) {
+        console.error(`[${new Date().toISOString()}] Received POST /messages for unknown connectionId: ${connectionId}`);
+        return res.status(404).json({ error: 'Unknown connectionId' });
+      }
+      console.error(`[${new Date().toISOString()}] Routing POST /messages to connectionId: ${connectionId}`);
+      return transport.handlePostMessage(req, res);
     }
-    
-    global.currentTransport.handlePostMessage(req, res);
+
+    // Legacy behavior: fall back to last transport if no connectionId provided
+    if (!lastSseTransport) {
+      console.error(`[${new Date().toISOString()}] Received POST /messages without connectionId and no active SSE transport found.`);
+      return res.status(500).json({ error: 'No active SSE transport available' });
+    }
+    console.error(`[${new Date().toISOString()}] Handling legacy POST /messages via last active SSE transport.`);
+    return lastSseTransport.handlePostMessage(req, res);
   });
 
    // Start server

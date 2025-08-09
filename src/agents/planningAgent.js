@@ -12,12 +12,15 @@ class PlanningAgent {
   }
 
   // Reusing classification logic here, could be moved to a utility
-  async classifyQueryDomain(query) {
+  // Added options parameter to accept requestId
+  async classifyQueryDomain(query, options = {}) { 
     const systemPrompt = `Classify the primary domain of the following research query. Respond with ONLY one domain from this list: ${DOMAINS.join(', ')}.`;
     const messages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: query }
     ];
+    // Ensure options exists before accessing requestId
+    const requestId = (options && options.requestId) ? options.requestId : 'unknown-req'; 
     try {
       const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
         temperature: 0.1,
@@ -25,27 +28,27 @@ class PlanningAgent {
       });
       let domain = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
       if (DOMAINS.includes(domain)) {
-        console.error(`[${new Date().toISOString()}] PlanningAgent: Classified overall query domain for "${query.substring(0, 50)}..." as: ${domain}`);
+        console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Classified overall query domain for "${query.substring(0, 50)}..." as: ${domain}`);
         return domain;
       } else {
-        console.warn(`[${new Date().toISOString()}] PlanningAgent: Domain classification model returned invalid domain "${domain}" for overall query "${query.substring(0, 50)}...". Defaulting to 'general'.`);
+        console.warn(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Domain classification model returned invalid domain "${domain}" for overall query "${query.substring(0, 50)}...". Defaulting to 'general'.`);
         return 'general';
       }
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] PlanningAgent: Error classifying overall query domain for "${query.substring(0, 50)}...". Defaulting to 'general'. Error:`, error);
+      console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Error classifying overall query domain for "${query.substring(0, 50)}...". Defaulting to 'general'. Error:`, error);
       return 'general';
     }
   }
 
-  // Added previousResults, images, documents, structuredData, pastReports, and inputEmbeddings parameters
-  async planResearch(query, options = {}, previousResults = null) {
-    const { images, documents, structuredData, pastReports, inputEmbeddings } = options; // Extract all context including embeddings
+  // Added previousResults, images, documents, structuredData, pastReports, inputEmbeddings, and requestId parameters
+  async planResearch(query, options = {}, previousResults = null, requestId = 'unknown-req') { 
+    const { images, documents, structuredData, pastReports, inputEmbeddings } = options; // Extract context
     let systemPrompt;
     let classifiedDomain = 'general'; // Default domain
 
     if (!previousResults) {
-       // Classify the domain only for the initial planning step
-       classifiedDomain = await this.classifyQueryDomain(query);
+       // Classify the domain only for the initial planning step, passing requestId correctly
+       classifiedDomain = await this.classifyQueryDomain(query, { requestId: requestId }); 
        // Pass past reports, documents, structured data, and input embeddings to the prompt generation method
        systemPrompt = this.getInitialPlanningPrompt(classifiedDomain, query, pastReports, documents, structuredData, inputEmbeddings);
        // Add image consideration note if applicable
@@ -74,7 +77,7 @@ Refinement Guidelines:
 - Do NOT repeat the original sub-queries.
 - Ensure new queries are highly specific and build upon the initial findings.
 - If the initial results sufficiently answer the original query and no further detail is needed, respond with only "<plan_complete>".
-- Otherwise, output ONLY a JSON array containing objects for the new queries, like: [{"id": 6, "query": "..." }, {"id": 7, "query": "..."}]. Use new agent IDs starting from the next available number.
+- Otherwise, output ONLY the new XML tags for the refined queries (e.g., <agent_6>...</agent_6>, <agent_7>...</agent_7>). Use new agent IDs starting from the next available number.
 `;
     }
 
@@ -84,7 +87,7 @@ Refinement Guidelines:
 
     // Add text document content
     if (documents && documents.length > 0) {
-       console.error(`[${new Date().toISOString()}] PlanningAgent: Including ${documents.length} text document(s) in planning request.`);
+       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Including ${documents.length} text document(s) in planning request.`);
        documents.forEach(doc => {
           const truncatedContent = doc.content.length > 2000 ? doc.content.substring(0, 2000) + '...' : doc.content;
           userMessageContent.push({ type: 'text', text: `\n\n--- Text Document: ${doc.name} ---\n${truncatedContent}\n--- End Document ---` });
@@ -93,7 +96,7 @@ Refinement Guidelines:
     
     // Add structured data content
     if (structuredData && structuredData.length > 0) {
-       console.error(`[${new Date().toISOString()}] PlanningAgent: Including ${structuredData.length} structured data item(s) in planning request.`);
+       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Including ${structuredData.length} structured data item(s) in planning request.`);
        structuredData.forEach(data => {
           const truncatedContent = data.content.length > 2000 ? data.content.substring(0, 2000) + '...' : data.content;
           userMessageContent.push({ type: 'text', text: `\n\n--- Structured Data (${data.type}): ${data.name} ---\n${truncatedContent}\n--- End Data ---` });
@@ -106,9 +109,9 @@ Refinement Guidelines:
         userMessageContent.push({
           type: 'image_url',
           image_url: { url: img.url, detail: img.detail }
-        });
-      });
-       console.error(`[${new Date().toISOString()}] PlanningAgent: Including ${images.length} image(s) in planning request.`);
+         });
+       });
+       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Including ${images.length} image(s) in planning request.`);
     }
 
     const messages = [
@@ -117,21 +120,22 @@ Refinement Guidelines:
     ];
 
     const requestType = previousResults ? "Refinement" : "Initial Plan";
-    console.error(`[${new Date().toISOString()}] PlanningAgent: Requesting ${requestType} for query "${query.substring(0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Requesting ${requestType} for query "${query.substring(0, 50)}..."`);
 
     try {
+      // Pass requestId to openRouterClient if it supports it, otherwise log here
       const response = await openRouterClient.chatCompletion(this.model, messages, {
         temperature: previousResults ? 0.5 : 0.7, // Slightly lower temp for refinement
         max_tokens: 2000
       });
 
       const planResult = response.choices[0].message.content;
-      console.error(`[${new Date().toISOString()}] PlanningAgent: Successfully generated ${requestType}. Result: ${planResult.substring(0, 100)}...`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Successfully generated ${requestType}. Result: ${planResult.substring(0, 100)}...`);
       return planResult;
 
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] PlanningAgent: Error generating ${requestType} for query "${query.substring(0, 50)}...". Model: ${this.model}. Error:`, error);
-      throw new Error(`PlanningAgent failed to generate ${requestType} for query "${query.substring(0, 50)}...": ${error.message}`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Error generating ${requestType} for query "${query.substring(0, 50)}...". Model: ${this.model}. Error:`, error);
+      throw new Error(`[${requestId}] PlanningAgent failed to generate ${requestType} for query "${query.substring(0, 50)}...": ${error.message}`);
     }
   }
 
@@ -226,12 +230,9 @@ Analyze the research query: "${query}" carefully. Identify distinct aspects requ
     let finalPrompt = `${basePrompt}\n\n${specificInstructions}\n\n${dimensions}\n\n`;
 
     finalPrompt += `
-For each distinct aspect, create a JSON object within a main JSON array. Assign sequential IDs starting from 1.
-Example format:
-[
-  { "id": 1, "query": "First research question focusing on [specific aspect]" },
-  { "id": 2, "query": "Second research question focusing on [specific aspect]" }
-]
+For each distinct aspect, create an XML tag with format:
+<agent_1>First research question focusing on [specific aspect]</agent_1>
+<agent_2>Second research question focusing on [specific aspect]</agent_2>
 
 Ensure each question is:
 - Self-contained and specific
@@ -239,7 +240,7 @@ Ensure each question is:
 - Focused on a distinct aspect with minimal overlap
 - Appropriate for query complexity
 
-Use 2-5 agents (JSON objects) depending on complexity. OUTPUT ONLY THE JSON ARRAY. Do not include any other text or markdown formatting.`;
+Use 2-5 agents depending on complexity. OUTPUT ONLY THE XML TAGS (e.g., <agent_1>...</agent_1>, <agent_2>...</agent_2>).`;
 
     return finalPrompt;
   }

@@ -1,12 +1,15 @@
 // src/server/tools.js
 const { z } = require('zod');
 const NodeCache = require('node-cache');
+const fs = require('fs'); // Added for file system operations
+const path = require('path'); // Added for path manipulation
 const planningAgent = require('../agents/planningAgent');
 const researchAgent = require('../agents/researchAgent');
 const contextAgent = require('../agents/contextAgent');
-// const { parseAgentXml } = require('../utils/xmlParser'); // No longer needed
-const dbClient = require('../utils/dbClient'); // Already imports necessary functions
+const { parseAgentXml } = require('../utils/xmlParser'); // Re-enable XML parser import
+const dbClient = require('../utils/dbClient'); // Imports necessary functions and status checks
 const config = require('../../config');
+const modelCatalog = require('../utils/modelCatalog'); // New: dynamic model catalog
 
 // In-memory Cache Configuration
 const CACHE_TTL_SECONDS = config.database.cacheTTL || 3600; // 1 hour in seconds from config
@@ -16,7 +19,7 @@ const cache = new NodeCache({
   maxKeys: 100 // Limit cache size to prevent memory issues
 });
 
-console.log(`[${new Date().toISOString()}] In-memory cache initialized with TTL: ${CACHE_TTL_SECONDS}s, max keys: 100`);
+process.stderr.write(`[${new Date().toISOString()}] In-memory cache initialized with TTL: ${CACHE_TTL_SECONDS}s, max keys: 100\n`); // Use stderr
 
 function getCacheKey(params) {
   const keyData = {
@@ -48,10 +51,10 @@ function getFromCache(key) {
   try {
     const cachedData = cache.get(key);
     if (cachedData) {
-      console.log(`[${new Date().toISOString()}] Cache hit for key: ${key.substring(0, 50)}...`);
+      console.error(`[${new Date().toISOString()}] Cache hit for key: ${key.substring(0, 50)}...`);
       return cachedData;
     } else {
-      console.log(`[${new Date().toISOString()}] Cache miss for key: ${key.substring(0, 50)}...`);
+      console.error(`[${new Date().toISOString()}] Cache miss for key: ${key.substring(0, 50)}...`);
       return null;
     }
   } catch (error) {
@@ -63,7 +66,7 @@ function getFromCache(key) {
 function setInCache(key, data) {
   try {
     cache.set(key, data);
-    console.log(`[${new Date().toISOString()}] Cache set for key: ${key.substring(0, 50)}... TTL: ${CACHE_TTL_SECONDS}s`);
+    console.error(`[${new Date().toISOString()}] Cache set for key: ${key.substring(0, 50)}... TTL: ${CACHE_TTL_SECONDS}s`);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Cache SET error for key ${key.substring(0, 50)}...:`, error);
   }
@@ -91,15 +94,32 @@ const conductResearchSchema = z.object({
     type: z.enum(['csv', 'json']).describe("Type of structured data ('csv' or 'json')."),
     content: z.string().describe("String content of the structured data (e.g., CSV text or JSON string).")
   })).optional().describe("Optional array of structured data inputs relevant to the query."),
-  _mcpExchange: z.any().optional().describe("Internal MCP exchange context for progress reporting")
+  _mcpExchange: z.any().optional().describe("Internal MCP exchange context for progress reporting"),
+  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
 // Schema for the new get_report_content tool
 const getReportContentSchema = z.object({
-  reportId: z.string().describe("The ID of the report to retrieve content for (obtained from conduct_research result).")
+  reportId: z.string().describe("The ID of the report to retrieve content for (obtained from conduct_research result)."),
+  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
-async function conductResearch(params, mcpExchange = null) {
+// Schema for the new get_server_status tool
+const getServerStatusSchema = z.object({
+  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
+});
+
+// Schema for the new execute_sql tool
+const executeSqlSchema = z.object({
+  sql: z.string().min(1, "SQL query must not be empty").describe("The SQL query string, using placeholders ($1, $2, etc.) for parameters."),
+  params: z.array(z.any()).optional().default([]).describe("An array of parameters to safely bind to the SQL query placeholders."),
+  _requestId: z.string().optional().describe("Internal request ID for logging")
+});
+
+// Updated to accept requestId
+async function conductResearch(params, mcpExchange = null, requestId = 'unknown-req') {
+  // Removed the immediate debug return block
+
   // Destructure all potential inputs, with safety checks
   const query = params.query || ''; // Ensure query is at least an empty string
   const costPreference = params.costPreference || 'low';
@@ -133,32 +153,54 @@ async function conductResearch(params, mcpExchange = null) {
   const cacheKey = getCacheKey(params);
   const cachedResult = getFromCache(cacheKey);
   if (cachedResult) {
-    console.log(`[${new Date().toISOString()}] conductResearch: Returning cached result for query "${safeSubstring(query, 0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${textDocuments ? textDocuments.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Returning cached result for query "${safeSubstring(query, 0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${textDocuments ? textDocuments.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
     if (progressToken) {
       sendProgress({ content: cachedResult });
       return "Research complete. Results streamed (from cache).";
     }
     return cachedResult;
   }
-  console.log(`[${new Date().toISOString()}] conductResearch: Cache miss for query "${safeSubstring(query, 0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${textDocuments ? textDocuments.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
+  console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Cache miss for query "${safeSubstring(query, 0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${textDocuments ? textDocuments.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
 
   const overallStartTime = Date.now();
-  const MAX_ITERATIONS = config.models.maxResearchIterations;
+  // Determine MAX_ITERATIONS dynamically based on complexity assessment
+  let MAX_ITERATIONS = config.models.maxResearchIterations; // Default
+  try {
+    const complexity = await researchAgent.assessQueryComplexity(query, { requestId });
+    switch (complexity) {
+      case 'simple':
+        MAX_ITERATIONS = 1; // Simple queries get fewer iterations
+        break;
+      case 'complex':
+        MAX_ITERATIONS = (config.models.maxResearchIterations || 2) + 1; // Complex queries might get more
+        break;
+      case 'moderate':
+      default:
+        MAX_ITERATIONS = config.models.maxResearchIterations || 2; // Moderate uses default
+        break;
+    }
+    console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Assessed complexity as "${complexity}", setting MAX_ITERATIONS to ${MAX_ITERATIONS}.`);
+  } catch (complexityError) {
+    console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error assessing complexity, using default MAX_ITERATIONS=${MAX_ITERATIONS}. Error:`, complexityError);
+  }
+
   let currentIteration = 1;
   let allAgentQueries = [];
   let allResearchResults = [];
   let savedReportId = null;
 
-  console.log(`[${new Date().toISOString()}] conductResearch: Starting iterative research process for query "${safeSubstring(query, 0, 50)}...". Max iterations: ${MAX_ITERATIONS}`);
+  console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Starting iterative research process for query "${safeSubstring(query, 0, 50)}...". Max iterations: ${MAX_ITERATIONS}`);
 
   const totalStages = MAX_ITERATIONS * 3 + 1; // Define totalStages before the main try block
     let relevantPastReports = [];
     let inputEmbeddings = {}; // Object to hold embeddings for input data
 
-    try {
+    try { // Master try block for the whole process
+
       // --- Generate Embeddings for Input Data (Optional) ---
-      if (textDocuments && textDocuments.length > 0) {
-        console.log(`[${new Date().toISOString()}] conductResearch: Generating embeddings for ${textDocuments.length} input text document(s)...`);
+      try {
+        if (textDocuments && textDocuments.length > 0) {
+          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Generating embeddings for ${textDocuments.length} input text document(s)...`);
         inputEmbeddings.textDocuments = await Promise.all(
           textDocuments.map(async (doc) => ({
             name: doc.name,
@@ -167,10 +209,10 @@ async function conductResearch(params, mcpExchange = null) {
         );
         // Filter out null embeddings
         inputEmbeddings.textDocuments = inputEmbeddings.textDocuments.filter(e => e.embedding !== null);
-        console.log(`[${new Date().toISOString()}] conductResearch: Generated ${inputEmbeddings.textDocuments.length} text document embeddings.`);
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Generated ${inputEmbeddings.textDocuments.length} text document embeddings.`);
       }
       if (structuredData && structuredData.length > 0) {
-         console.log(`[${new Date().toISOString()}] conductResearch: Generating embeddings for ${structuredData.length} input structured data item(s)...`);
+         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Generating embeddings for ${structuredData.length} input structured data item(s)...`);
          inputEmbeddings.structuredData = await Promise.all(
            structuredData.map(async (data) => {
              const summary = structuredDataParser.getStructuredDataSummary(data.content, data.type, data.name, 10); // Embed summary
@@ -183,16 +225,22 @@ async function conductResearch(params, mcpExchange = null) {
          );
          // Filter out null embeddings
          inputEmbeddings.structuredData = inputEmbeddings.structuredData.filter(e => e.embedding !== null);
-         console.log(`[${new Date().toISOString()}] conductResearch: Generated ${inputEmbeddings.structuredData.length} structured data embeddings.`);
+           console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Generated ${inputEmbeddings.structuredData.length} structured data embeddings.`);
+        }
+      } catch (embeddingError) {
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error during input embedding generation:`, embeddingError);
+        // Decide if this is fatal or recoverable. For now, let's treat it as non-fatal but log it.
+        // throw new Error(`[${requestId}] Failed during input embedding generation: ${embeddingError.message}`); 
       }
       // --- End Input Embedding Generation ---
 
 
       // --- Knowledge Base Lookup (Semantic Search) ---
-      console.log(`[${new Date().toISOString()}] conductResearch: Performing semantic search in knowledge base for query "${safeSubstring(query, 0, 50)}..."`);
-    const similarReports = await dbClient.findReportsBySimilarity(query, 3, 0.75);
-    if (similarReports && similarReports.length > 0) {
-      relevantPastReports = similarReports.map(r => {
+      try {
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Performing semantic search in knowledge base for query "${safeSubstring(query, 0, 50)}..."`);
+        const similarReports = await dbClient.findReportsBySimilarity(query, 3, 0.75);
+        if (similarReports && similarReports.length > 0) {
+          relevantPastReports = similarReports.map(r => {
         // Safely handle potential undefined values with null coalescing
         const reportId = r._id ? r._id.toString() : 'unknown_id';
         const originalQuery = r.originalQuery || 'Unknown query';
@@ -213,10 +261,15 @@ async function conductResearch(params, mcpExchange = null) {
           summary
         };
       });
-      console.log(`[${new Date().toISOString()}] conductResearch: Found ${relevantPastReports.length} semantically relevant past report(s).`);
-    } else {
-      console.log(`[${new Date().toISOString()}] conductResearch: No semantically relevant past reports found in knowledge base.`);
-    }
+          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Found ${relevantPastReports.length} semantically relevant past report(s).`);
+        } else {
+          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: No semantically relevant past reports found in knowledge base.`);
+        }
+      } catch (searchError) {
+         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error during semantic search:`, searchError);
+         // Decide if this is fatal. Probably should be.
+         throw new Error(`[${requestId}] Failed during semantic search: ${searchError.message}`);
+      }
     // --- End Knowledge Base Lookup ---
 
     let previousResultsForRefinement = null;
@@ -224,16 +277,19 @@ async function conductResearch(params, mcpExchange = null) {
 
     // --- Main Research Loop ---
     while (currentIteration <= MAX_ITERATIONS) {
-      console.log(`[${new Date().toISOString()}] conductResearch: --- Iteration ${currentIteration}/${MAX_ITERATIONS} ---`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: --- Iteration ${currentIteration}/${MAX_ITERATIONS} ---`);
+      let planningResultXml; // Declare here to be accessible in catch
+      const currentStageBase = (currentIteration - 1) * 3; // Define outside try block
 
       // Step 1: Plan or Refine Research
-      const planningStartTime = Date.now();
-      const currentStageBase = (currentIteration - 1) * 3;
-      const stagePrefixPlan = `Stage ${currentStageBase + 1}/${totalStages}`;
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixPlan} (Iter ${currentIteration}) - ${previousResultsForRefinement ? 'Refining' : 'Planning'} research...`);
+      try {
+        const planningStartTime = Date.now();
+        // const currentStageBase = (currentIteration - 1) * 3; // Moved outside
+        const stagePrefixPlan = `Stage ${currentStageBase + 1}/${totalStages}`;
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixPlan} (Iter ${currentIteration}) - ${previousResultsForRefinement ? 'Refining' : 'Planning'} research...`);
 
-      // Pass images, documents, structuredData, and past reports to the planning agent
-      const planningResultXml = await planningAgent.planResearch(
+        // Pass images, documents, structuredData, and past reports to the planning agent
+        planningResultXml = await planningAgent.planResearch(
         query,
         {
           maxAgents: params.maxAgents || 5,
@@ -244,87 +300,79 @@ async function conductResearch(params, mcpExchange = null) {
           pastReports: relevantPastReports,
           inputEmbeddings: inputEmbeddings // Pass generated input embeddings
         },
-        previousResultsForRefinement // Pass previous results for refinement context
-      );
-      const planningDuration = Date.now() - planningStartTime;
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixPlan} - Planning completed in ${planningDuration}ms.`);
+          previousResultsForRefinement, // Pass previous results for refinement context
+          requestId // Pass requestId
+        );
+        const planningDuration = Date.now() - planningStartTime;
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixPlan} - Planning completed in ${planningDuration}ms.`);
+      } catch (planningError) {
+         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error during planning/refinement call:`, planningError);
+         throw new Error(`[${requestId}] Failed during planning agent call: ${planningError.message}`);
+      }
 
       if (planningResultXml.includes("<plan_complete>")) {
-        console.log(`[${new Date().toISOString()}] conductResearch: Planning agent indicated completion. Stopping iterations.`);
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Planning agent indicated completion. Stopping iterations.`);
         break;
       }
 
-      // Step 2: Parse the JSON output from the planning agent
-      const parsingStartTime = Date.now();
-      const stagePrefixParse = `Stage ${currentStageBase + 2}/${totalStages}`;
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixParse} (Iter ${currentIteration}) - Parsing research plan (JSON)...`);
-      let currentAgentQueries = [];
+      // Step 2: Parse the XML output from the planning agent
+      let currentAgentQueries;
       try {
-        // Attempt to parse the JSON output directly
-        const parsedPlan = JSON.parse(planningResultXml); // Assuming planningResultXml is now a JSON string
-        if (Array.isArray(parsedPlan)) {
-          // Validate structure and assign new IDs based on nextAgentId
-          currentAgentQueries = parsedPlan
-            .filter(item => item && typeof item.query === 'string' && item.query.trim() !== '')
-            .map(item => ({ 
-              id: nextAgentId++, // Assign sequential ID
-              query: item.query.trim() 
-            }));
-        } else {
-           console.error(`[${new Date().toISOString()}] conductResearch: Parsed plan is not an array:`, parsedPlan);
-           throw new Error('Parsed plan is not a valid JSON array.');
-        }
-      } catch (parseError) {
-         console.error(`[${new Date().toISOString()}] conductResearch: Failed to parse research plan JSON. Raw output:`, planningResultXml, 'Error:', parseError);
-         // Handle specific case where refinement might return "<plan_complete>"
-         if (planningResultXml.includes("<plan_complete>")) {
-            console.log(`[${new Date().toISOString()}] conductResearch: Plan complete signal detected during parsing.`);
-            break; // Exit loop as plan is complete
-         }
-         // If not plan complete and parsing failed
-         if (!previousResultsForRefinement) {
-            throw new Error(`Failed to parse initial research plan JSON: ${parseError.message}`);
-         } else {
-            // If refinement fails parsing, maybe just stop iterating
-            console.warn(`[${new Date().toISOString()}] conductResearch: Failed to parse refinement plan JSON. Stopping iterations.`);
-            break;
-         }
-      }
-      const parsingDuration = Date.now() - parsingStartTime;
+        const parsingStartTime = Date.now();
+        const stagePrefixParse = `Stage ${currentStageBase + 2}/${totalStages}`;
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixParse} (Iter ${currentIteration}) - Parsing research plan (XML)...`);
+        currentAgentQueries = parseAgentXml(planningResultXml).map(q => ({ ...q, id: nextAgentId++ })); // Use XML parser
+        const parsingDuration = Date.now() - parsingStartTime;
 
-      if (currentAgentQueries.length === 0) {
-        if (previousResultsForRefinement) {
-          console.warn(`[${new Date().toISOString()}] conductResearch: Refinement yielded no new queries. Stopping iterations.`);
-          break;
-        } else {
-          // This case should be less likely if parsing throws an error, but kept for safety
-          console.error(`[${new Date().toISOString()}] conductResearch: No valid agent queries found after parsing JSON.`);
-          throw new Error('Failed to extract valid agent queries from the plan.');
+        if (!currentAgentQueries || currentAgentQueries.length === 0) {
+          // Handle specific case where refinement might return "<plan_complete>"
+          if (planningResultXml.includes("<plan_complete>")) {
+             console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Plan complete signal detected in raw output (during parsing stage).`);
+             break; // Exit loop as plan is complete
+          }
+          // If not plan complete and parsing failed/yielded no queries
+          if (previousResultsForRefinement) {
+            console.warn(`[${new Date().toISOString()}] [${requestId}] conductResearch: Refinement yielded no new queries or failed parsing. Stopping iterations. Raw Output:\n${planningResultXml}`);
+            break;
+          } else {
+            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Failed to parse initial research plan XML or no queries found. Raw Output:\n${planningResultXml}`);
+            throw new Error(`[${requestId}] Failed to parse initial research plan XML. No agent queries found.`);
+          }
         }
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixParse} - XML Parsing completed in ${parsingDuration}ms. Found ${currentAgentQueries.length} new sub-queries.`);
+        allAgentQueries.push(...currentAgentQueries);
+      } catch (parsingError) {
+         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error during XML parsing:`, parsingError);
+         throw new Error(`[${requestId}] Failed during XML parsing: ${parsingError.message}`);
       }
-      
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixParse} - JSON Parsing completed in ${parsingDuration}ms. Found ${currentAgentQueries.length} new sub-queries.`);
-      allAgentQueries.push(...currentAgentQueries);
 
       // Step 3: Conduct parallel research
-      const researchStartTime = Date.now();
-      const stagePrefixResearch = `Stage ${currentStageBase + 3}/${totalStages}`;
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixResearch} (Iter ${currentIteration}) - Conducting parallel research for ${currentAgentQueries.length} agents...`);
       let currentResearchResults;
       try {
-        // Pass images, documents, structuredData, and inputEmbeddings down to parallel research
+        const researchStartTime = Date.now();
+        const stagePrefixResearch = `Stage ${currentStageBase + 3}/${totalStages}`;
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixResearch} (Iter ${currentIteration}) - Conducting parallel research for ${currentAgentQueries.length} agents...`);
+        // Pass images, documents, structuredData, inputEmbeddings, and requestId down to parallel research
         currentResearchResults = await researchAgent.conductParallelResearch(
            currentAgentQueries, 
            costPreference, 
            images, 
            textDocuments, 
            structuredData,
-           inputEmbeddings // Pass input embeddings
+           inputEmbeddings, // Pass input embeddings
+           requestId // Pass requestId
         ); 
+        const researchDuration = Date.now() - researchStartTime;
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixResearch} - Parallel research completed in ${researchDuration}ms.`);
       } catch (researchError) {
-        console.error(`[${new Date().toISOString()}] conductResearch: Parallel research failed in iteration ${currentIteration} with costPreference=${costPreference}. Error:`, researchError);
+        // This catch block might be less necessary now with Promise.allSettled inside conductParallelResearch, 
+        // but kept for safety in case the call itself fails.
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error calling conductParallelResearch:`, researchError);
+        // Decide if this is fatal. Let's assume it is for now.
+        throw new Error(`[${requestId}] Failed during parallel research call: ${researchError.message}`);
+        /* // Original fallback logic - less relevant if conductParallelResearch handles internal errors
         if (costPreference === 'high') {
-          console.warn(`[${new Date().toISOString()}] conductResearch: High-cost research failed (Iteration ${currentIteration}), falling back to low-cost models.`);
+          console.warn(`[${new Date().toISOString()}] [${requestId}] conductResearch: High-cost research failed (Iteration ${currentIteration}), falling back to low-cost models.`);
           try {
             // Pass context to fallback research as well
             currentResearchResults = await researchAgent.conductParallelResearch(
@@ -333,24 +381,24 @@ async function conductResearch(params, mcpExchange = null) {
                images, 
                textDocuments, 
                structuredData,
-               inputEmbeddings // Pass input embeddings
+               inputEmbeddings, // Pass input embeddings
+               requestId
             ); 
           } catch (fallbackError) {
-            console.error(`[${new Date().toISOString()}] conductResearch: Low-cost fallback research also failed (Iteration ${currentIteration}). Error:`, fallbackError);
+            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Low-cost fallback research also failed (Iteration ${currentIteration}). Error:`, fallbackError);
             currentResearchResults = currentAgentQueries.map(q => ({
               agentId: q.id, model: 'N/A', query: q.query, result: `Research failed: ${fallbackError.message}`, error: true, errorMessage: fallbackError.message
             }));
-            console.error(`[${new Date().toISOString()}] conductResearch: Marking iteration ${currentIteration} queries as failed due to fallback error.`);
+            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Marking iteration ${currentIteration} queries as failed due to fallback error.`);
           }
         } else {
           currentResearchResults = currentAgentQueries.map(q => ({
             agentId: q.id, model: 'N/A', query: q.query, result: `Research failed: ${researchError.message}`, error: true, errorMessage: researchError.message
           }));
-          console.error(`[${new Date().toISOString()}] conductResearch: Marking iteration ${currentIteration} queries as failed due to initial low-cost error.`);
+          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Marking iteration ${currentIteration} queries as failed due to initial low-cost error.`);
         }
+        */
       }
-      const researchDuration = Date.now() - researchStartTime;
-      console.log(`[${new Date().toISOString()}] conductResearch: ${stagePrefixResearch} - Parallel research completed in ${researchDuration}ms.`);
 
       allResearchResults.push(...currentResearchResults);
       previousResultsForRefinement = currentResearchResults;
@@ -359,22 +407,23 @@ async function conductResearch(params, mcpExchange = null) {
     // --- End Main Research Loop ---
 
     if (allResearchResults.length === 0) {
-      console.error(`[${new Date().toISOString()}] conductResearch: No research results were generated after all iterations.`);
-      throw new Error("Failed to generate any research results after planning/refinement.");
+      console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: No research results were generated after all iterations.`);
+      throw new Error(`[${requestId}] Failed to generate any research results after planning/refinement.`);
     }
 
     // Step 4 (Final Synthesis): Contextualize ALL accumulated results
-    const contextStartTime = Date.now();
-    const finalStagePrefix = `Stage ${totalStages}/${totalStages}`;
-    console.log(`[${new Date().toISOString()}] conductResearch: ${finalStagePrefix} - Contextualizing ${allResearchResults.length} total results (streaming)...`);
     let finalReportContent = '';
     let streamError = null;
-
     try {
-      // Pass images, documents, structuredData, and inputEmbeddings to the context agent
+      const contextStartTime = Date.now();
+      const finalStagePrefix = `Stage ${totalStages}/${totalStages}`;
+      console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${finalStagePrefix} - Contextualizing ${allResearchResults.length} total results (streaming)...`);
+      
+      // Pass allAgentQueries, images, documents, structuredData, and inputEmbeddings to the context agent
       const contextStream = contextAgent.contextualizeResultsStream(
         query,
         allResearchResults,
+        allAgentQueries, // Pass the list of planned agent queries
         { 
           audienceLevel, 
           outputFormat, 
@@ -384,7 +433,8 @@ async function conductResearch(params, mcpExchange = null) {
           documents: textDocuments, 
           structuredData,
           inputEmbeddings // Pass input embeddings
-        } 
+        },
+        requestId // Pass requestId to context agent
       );
 
       for await (const chunk of contextStream) {
@@ -397,30 +447,36 @@ async function conductResearch(params, mcpExchange = null) {
           break;
         }
       }
+      const contextDuration = Date.now() - contextStartTime;
+      if (!streamError) {
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${finalStagePrefix} - Contextualization stream completed in ${contextDuration}ms.`);
+      } else {
+         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${finalStagePrefix} - Contextualization stream finished with error after ${contextDuration}ms.`);
+         // Do not throw here, allow process to continue to report the error
+         // throw new Error(streamError || 'Unknown error during context stream processing');
+      }
     } catch (contextError) {
-      console.error(`[${new Date().toISOString()}] conductResearch: Error iterating context stream:`, contextError);
+      // Catch errors from initiating the stream or other unexpected issues in the synthesis step
+      console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error during context agent call/stream:`, contextError);
       streamError = `Error during result synthesis: ${contextError.message}`;
-      sendProgress({ error: streamError });
+      sendProgress({ error: streamError }); // Try to send progress update about the error
+      // Do not throw here, allow process to continue to report the error
+      // throw new Error(`[${requestId}] Failed during context agent call/stream: ${contextError.message}`);
     }
 
-    const contextDuration = Date.now() - contextStartTime;
-    if (!streamError) {
-      console.log(`[${new Date().toISOString()}] conductResearch: ${finalStagePrefix} - Contextualization stream completed in ${contextDuration}ms.`);
-    } else {
-      console.error(`[${new Date().toISOString()}] conductResearch: ${finalStagePrefix} - Contextualization stream finished with error after ${contextDuration}ms.`);
-      throw new Error(streamError);
-    }
 
-    // Store accumulated content in cache and DB (only if successful)
+    // Store accumulated content in cache and DB (only if synthesis was successful)
     if (!streamError) {
-      setInCache(cacheKey, finalReportContent);
+      try {
+        setInCache(cacheKey, finalReportContent);
 
-      const researchMetadata = {
+        const researchMetadata = {
         durationMs: Date.now() - overallStartTime,
         iterations: currentIteration - 1,
         totalSubQueries: allAgentQueries.length,
-      };
-      savedReportId = await dbClient.saveResearchReport({
+          requestId: requestId // Store requestId with metadata
+        };
+        savedReportId = await dbClient.saveResearchReport({
         originalQuery: query,
         parameters: { costPreference, audienceLevel, outputFormat, includeSources, maxLength },
         finalReport: finalReportContent,
@@ -428,25 +484,57 @@ async function conductResearch(params, mcpExchange = null) {
         images: images,
         textDocuments: textDocuments ? textDocuments.map(d => ({ name: d.name, length: d.content.length })) : null, // Store text doc metadata
         structuredData: structuredData ? structuredData.map(d => ({ name: d.name, type: d.type, length: d.content.length })) : null, // Store structured data metadata
-        basedOnPastReportIds: relevantPastReports.map(r => r.reportId)
-      });
-
+          basedOnPastReportIds: relevantPastReports.map(r => r.reportId)
+        });
+      } catch (dbError) {
+         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error saving report to DB:`, dbError);
+         // Decide if this is fatal. Let's allow completion but log the error.
+         // throw new Error(`[${requestId}] Failed saving report to database: ${dbError.message}`);
+      }
     } else {
-      console.warn(`[${new Date().toISOString()}] conductResearch: Skipping cache set and DB save due to synthesis stream error.`);
+      console.warn(`[${new Date().toISOString()}] [${requestId}] conductResearch: Skipping cache set and DB save due to synthesis stream error.`);
     }
 
     const overallDuration = Date.now() - overallStartTime;
-    console.log(`[${new Date().toISOString()}] conductResearch: Full research process completed in ${overallDuration}ms for query "${query.substring(0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Full research process finished in ${overallDuration}ms for query "${query.substring(0, 50)}..." (Synthesis status: ${streamError ? 'Failed' : 'Success'})`);
 
-    const completionMessage = `Research complete. Results streamed. Report ID: ${savedReportId || 'N/A'}`;
-    return completionMessage;
+    if (streamError) {
+      // If synthesis failed, throw an error here to be caught by the main catch block
+      throw new Error(streamError);
+    } else {
+      // --- Save Full Report to File ---
+      let fullReportPath = null;
+      if (savedReportId && finalReportContent) {
+        try {
+          const reportDir = path.resolve(config.reportOutputPath); // Use absolute path
+          const reportFilename = `research-report-${savedReportId}.md`; // Use Markdown extension
+          fullReportPath = path.join(reportDir, reportFilename);
 
-  } catch (error) { // Main catch block
+          // Ensure the directory exists
+          fs.mkdirSync(reportDir, { recursive: true });
+
+          // Write the file
+          fs.writeFileSync(fullReportPath, finalReportContent, 'utf8');
+          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Full report saved to: ${fullReportPath}`);
+        } catch (fileError) {
+          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error saving full report to file:`, fileError);
+          // Non-fatal error, just log it. The main result is still available.
+          fullReportPath = `Error saving file: ${fileError.message}`;
+        }
+      }
+      // --- End Save Full Report ---
+
+      // If synthesis succeeded, return the completion message including the file path
+      const completionMessage = `Research complete. Results streamed. Report ID: ${savedReportId || 'N/A'}. Full report saved to: ${fullReportPath || 'Not saved'}. [${requestId}]`; // Include requestId and file path
+      return completionMessage;
+    }
+
+  } catch (error) { // Main catch block for errors *before* or *during* synthesis failure reporting
     const overallDuration = Date.now() - overallStartTime;
     // Log the raw error directly for debugging
-    console.error(`[${new Date().toISOString()}] conductResearch: Error during research process after ${overallDuration}ms. Query: "${query.substring(0, 50)}...". Original Error:`, error);
-    // Create a generic error message
-    const genericErrorMessage = `Research process failed for query "${query.substring(0, 50)}..."`;
+    console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error during research process after ${overallDuration}ms. Query: "${query.substring(0, 50)}...". Original Error:`, error);
+    // Create a generic error message including requestId
+    const genericErrorMessage = `[${requestId}] Research process failed for query "${query.substring(0, 50)}..."`;
     // Throw a new generic error
     throw new Error(genericErrorMessage);
   }
@@ -456,24 +544,28 @@ async function conductResearch(params, mcpExchange = null) {
 const researchFollowUpSchema = z.object({
   originalQuery: z.string().describe("The original research query for context."),
   followUpQuestion: z.string().describe("The specific follow-up question."),
-  costPreference: conductResearchSchema.shape.costPreference.describe("Preference for model cost ('high' or 'low').")
+  costPreference: conductResearchSchema.shape.costPreference.describe("Preference for model cost ('high' or 'low')."),
+  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
 const getPastResearchSchema = z.object({
   query: z.string().describe("The query string to search for semantically similar past reports."),
   limit: z.number().int().positive().optional().default(5).describe("Maximum number of past reports to return."),
-  minSimilarity: z.number().min(0).max(1).optional().default(0.70).describe("Minimum cosine similarity score (0-1) for a report to be considered relevant.")
+  minSimilarity: z.number().min(0).max(1).optional().default(0.70).describe("Minimum cosine similarity score (0-1) for a report to be considered relevant."),
+  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
 const rateResearchReportSchema = z.object({
   reportId: z.string().describe("The ID of the report to rate (obtained from conduct_research result)."),
   rating: z.number().min(1).max(5).int().describe("Rating from 1 (poor) to 5 (excellent)."),
-  comment: z.string().optional().describe("Optional comment explaining the rating.")
+  comment: z.string().optional().describe("Optional comment explaining the rating."),
+  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
 const listResearchHistorySchema = z.object({
   limit: z.number().int().positive().optional().default(10).describe("Maximum number of recent reports to return."),
-  queryFilter: z.string().optional().describe("Optional text to filter report queries by (case-insensitive substring match).")
+  queryFilter: z.string().optional().describe("Optional text to filter report queries by (case-insensitive substring match)."),
+  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
 // Helper function to safely truncate a string (shared across functions)
@@ -482,8 +574,8 @@ function safeSubstring(str, start, end) {
   return str.substring(start, end);
 }
 
-// Implementation of research_follow_up tool
-async function researchFollowUp(params, mcpExchange = null) {
+// Implementation of research_follow_up tool - updated to accept requestId
+async function researchFollowUp(params, mcpExchange = null, requestId = 'unknown-req') { 
   const originalQuery = params.originalQuery || '';
   const followUpQuestion = params.followUpQuestion || '';
   const costPreference = params.costPreference || 'low';
@@ -495,7 +587,7 @@ async function researchFollowUp(params, mcpExchange = null) {
   };
 
   try {
-    console.log(`[${new Date().toISOString()}] researchFollowUp: Starting follow-up for original query "${safeSubstring(originalQuery, 0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] researchFollowUp: Starting follow-up for original query "${safeSubstring(originalQuery, 0, 50)}..."`);
     
     // Send initial progress update
     sendProgress({ message: "Starting follow-up research..." });
@@ -510,18 +602,18 @@ async function researchFollowUp(params, mcpExchange = null) {
       audienceLevel: 'expert', // Follow-ups tend to be more specific
       outputFormat: 'briefing', // More concise format for follow-ups
       includeSources: true
-    }, mcpExchange);
+    }, mcpExchange, requestId); // Pass requestId down
     
     // Return the result
     return result.replace("report-", "followup-report-");
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] researchFollowUp: Error processing follow-up query:`, error);
-    throw new Error(`Error conducting follow-up research: ${error.message}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] researchFollowUp: Error processing follow-up query:`, error);
+    throw new Error(`[${requestId}] Error conducting follow-up research: ${error.message}`);
   }
 }
 
-// Implementation of get_past_research tool
-async function getPastResearch(params, mcpExchange = null) {
+// Implementation of get_past_research tool - updated to accept requestId
+async function getPastResearch(params, mcpExchange = null, requestId = 'unknown-req') { 
   const query = params.query || '';
   const limit = params.limit || 5;
   const minSimilarity = params.minSimilarity !== undefined ? params.minSimilarity : 0.70;
@@ -533,7 +625,7 @@ async function getPastResearch(params, mcpExchange = null) {
   };
 
   try {
-    console.log(`[${new Date().toISOString()}] getPastResearch: Searching for semantically similar past reports for query "${safeSubstring(query, 0, 50)}..."`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] getPastResearch: Searching for semantically similar past reports for query "${safeSubstring(query, 0, 50)}..."`);
     
     // Send initial progress update
     sendProgress({ message: "Searching knowledge base for relevant past research..." });
@@ -542,12 +634,6 @@ async function getPastResearch(params, mcpExchange = null) {
     const reports = await dbClient.findReportsBySimilarity(query, limit, minSimilarity);
     
     sendProgress({ message: `Found ${reports ? reports.length : 0} relevant past reports.` });
-    
-    if (!reports || reports.length === 0) {
-      return "No recent research reports found" + (query ? ` matching query "${query}"` : ".");
-    }
-    
-    // Format the results, including similarity score
     const formattedReports = reports.map(report => ({
       _id: report._id.toString(),
       originalQuery: report.originalQuery,
@@ -558,17 +644,17 @@ async function getPastResearch(params, mcpExchange = null) {
     
     return JSON.stringify(formattedReports, null, 2);
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] getPastResearch: Error searching for past reports:`, error);
-    throw new Error(`Error retrieving past research: ${error.message}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] getPastResearch: Error searching for past reports:`, error);
+    throw new Error(`[${requestId}] Error retrieving past research: ${error.message}`);
   }
 }
 
-// Implementation of rate_research_report tool
-async function rateResearchReport(params, mcpExchange = null) {
+// Implementation of rate_research_report tool - updated to accept requestId
+async function rateResearchReport(params, mcpExchange = null, requestId = 'unknown-req') { 
   const { reportId, rating, comment } = params;
   
   try {
-    console.log(`[${new Date().toISOString()}] rateResearchReport: Processing rating ${rating} for report ${reportId}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] rateResearchReport: Processing rating ${rating} for report ${reportId}`);
     
     // Use dbClient to save the rating
     const success = await dbClient.addFeedbackToReport(reportId, { rating, comment });
@@ -576,22 +662,22 @@ async function rateResearchReport(params, mcpExchange = null) {
     if (success) {
       return `Feedback successfully recorded for report ${reportId}.`;
     } else {
-      throw new Error(`Failed to record feedback. Report ID ${reportId} might be invalid or a database error occurred.`);
+      throw new Error(`[${requestId}] Failed to record feedback. Report ID ${reportId} might be invalid or a database error occurred.`);
     }
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] rateResearchReport: Error processing rating:`, error);
-    throw new Error(`Error recording feedback: ${error.message}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] rateResearchReport: Error processing rating:`, error);
+    throw new Error(`[${requestId}] Error recording feedback: ${error.message}`);
   }
 }
 
-// Implementation of list_research_history tool
-async function listResearchHistory(params, mcpExchange = null) {
+// Implementation of list_research_history tool - updated to accept requestId
+async function listResearchHistory(params, mcpExchange = null, requestId = 'unknown-req') { 
   // Ensure params are properly handled
   const limit = params.limit || 10;
   const queryFilter = params.queryFilter || null;
   
   try {
-    console.log(`[${new Date().toISOString()}] listResearchHistory: Listing recent reports (limit: ${limit}, filter: "${queryFilter || 'None'}")`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] listResearchHistory: Listing recent reports (limit: ${limit}, filter: "${queryFilter || 'None'}")`);
     
     // Use dbClient to retrieve recent reports
     const reports = await dbClient.listRecentReports(limit, queryFilter);
@@ -615,18 +701,61 @@ async function listResearchHistory(params, mcpExchange = null) {
     // Combine message with formatted JSON
     return resultMessage + JSON.stringify(formattedReports, null, 2);
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] listResearchHistory: Error listing reports:`, error);
-    throw new Error(`Error retrieving research history: ${error.message}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] listResearchHistory: Error listing reports:`, error);
+    throw new Error(`[${requestId}] Error retrieving research history: ${error.message}`);
   }
 }
+
+// Implementation for execute_sql tool
+async function executeSql(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { sql, params: queryParams } = params; // Renamed params to queryParams to avoid conflict
+  const toolName = "execute_sql";
+  console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Attempting to execute SQL: "${safeSubstring(sql, 0, 100)}..." with ${queryParams.length} params.`);
+
+  try {
+    // Basic validation (can be expanded)
+    if (!sql || sql.trim() === '') {
+      throw new Error("SQL query cannot be empty.");
+    }
+    // Optional: Add more robust validation/restriction here if needed
+    // e.g., restrict to SELECT statements initially for safety
+    const lowerSql = sql.trim().toLowerCase();
+    if (!lowerSql.startsWith('select')) {
+       console.warn(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Blocking non-SELECT SQL query for safety: "${safeSubstring(sql, 0, 100)}..."`);
+       throw new Error("Only SELECT statements are currently allowed for safety.");
+    }
+
+    // Ensure dbClient is ready
+    if (!dbClient.isDbInitialized() || !dbClient.isEmbedderReady()) {
+      throw new Error("Database or embedder is not ready.");
+    }
+
+    // Call the dbClient function to execute the query securely
+    // IMPORTANT: Assumes dbClient.executeQuery handles parameterization correctly!
+    const results = await dbClient.executeQuery(sql, queryParams);
+
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: SQL query executed successfully. Rows returned: ${results?.length ?? 0}`);
+
+    // Return results as JSON string
+    return JSON.stringify(results, null, 2);
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error executing SQL query: "${safeSubstring(sql, 0, 100)}...". Error:`, error);
+    // Rethrow a user-friendly error, including the request ID
+    throw new Error(`[${requestId}] Error executing SQL: ${error.message}`);
+  }
+}
+
 
 module.exports = {
   // Schemas
   conductResearchSchema,
+  executeSqlSchema, // Add new schema
   researchFollowUpSchema,
   getPastResearchSchema,
   rateResearchReportSchema,
   listResearchHistorySchema,
+  listModelsSchema: z.object({ refresh: z.boolean().optional().default(false) }),
   
   // Functions
   conductResearch,
@@ -637,32 +766,106 @@ module.exports = {
 
   // Export schema and add function for the new tool
   getReportContentSchema,
-  getReportContent // This will be the wrapper calling dbClient.getReportById
+  getServerStatusSchema, // Export new schema
+  
+  // Functions
+  conductResearch,
+  researchFollowUp,
+  getPastResearch,
+  rateResearchReport,
+  listResearchHistory,
+  getReportContent, // This will be the wrapper calling dbClient.getReportById
+  getServerStatus, // Export new function
+  executeSql, // Add new function
+  listModels
 };
 
-// Implementation for get_report_content tool
-async function getReportContent(params, mcpExchange = null) {
+// Implementation for get_report_content tool - updated to accept requestId
+async function getReportContent(params, mcpExchange = null, requestId = 'unknown-req') { 
   const { reportId } = params;
   try {
-    console.log(`[${new Date().toISOString()}] getReportContent: Attempting to retrieve report ID: ${reportId}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] getReportContent: Attempting to retrieve report ID: ${reportId}`);
     
     // Call the dbClient function
     const report = await dbClient.getReportById(reportId);
     
     if (report && report.final_report) {
-      console.log(`[${new Date().toISOString()}] getReportContent: Successfully retrieved report ID: ${reportId}`);
+      console.error(`[${new Date().toISOString()}] [${requestId}] getReportContent: Successfully retrieved report ID: ${reportId}`);
       // Return only the final report content for simplicity, or the full object if needed
       return report.final_report; 
       // Alternatively, return JSON.stringify(report, null, 2); for the full object
     } else if (report) {
-      console.warn(`[${new Date().toISOString()}] getReportContent: Report ID ${reportId} found, but it has no final_report content.`);
-      throw new Error(`Report ID ${reportId} found but contains no content.`);
+      console.warn(`[${new Date().toISOString()}] [${requestId}] getReportContent: Report ID ${reportId} found, but it has no final_report content.`);
+      throw new Error(`[${requestId}] Report ID ${reportId} found but contains no content.`);
     } else {
-      console.warn(`[${new Date().toISOString()}] getReportContent: Report ID ${reportId} not found.`);
-      throw new Error(`Report ID ${reportId} not found.`);
+      console.warn(`[${new Date().toISOString()}] [${requestId}] getReportContent: Report ID ${reportId} not found.`);
+      throw new Error(`[${requestId}] Report ID ${reportId} not found.`);
     }
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] getReportContent: Error retrieving report ID ${reportId}:`, error);
-    throw new Error(`Error retrieving report content: ${error.message}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] getReportContent: Error retrieving report ID ${reportId}:`, error);
+    throw new Error(`[${requestId}] Error retrieving report content: ${error.message}`);
+  }
+}
+
+// Implementation for get_server_status tool
+async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-req') {
+  const toolName = "get_server_status";
+  console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Retrieving server status...`);
+  try {
+    // Gather status information from dbClient
+    const embedderReady = dbClient.isEmbedderReady();
+    const dbInitialized = dbClient.isDbInitialized();
+    const dbPathInfo = dbClient.getDbPathInfo();
+
+    const status = {
+      serverName: config.server.name,
+      serverVersion: config.server.version,
+      timestamp: new Date().toISOString(),
+      database: {
+        initialized: dbInitialized,
+        storageType: dbPathInfo, // e.g., "File (C:\...)", "IndexedDB (...)", "In-Memory (Fallback)"
+        vectorDimension: config.database.vectorDimension,
+        maxRetries: config.database.maxRetryAttempts,
+        retryDelayBaseMs: config.database.retryDelayBaseMs,
+        relaxedDurability: config.database.relaxedDurability
+      },
+      embedder: {
+        ready: embedderReady,
+        model: embedderReady ? 'Xenova/all-MiniLM-L6-v2' : 'Not Loaded'
+      },
+      cache: {
+        ttlSeconds: CACHE_TTL_SECONDS,
+        maxKeys: cache.options.maxKeys,
+        currentKeys: cache.keys().length,
+        stats: cache.getStats()
+      },
+      config: { // Include some key config values (be careful not to expose secrets)
+        serverPort: config.server.port,
+        // Avoid exposing API keys here
+        maxResearchIterations: config.models.maxResearchIterations
+      }
+    };
+
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Status retrieved successfully.`);
+    return JSON.stringify(status, null, 2);
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error retrieving server status:`, error);
+    throw new Error(`[${requestId}] Error retrieving server status: ${error.message}`);
+  }
+}
+
+// Implementation for list_models tool
+async function listModels(params = { refresh: false }, mcpExchange = null, requestId = 'unknown-req') {
+  const toolName = "list_models";
+  const refresh = !!params.refresh;
+  console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Listing models (refresh=${refresh}).`);
+  try {
+    if (refresh) await modelCatalog.refresh();
+    const catalog = await modelCatalog.getCatalog();
+    return JSON.stringify(catalog, null, 2);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error:`, error);
+    throw new Error(`[${requestId}] Error listing models: ${error.message}`);
   }
 }

@@ -101,14 +101,21 @@ This is the recommended method for integrating with MCP clients like Cline in VS
    ```
    *(Ensure this file is saved in the root directory of the project)*
 
-## Cline / VS Code MCP Integration (Recommended)
+## Cline / Cursor / VS Code MCP Integration (STDIO)
 
-To use this server with Cline in VS Code, you need to add it to your MCP settings file.
+This method uses the STDIO transport and is recommended for integrations within VS Code (using Cline or Cursor extensions).
 
-1.  **Locate your Cline MCP settings file:**
-    *   Typically found at: `c:\Users\YOUR_USERNAME\AppData\Roaming\Cursor\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` (Windows) or `~/Library/Application Support/Cursor/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (macOS). Replace `YOUR_USERNAME` accordingly.
+1.  **Locate your MCP settings file:**
+    *   **Cline (in VS Code/Cursor):** Typically found at:
+        *   Windows: `c:\Users\YOUR_USERNAME\AppData\Roaming\Cursor\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
+        *   macOS: `~/Library/Application Support/Cursor/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+        *   Linux: `~/.config/Cursor/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+        *(Replace `YOUR_USERNAME` and potentially `Cursor` with `Code` if using standard VS Code)*
+    *   **Other MCP Clients:** Consult their documentation for the settings file location.
 
-2.  **Edit the `cline_mcp_settings.json` file:** Add the following configuration object within the main `mcpServers` object. **Make sure to replace `"YOUR_PROJECT_PATH_HERE"` with the absolute path to where you cloned this repository and `"YOUR_OPENROUTER_API_KEY_HERE"` with your actual API key.**
+2.  **Edit the MCP settings file:** Add the following configuration object within the main `mcpServers` object.
+    *   **CRITICAL:** Replace `"YOUR_PROJECT_PATH_HERE"` with the **absolute path** to the directory where you cloned this repository (e.g., `C:/Users/tdesa/Documents/ai_projects/openrouter-agents`).
+    *   **CRITICAL:** Replace `"YOUR_OPENROUTER_API_KEY_HERE"` with your actual OpenRouter API key.
 
     ```json
     {
@@ -118,20 +125,26 @@ To use this server with Cline in VS Code, you need to add it to your MCP setting
         "openrouter-research-agents": {
           "command": "cmd.exe", 
           "args": [
-            "/c", 
-            "YOUR_PROJECT_PATH_HERE/start-mcp-server.bat"
-          ], 
+            "/c",
+            "YOUR_PROJECT_PATH_HERE\\start-mcp-server.bat" // Use double backslashes for paths in JSON on Windows
+            // On macOS/Linux, use: "command": "YOUR_PROJECT_PATH_HERE/start-mcp-server.sh" (or similar) and remove "/c" from args
+          ],
           "env": {
-            // IMPORTANT: Replace with your actual OpenRouter API Key
-            "OPENROUTER_API_KEY": "YOUR_OPENROUTER_API_KEY_HERE" 
+            // This ensures the server process gets the API key directly.
+            // It overrides any value set in the .env file for this specific server instance.
+            "OPENROUTER_API_KEY": "YOUR_OPENROUTER_API_KEY_HERE"
+            // You can add other environment variables here if needed, e.g.:
+            // "LOG_LEVEL": "debug"
           },
-          "disabled": false, // Ensure the server is enabled
-          "autoApprove": [
+          "disabled": false, // Set to false to enable the server
+          "autoApprove": [ // Optional: Tools Cline can use without asking permission
             "conduct_research",
             "research_follow_up",
             "get_past_research",
             "rate_research_report",
-            "list_research_history"
+            "list_research_history",
+            "get_report_content",
+            "get_server_status" // Add the new status tool
           ]
         }
 
@@ -139,10 +152,10 @@ To use this server with Cline in VS Code, you need to add it to your MCP setting
       }
     }
     ```
-    *   **Why the batch file?** Using the batch file ensures the server starts with the proper environment and directory context.
-    *   **Why the API key in `env`?** While the server uses `dotenv` to load the `.env` file, providing the key in the `env` block ensures the server process always has access to it.
+    *   **Batch/Shell Script:** Using the provided `.bat` (Windows) or a corresponding `.sh` (macOS/Linux) script ensures the Node.js server starts with the correct environment variables loaded (via `dotenv`) and in the correct working directory.
+    *   **API Key in `env`:** Providing the `OPENROUTER_API_KEY` in the `env` block is the most reliable way to ensure the server process receives it, especially across different platforms and client configurations.
 
-3.  **Save the settings file.** Cline should automatically detect the new server configuration. You might need to restart VS Code or the Cline extension if it doesn't appear immediately.
+3.  **Save the settings file.** Your MCP client (Cline, Cursor) should automatically detect and start the server. You might need to restart the client or IDE if it doesn't appear immediately.
 
 Once configured, you'll see the `conduct_research` and other research tools available in Cline. You can use them like this:
 
@@ -154,6 +167,12 @@ Or specify a cost preference:
 
 ```
 Can you conduct a high-cost research on climate change mitigation strategies?
+```
+
+You can also check the server's status:
+
+```
+Use the get_server_status tool.
 ```
 
 ## Available Models
@@ -178,6 +197,9 @@ You can customize the available models by editing the `.env` file:
 ```
 HIGH_COST_MODELS=perplexity/sonar-deep-research,perplexity/sonar-pro,other-model
 LOW_COST_MODELS=perplexity/sonar-reasoning,openai/gpt-4o-mini-search-preview,other-model
+# Or provide JSON arrays with domains, e.g.:
+# HIGH_COST_MODELS=[{"name":"perplexity/sonar-deep-research","domains":["search","general"]}]
+# LOW_COST_MODELS=[{"name":"openai/gpt-4o-mini-search-preview","domains":["search","general"]}]
 ```
 
 You can also customize the database and cache settings in the `.env` file:
@@ -185,13 +207,15 @@ You can also customize the database and cache settings in the `.env` file:
 ```
 PGLITE_DATA_DIR=./researchAgentDB
 CACHE_TTL_SECONDS=3600
+SERVER_PORT=3002
+ENSEMBLE_SIZE=2
 ```
 
-## Alternative Installation: HTTP/SSE for Claude Desktop App
+## Alternative Installation: HTTP/SSE (e.g., for Claude Desktop App)
 
-The server can also be run as a standalone HTTP/SSE service for integration with the Claude Desktop App.
+The server can also be run as a standalone HTTP/SSE service. This is suitable for clients like the Claude Desktop App or custom web applications.
 
-### HTTP/SSE Installation Steps
+### Running the Server (HTTP/SSE)
 
 1.  Clone this repository (if not already done):
     ```bash
@@ -199,11 +223,18 @@ The server can also be run as a standalone HTTP/SSE service for integration with
     cd openrouter-agents
     ```
 2.  Create and configure your `.env` file as described in the standard installation (Steps 3 & 4).
-3.  Start the server using npm:
+    *   **IMPORTANT for HTTP/SSE:** Ensure you set the `SERVER_API_KEY` in your `.env` file for authentication (unless you explicitly disable it with `ALLOW_NO_API_KEY=true` for testing).
+      ```dotenv
+      # .env file
+      OPENROUTER_API_KEY=your_openrouter_key_here
+      SERVER_API_KEY=your_secure_mcp_server_key_here # Add this line!
+      # Optional: ALLOW_NO_API_KEY=true (Only for testing, disables auth if SERVER_API_KEY is also unset)
+      ```
+3.  Start the server using npm (this runs `node src/server/mcpServer.js`):
     ```bash
     npm start
     ```
-4.  The MCP server will be running and accessible via HTTP/SSE on `http://localhost:3002` (or the port specified in your `.env`).
+4.  The MCP server will start listening for HTTP/SSE connections on the configured port (default: `3002`). Check the console output for the exact port and authentication status.
 
 ### Claude Desktop App Integration (HTTP/SSE)
 
@@ -217,12 +248,16 @@ The server can also be run as a standalone HTTP/SSE service for integration with
       "type": "sse",
       "name": "OpenRouter Research Agents (HTTP)", // Differentiate if also using STDIO
       "host": "localhost",
-      "port": 3002, // Or your configured port
+      "port": 3002, // Or your configured port (from .env or config.js). SERVER_PORT or PORT
       "streamPath": "/sse",
-      "messagePath": "/messages"
+      "messagePath": "/messages",
+      // IMPORTANT: Add apiKey if you set SERVER_API_KEY in the server's .env
+      "apiKey": "your_secure_mcp_server_key_here" 
     }
     ```
-5.  Save and restart Claude.
+    *   The `apiKey` here **must match** the `SERVER_API_KEY` you set in the server's `.env` file.
+
+5.  Save the configuration and restart the Claude Desktop App.
 
 ## Persistence & Data Storage
 
@@ -238,34 +273,43 @@ This server uses:
 
 - **Connection Issues**: Ensure Claude's developer settings match the server configuration
 - **API Key Errors**: Verify your OpenRouter API key is correct
-- **No Agents Found**: If planning fails, ensure Claude is parsing the XML correctly
-- **Model Errors**: Check if the specified models are available in your OpenRouter account
+- **No Agents Found**: If planning fails, ensure the planning model (Claude 3.7 Sonnet by default) is accessible via your OpenRouter key and check server logs for XML parsing errors.
+- **Model Errors**: Check if the specific research models used are available and enabled in your OpenRouter account. Check server logs for API errors from OpenRouter.
+- **DB/Embedder Issues**: Use the `get_server_status` tool to check if the database and embedding model initialized correctly. Check server logs for errors during initialization.
+
+## Available Tools
+
+This MCP server provides the following tools:
+
+- `conduct_research`: Performs the main research orchestration.
+- `research_follow_up`: Conducts follow-up research based on an original query.
+- `get_past_research`: Finds semantically similar past research reports from the database.
+- `rate_research_report`: Adds user feedback (rating/comment) to a specific report.
+- `list_research_history`: Lists recent research reports, optionally filtered by query text.
+- `get_report_content`: Retrieves the full text content of a specific report by its ID.
+- `get_server_status`: Provides diagnostic information about the server's state (DB connection, embedder status, cache stats, etc.).
 
 ## Advanced Configuration
 
-The server configuration can be modified in `config.js`. You can adjust:
+The server configuration can be modified primarily via the `.env` file. You can adjust:
 
 - Available models
 - Default cost preferences
 - Planning agent settings
-- Server port and configuration
-- Database and cache settings
+- Server port (`SERVER_PORT`)
+- Database directory (`PGLITE_DATA_DIR`) and cache TTL (`CACHE_TTL_SECONDS`)
+- Authentication key (`SERVER_API_KEY`) and whether to allow disabling it (`ALLOW_NO_API_KEY`)
 
-### Authentication Security
+More advanced settings (like specific model names, retry logic, vector dimensions) are in `config.js`, but modifying the `.env` file is recommended for most common adjustments.
+
+### Authentication Security (HTTP/SSE)
 
 As of the latest update, API key authentication is now **mandatory by default** for HTTP/SSE transport:
 
-1. Set the `SERVER_API_KEY` environment variable in your `.env` file for production:
-   ```
-   SERVER_API_KEY=your_secure_api_key_here
-   ```
-
-2. For development/testing only, you can disable authentication by setting:
-   ```
-   ALLOW_NO_API_KEY=true
-   ```
-
-This provides enhanced security for production deployments while maintaining flexibility for development and testing.
+1.  **Mandatory by Default:** API key authentication is required for the HTTP/SSE transport.
+2.  **Set the Key:** Define `SERVER_API_KEY=your_secure_api_key_here` in your `.env` file when running the server via `npm start`.
+3.  **Client Configuration:** Ensure the connecting client (e.g., Claude Desktop App) provides this same key in its configuration (`apiKey` field).
+4.  **Disabling (Testing Only):** For local testing *only*, you can set `ALLOW_NO_API_KEY=true` in the `.env` file. If this is true AND `SERVER_API_KEY` is *not* set, authentication will be bypassed. **Do not use this in production.**
 
 ## Testing Tools
 

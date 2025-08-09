@@ -1,4 +1,4 @@
-1 // src/agents/contextAgent.js
+// src/agents/contextAgent.js
 const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import parser
@@ -8,8 +8,8 @@ class ContextAgent {
     this.model = config.models.planning; // Using the same model as planning for synthesis
   }
 
-  // Added images, documents, and structuredData parameters
-  async *contextualizeResultsStream(originalQuery, researchResults, options = {}) { 
+  // Added allAgentQueries, images, documents, structuredData, inputEmbeddings, and requestId parameters
+  async *contextualizeResultsStream(originalQuery, researchResults, allAgentQueries = [], options = {}, requestId = 'unknown-req') { 
     const {
       audienceLevel = 'intermediate',
       outputFormat = 'report',
@@ -21,38 +21,74 @@ class ContextAgent {
       inputEmbeddings = null // Add inputEmbeddings
     } = options;
 
-    console.error(`[${new Date().toISOString()}] ContextAgent: Starting contextualization for query "${originalQuery.substring(0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${documents ? documents.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
-    console.error(`[${new Date().toISOString()}] ContextAgent: Options: audienceLevel=${audienceLevel}, outputFormat=${outputFormat}, includeSources=${includeSources}, maxLength=${maxLength}`);
-    console.error(`[${new Date().toISOString()}] ContextAgent: Received ${researchResults.length} total research results from ensemble runs.`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Starting contextualization for query "${originalQuery.substring(0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${documents ? documents.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Options: audienceLevel=${audienceLevel}, outputFormat=${outputFormat}, includeSources=${includeSources}, maxLength=${maxLength}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Received ${researchResults.length} total research results from ensemble runs for ${allAgentQueries.length} planned sub-queries.`);
 
-    // Group results by original agentId (sub-query)
+    // Create a map of planned queries by ID for easy lookup
+    const plannedQueriesMap = new Map(allAgentQueries.map(q => [q.id.toString(), q.query]));
+
+    // Group results by original agentId (sub-query ID)
     const groupedResults = researchResults.reduce((acc, result) => {
-      if (!acc[result.agentId]) {
-        acc[result.agentId] = { query: result.query, results: [] };
+      const agentIdStr = result.agentId.toString();
+      if (!acc[agentIdStr]) {
+        // Get the planned query text from the map
+        const plannedQueryText = plannedQueriesMap.get(agentIdStr) || `Unknown Query (ID: ${agentIdStr})`;
+        acc[agentIdStr] = { query: plannedQueryText, results: [], status: 'partial' }; // Default status
       }
-      acc[result.agentId].results.push({
+      acc[agentIdStr].results.push({
         model: result.model,
         result: result.result,
         error: result.error,
         errorMessage: result.errorMessage
       });
+      // Update status based on results
+      const hasSuccess = acc[agentIdStr].results.some(r => !r.error);
+      const hasError = acc[agentIdStr].results.some(r => r.error);
+      if (hasSuccess && !hasError) acc[agentIdStr].status = 'success';
+      else if (!hasSuccess && hasError) acc[agentIdStr].status = 'failed';
+      else acc[agentIdStr].status = 'partial'; // Mixed results or potentially empty if something went wrong
+
       return acc;
     }, {});
 
-    // Format grouped results for the synthesis prompt
+    // Add entries for planned queries that have no results (completely failed before execution)
+    allAgentQueries.forEach(plannedQuery => {
+      const agentIdStr = plannedQuery.id.toString();
+      if (!groupedResults[agentIdStr]) {
+        groupedResults[agentIdStr] = {
+          query: plannedQuery.query,
+          results: [],
+          status: 'failed' // Mark as failed if no results were returned at all
+        };
+      }
+    });
+
+    // Format grouped results for the synthesis prompt, including status
+    let subQuerySummary = "SUB-QUERIES STATUS:\n";
     const formattedResults = Object.entries(groupedResults).map(([agentId, data]) => {
       const query = data.query;
-      const resultsText = data.results.map(r => 
-        `--- Model: ${r.model} ---\n${r.result}\n${r.error ? `NOTE: This model encountered an error: ${r.errorMessage || 'Unknown error'}\n` : ''}`
-      ).join('\n');
-      
+      const status = data.status;
+      subQuerySummary += `- Sub-Query ${agentId}: ${status.toUpperCase()}\n`; // Add to summary
+
+      let resultsText = '';
+      if (data.results.length > 0) {
+         resultsText = data.results.map(r =>
+           `--- Model: ${r.model} (${r.error ? 'FAILED' : 'Success'}) ---\n${r.result}\n${r.error ? `ERROR DETAILS: ${r.errorMessage || 'Unknown error'}\n` : ''}`
+         ).join('\n');
+      } else {
+         resultsText = "--- No results returned for this sub-query (likely failed before execution). ---";
+      }
+
       return `
-SUB-QUERY ${agentId}: ${query}
+SUB-QUERY ${agentId} (Status: ${status.toUpperCase()}): ${query}
 ENSEMBLE RESULTS:
 ${resultsText}
 === END OF SUB-QUERY ${agentId} RESULTS ===
 `;
     }).join('\n');
+
+    subQuerySummary += "\n"; // Add newline after summary
 
 
     let outputInstructions = '';
@@ -77,12 +113,12 @@ Your mission is to perform a critical synthesis:
     *   Areas of strong agreement/consensus between models.
     *   Significant disagreements, contradictions, or differing perspectives.
     *   Unique insights or information provided by only one model.
-    *   Apparent strengths or weaknesses in each model's response to that specific sub-query.
-2. **Sub-Query Synthesis:** Based on the intra-query analysis, synthesize a consolidated understanding for *each* sub-query. Prioritize corroborated information but retain valuable unique insights. Clearly state where models diverged.
-3. **Overall Integration:** Integrate the synthesized findings from all sub-queries into a unified knowledge framework that comprehensively addresses the ORIGINAL RESEARCH QUERY.
-4. **Insight Generation:** Identify overarching themes, key insights, patterns, and connections that emerge from the integrated analysis.
-5. Highlight significant gaps, inconsistencies, or limitations in the overall research, considering both the individual results and the ensemble comparison. Pay attention to confidence levels reported by individual agents.
-6. Draw evidence-based conclusions, explicitly stating the overall confidence level for key takeaways. Note where findings are based on single models versus consensus, and mention if confidence levels reported by agents were low or conflicting.
+    *   Apparent strengths or weaknesses in each model's response to that specific sub-query. Note if a model failed for a sub-query.
+2. **Sub-Query Synthesis:** Based on the intra-query analysis, synthesize a consolidated understanding for *each* sub-query, noting its overall status (SUCCESS, PARTIAL, FAILED). Prioritize corroborated information from successful runs but retain valuable unique insights. Clearly state where models diverged or failed. If a sub-query FAILED entirely, acknowledge this lack of information.
+3. **Overall Integration:** Integrate the synthesized findings from all *successfully or partially executed* sub-queries into a unified knowledge framework that comprehensively addresses the ORIGINAL RESEARCH QUERY. Explicitly mention which planned sub-queries could not be completed due to errors (status: FAILED).
+4. **Insight Generation:** Identify overarching themes, key insights, patterns, and connections that emerge from the integrated analysis of available results.
+5. Highlight significant gaps, inconsistencies, or limitations in the overall research, considering both the individual results, the ensemble comparison, and any failed sub-queries. Pay attention to confidence levels reported by individual agents.
+6. Draw evidence-based conclusions, explicitly stating the overall confidence level for key takeaways. Note where findings are based on single models versus consensus, mention if confidence levels reported by agents were low or conflicting, and acknowledge the impact of any failed sub-queries on the overall completeness.
 
 ${outputInstructions}
 
@@ -108,7 +144,7 @@ Focus on providing genuine insights derived from the comparison and synthesis of
      if (structuredData && structuredData.length > 0) {
        structuredDataContext = `\n\nPROVIDED STRUCTURED DATA SUMMARIES FOR CONTEXT:\n`;
        structuredData.forEach(data => {
-           const summary = structuredDataParser.getStructuredDataSummary(data.content, data.type, data.name);
+           const summary = structuredDataParser.getStructuredDataSummary(data.content, data.type, data.name); // Consider passing requestId if parser logs
            structuredDataContext += `--- Data: ${data.name} (${data.type}) ---\n${summary}\n---\n`;
         });
      }
@@ -125,10 +161,10 @@ ORIGINAL RESEARCH QUERY: ${originalQuery}
 ${textDocumentContext}
 ${structuredDataContext}
 ${embeddingContext} 
-ENSEMBLE RESEARCH RESULTS (Multiple models may have answered each sub-query):
+${subQuerySummary}ENSEMBLE RESEARCH RESULTS (Grouped by Sub-Query, including status and failures):
 ${formattedResults}
 
-Please perform a critical synthesis of these findings, considering the original query and any provided documents, structured data, or their semantic embeddings. For each sub-query, compare the ensemble results, then integrate these synthesized sub-query findings into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, and overall confidence.
+Please perform a critical synthesis of these findings, considering the original query, the status of each sub-query (SUCCESS/PARTIAL/FAILED), and any provided documents, structured data, or their semantic embeddings. For each sub-query, compare the ensemble results (noting failures), then integrate the synthesized findings from available sub-queries into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, failed sub-queries, and overall confidence based on the available information.
 `;
 
     // Construct user message content for synthesis, including images if provided
@@ -141,8 +177,8 @@ Please perform a critical synthesis of these findings, considering the original 
           type: 'image_url',
           image_url: { url: img.url, detail: img.detail }
         });
-      });
-       console.error(`[${new Date().toISOString()}] ContextAgent: Including ${images.length} image(s) in synthesis request.`);
+       });
+       console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Including ${images.length} image(s) in synthesis request.`);
        // Adjust system prompt if images are present
        systemPrompt += "\n\nSynthesize the research results in the context of the provided image(s) as well.";
     }
@@ -159,7 +195,7 @@ Please perform a critical synthesis of these findings, considering the original 
 
 
     const startTime = Date.now();
-    console.error(`[${new Date().toISOString()}] ContextAgent: Sending synthesis stream request to model ${this.model}...`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Sending synthesis stream request to model ${this.model}...`);
     let fullContent = '';
     let streamError = null;
 
@@ -176,7 +212,7 @@ Please perform a critical synthesis of these findings, considering the original 
         }
         if (chunk.error) {
           streamError = chunk.error;
-          console.error(`[${new Date().toISOString()}] ContextAgent: Error received in stream:`, streamError);
+          console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Error received in stream:`, streamError);
           yield { error: `Stream error during synthesis: ${streamError.message || 'Unknown stream error'}` };
           break; // Stop processing on stream error
         }
@@ -188,16 +224,16 @@ Please perform a critical synthesis of these findings, considering the original 
 
       const duration = Date.now() - startTime;
       if (!streamError) {
-        console.error(`[${new Date().toISOString()}] ContextAgent: Synthesis stream completed successfully in ${duration}ms.`);
+        console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Synthesis stream completed successfully in ${duration}ms.`);
       } else {
-         console.error(`[${new Date().toISOString()}] ContextAgent: Synthesis stream finished with error after ${duration}ms.`);
+         console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Synthesis stream finished with error after ${duration}ms.`);
       }
       
     } catch (error) {
       // Catch errors from initiating the stream or other unexpected issues
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] ContextAgent: Unhandled error during synthesis stream after ${duration}ms. Query: "${originalQuery.substring(0, 50)}...". Model: ${this.model}. Error:`, error);
-      yield { error: `ContextAgent failed to synthesize results stream for query "${originalQuery.substring(0, 50)}...": ${error.message}` };
+      console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Unhandled error during synthesis stream after ${duration}ms. Query: "${originalQuery.substring(0, 50)}...". Model: ${this.model}. Error:`, error);
+      yield { error: `[${requestId}] ContextAgent failed to synthesize results stream for query "${originalQuery.substring(0, 50)}...": ${error.message}` };
     }
   }
 }
