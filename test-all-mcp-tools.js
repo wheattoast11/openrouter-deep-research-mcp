@@ -5,7 +5,10 @@ const {
   researchFollowUp, 
   getPastResearch, 
   rateResearchReport, 
-  listResearchHistory 
+  listResearchHistory,
+  listModels,
+  getServerStatus,
+  executeSql
 } = require('./src/server/tools');
 
 async function runTests() {
@@ -129,11 +132,44 @@ async function runTests() {
   return overallSuccess;
 }
 
+async function runNewTools() {
+  console.log("----- Testing list_models -----");
+  try {
+    const res = await listModels({ refresh: false });
+    console.log("list_models length:", res.length);
+  } catch (e) { console.error("list_models error", e.message); }
+
+  console.log("----- Testing db_health -----");
+  try {
+    const tools = require('./src/server/tools');
+    const out = await tools.dbHealth({});
+    console.log("db_health:", out);
+  } catch (e) { console.error("db_health error", e.message); }
+
+  console.log("----- Testing export_reports / import_reports / reindex_vectors -----");
+  try {
+    const tools = require('./src/server/tools');
+    const exported = await tools.exportReports({ format: 'json', limit: 2 });
+    console.log("export_reports sample size:", exported.length);
+    const reindex = await tools.reindexVectorsTool({});
+    console.log("reindex_vectors:", reindex);
+    // Import the same back (no-op if duplicates)
+    await tools.importReports({ format: 'json', content: exported });
+    console.log("import_reports completed");
+  } catch (e) { console.error("export/import/reindex error", e.message); }
+
+  console.log("----- Testing backup_db -----");
+  try {
+    const tools = require('./src/server/tools');
+    const backup = await tools.backupDb({ destinationDir: './backups' });
+    console.log("backup_db:", backup);
+  } catch (e) { console.error("backup_db error", e.message); }
+}
+
 // Run the tests
-runTests().then(success => {
-  console.log("\nTest execution completed.");
-  process.exit(success ? 0 : 1);
-}).catch(error => {
-  console.error("Error during test execution:", error);
-  process.exit(1);
-});
+(async () => {
+  const ok = await runTests();
+  await runNewTools();
+  console.log("\nExtended tests completed.");
+  process.exit(ok ? 0 : 1);
+})();

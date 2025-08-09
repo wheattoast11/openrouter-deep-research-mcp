@@ -10,6 +10,7 @@ const { parseAgentXml } = require('../utils/xmlParser'); // Re-enable XML parser
 const dbClient = require('../utils/dbClient'); // Imports necessary functions and status checks
 const config = require('../../config');
 const modelCatalog = require('../utils/modelCatalog'); // New: dynamic model catalog
+const tar = require('tar');
 
 // In-memory Cache Configuration
 const CACHE_TTL_SECONDS = config.database.cacheTTL || 3600; // 1 hour in seconds from config
@@ -907,15 +908,14 @@ async function backupDb(params, mcpExchange = null, requestId = 'unknown-req') {
     const note = `Backup supported only for file-backed DB. Current: ${srcInfo}`;
     return JSON.stringify({ status: 'skipped', reason: note }, null, 2);
   }
-  // Extract actual path from label "File (C:\path)"
   const match = srcInfo.match(/File \((.*)\)/i);
   const srcPath = match ? match[1] : config.database.dataDirectory;
-  const zipName = `pglite-backup-${stamp}.zip`;
-  const zipPath = path.join(destDir, zipName);
-  // Simple directory copy as tar/zip is not native; write manifest
-  const manifest = { when: new Date().toISOString(), source: srcPath };
+  const tarName = `pglite-backup-${stamp}.tar.gz`;
+  const tarPath = path.join(destDir, tarName);
+  await tar.c({ gzip: true, file: tarPath, cwd: srcPath, portable: true }, ['.']);
+  const manifest = { when: new Date().toISOString(), source: srcPath, archive: tarPath };
   fs.writeFileSync(path.join(destDir, `manifest-${stamp}.json`), JSON.stringify(manifest, null, 2));
-  return JSON.stringify({ status: 'ok', backupDir: destDir, manifest: `manifest-${stamp}.json` }, null, 2);
+  return JSON.stringify({ status: 'ok', archive: tarPath, manifest: `manifest-${stamp}.json` }, null, 2);
 }
 
 async function dbHealth(params, mcpExchange = null, requestId = 'unknown-req') {

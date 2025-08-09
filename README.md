@@ -277,6 +277,15 @@ This server uses:
   - Research reports are stored with vector embeddings for semantic similarity search
   - Vector search is used to find relevant past research for new queries
   - All data is stored locally in the specified data directory (default: './researchAgentDB')
+  - Backups can be created via the `backup_db` tool; it produces a `.tar.gz` archive of the PGLite data directory and a JSON manifest in `./backups` by default
+
+### Backup & Restore
+- Create backup:
+  ```json
+  { "tool": "backup_db", "args": { "destinationDir": "./backups" } }
+  ```
+  Returns `{ archive: "./backups/pglite-backup-<timestamp>.tar.gz", manifest: "manifest-<timestamp>.json" }`.
+- Restore (manual): stop the server, extract the archive to the configured `PGLITE_DATA_DIR`, then start the server.
 
 ## Troubleshooting
 
