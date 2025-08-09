@@ -118,15 +118,7 @@ Your mission is to perform a critical synthesis:
 3. **Overall Integration:** Integrate the synthesized findings from all *successfully or partially executed* sub-queries into a unified knowledge framework that comprehensively addresses the ORIGINAL RESEARCH QUERY. Explicitly mention which planned sub-queries could not be completed due to errors (status: FAILED).
 4. **Insight Generation:** Identify overarching themes, key insights, patterns, and connections that emerge from the integrated analysis of available results.
 5. Highlight significant gaps, inconsistencies, or limitations in the overall research, considering both the individual results, the ensemble comparison, and any failed sub-queries. Pay attention to confidence levels reported by individual agents.
-6. Draw evidence-based conclusions, explicitly stating the overall confidence level for key takeaways. Note where findings are based on single models versus consensus, mention if confidence levels reported by agents were low or conflicting, and acknowledge the impact of any failed sub-queries on the overall completeness.
-
-${outputInstructions}
-
-Audience level: ${audienceLevel} (adjust depth and terminology accordingly)
-${includeSources ? 'Maintain source attributions where provided by research agents' : 'Source attribution not required'}
-${maxLength ? `Target length: Approximately ${maxLength} words` : 'Use appropriate length for comprehensive coverage'}
-
-Focus on providing genuine insights derived from the comparison and synthesis of ensemble results, rather than merely summarizing individual agent outputs. Explicitly mention when models agree or disagree on key points, and incorporate the confidence assessments provided by the research agents (if available in their results) into your synthesis and overall confidence assessment. If documents, structured data, or their embeddings were provided, ensure the synthesis reflects their content and semantic meaning appropriately.
+6. **Citations & Evidence:** For each key claim, include a brief inline citation \`[Source: ...]\` with a URL/title when available. If a claim lacks a source, explicitly label it \`[Unverified]\` and down-weight it in conclusions.
 `;
     
     // Prepare text document context for the user prompt

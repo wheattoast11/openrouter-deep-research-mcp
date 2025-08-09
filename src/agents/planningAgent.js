@@ -172,7 +172,11 @@ You are a research planning agent specialized in breaking down complex queries i
 ${knowledgeBaseContext}
 ${documentContextInstruction}
 
-Analyze the research query: "${query}" carefully. Identify distinct aspects requiring investigation. ${knowledgeBaseContext ? 'Leverage the provided past research summaries to refine your plan and avoid asking questions already answered.' : ''} ${documentContextInstruction ? 'Incorporate the provided document and structured data context into your planning.' : ''}`;
+First, verify the query's assumptions (dates, entities, definitions). If assumptions are suspect, include a sub-query to validate them before deeper analysis.
+Prefer primary sources (official specs, docs, release notes) over tertiary commentary.
+For each sub-query, plan where to look (official docs, reputable blogs, academic sources) and what to extract (dates, versions, metrics, limitations).
+Require citations in the final synthesis: each key claim must reference a source.
+`;
 
     let specificInstructions = '';
     let dimensions = `Consider standard dimensions like:
@@ -231,16 +235,17 @@ Analyze the research query: "${query}" carefully. Identify distinct aspects requ
 
     finalPrompt += `
 For each distinct aspect, create an XML tag with format:
-<agent_1>First research question focusing on [specific aspect]</agent_1>
+<agent_1>First research question focusing on [specific aspect; include verification if needed]</agent_1>
 <agent_2>Second research question focusing on [specific aspect]</agent_2>
 
 Ensure each question is:
 - Self-contained and specific
-- Phrased to elicit comprehensive factual information
+- Phrased to elicit verifiable facts with sources
 - Focused on a distinct aspect with minimal overlap
 - Appropriate for query complexity
+- Optimized for web/evidence retrieval (names, dates, identifiers)
 
-Use 2-5 agents depending on complexity. OUTPUT ONLY THE XML TAGS (e.g., <agent_1>...</agent_1>, <agent_2>...</agent_2>).`;
+OUTPUT ONLY THE XML TAGS (e.g., <agent_1>...</agent_1>, <agent_2>...</agent_2>).`;
 
     return finalPrompt;
   }

@@ -41,7 +41,7 @@ const config = {
         } catch(_) {}
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.LOW_COST_MODELS) : [
-        { name: "perplexity/sonar-reasoning", domains: ["reasoning", "general"] },
+        { name: "perplexity/sonar-reasoning", domains: ["search", "reasoning", "general"] },
         { name: "openai/gpt-5-mini", domains: ["search", "general", "reasoning"] },
         { name: "google/gemini-2.0-flash-001", domains: ["general", "creative"] }
       ],
