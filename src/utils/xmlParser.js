@@ -17,10 +17,22 @@ function parseAgentXml(xmlString) {
 
   const parser = new XMLParser(options);
   let agents = [];
+  let processedXmlString = xmlString;
+
+  // Check for and remove markdown code fences
+  if (processedXmlString.startsWith('```xml\n') && processedXmlString.endsWith('\n```')) {
+    processedXmlString = processedXmlString.substring(7, processedXmlString.length - 4).trim();
+    console.warn(`[${new Date().toISOString()}] xmlParser: Removed markdown code fences from XML input.`);
+  } else if (processedXmlString.startsWith('```') && processedXmlString.endsWith('```')) {
+     // Handle case without explicit 'xml' language tag
+     processedXmlString = processedXmlString.substring(3, processedXmlString.length - 3).trim();
+     console.warn(`[${new Date().toISOString()}] xmlParser: Removed generic markdown code fences from XML input.`);
+  }
+
 
   try {
     // Wrap the potentially fragmented XML in a root element for safer parsing
-    const wrappedXml = `<root>${xmlString}</root>`;
+    const wrappedXml = `<root>${processedXmlString}</root>`;
     const jsonObj = parser.parse(wrappedXml);
 
     if (jsonObj && jsonObj.root) {

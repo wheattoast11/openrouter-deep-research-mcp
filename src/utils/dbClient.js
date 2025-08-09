@@ -24,6 +24,7 @@ let embedder = null; // Variable to hold the embedding pipeline
 let dbInitialized = false; // Track DB initialization status
 let dbInitAttempted = false; // Track if we've already attempted to initialize
 let usingInMemoryFallback = false; // Track if we're using in-memory fallback
+let dbPathInfo = 'Not Initialized'; // Store DB path/type info
 
 // Get retry configuration from config
 const MAX_RETRIES = config.database.maxRetryAttempts;
@@ -36,7 +37,7 @@ const BASE_RETRY_DELAY = config.database.retryDelayBaseMs;
     const transformers = await import('@xenova/transformers');
     pipeline = transformers.pipeline;
     cos_sim = transformers.cos_sim;
-    console.log(`[${new Date().toISOString()}] Successfully imported @xenova/transformers.`);
+    process.stderr.write(`[${new Date().toISOString()}] Successfully imported @xenova/transformers.\n`); // Use stderr
     // Now initialize the embedder since the pipeline function is available
     await initializeEmbedder();
   } catch (err) {
@@ -70,14 +71,14 @@ async function initializeEmbedder() {
     return;
   }
   try {
-    console.log(`[${new Date().toISOString()}] Initializing embedding model Xenova/all-MiniLM-L6-v2...`);
+    process.stderr.write(`[${new Date().toISOString()}] Initializing embedding model Xenova/all-MiniLM-L6-v2...\n`); // Use stderr
     // Use a small, efficient model suitable for running locally
     // This model generates 384-dimensional embeddings
     embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
     isEmbedderReady = true;
-    console.log(`[${new Date().toISOString()}] Embedding model initialized successfully.`);
+    process.stderr.write(`[${new Date().toISOString()}] Embedding model initialized successfully.\n`); // Use stderr
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] Failed to initialize embedding model:`, error);
+    console.error(`[${new Date().toISOString()}] Failed to initialize embedding model:`, error); // Keep console.error for actual errors
     embedder = null; // Ensure embedder is null on failure
     isEmbedderReady = false;
   }
@@ -111,15 +112,17 @@ function formatVectorForPgLite(vectorArray) {
  * @returns {string} The database URL to use
  */
 function getDatabaseUrl() {
+  dbPathInfo = 'Determining...'; // Reset path info
   // Check for URL override in config
   if (config.database.databaseUrl) {
-    console.log(`[${new Date().toISOString()}] Using explicitly configured database URL: ${config.database.databaseUrl}`);
+    process.stderr.write(`[${new Date().toISOString()}] Using explicitly configured database URL: ${config.database.databaseUrl}\n`); // Use stderr
     return config.database.databaseUrl;
   }
 
   // Generate URL based on environment
   if (isBrowserEnv) {
-    // Browser environments should use IndexedDB
+  // Browser environments should use IndexedDB
+    dbPathInfo = `IndexedDB (idb://research-agent-db)`;
     return `idb://research-agent-db`;
   } else if (isNodeEnv) {
     // Node.js can use file-based storage
@@ -130,26 +133,27 @@ function getDatabaseUrl() {
       try {
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });
-          console.log(`[${new Date().toISOString()}] Created PGLite data directory at: ${dataDir}`);
+          process.stderr.write(`[${new Date().toISOString()}] Created PGLite data directory at: ${dataDir}\n`); // Use stderr
         }
       } catch (err) {
         console.error(`[${new Date().toISOString()}] Error creating data directory: ${err.message}`);
         if (config.database.allowInMemoryFallback) {
-          console.log(`[${new Date().toISOString()}] Falling back to in-memory database as configured.`);
+          console.error(`[${new Date().toISOString()}] Falling back to in-memory database as configured.`);
           return null;
         } else {
           throw new Error(`Could not create data directory and in-memory fallback is disabled: ${err.message}`);
         }
       }
     }
-    
+    dbPathInfo = `File (${dataDir})`;
     return `file://${dataDir}`;
   }
-  
-  // Fallback to in-memory if environment can't be determined
+
+  // Fallback to in-memory if environment can't be determined or directory creation failed
   if (config.database.allowInMemoryFallback) {
-    console.log(`[${new Date().toISOString()}] Could not determine environment, using in-memory database.`);
-    return null;
+    process.stderr.write(`[${new Date().toISOString()}] Could not determine environment or create directory, using in-memory database.\n`); // Use stderr
+    dbPathInfo = 'In-Memory (Fallback)';
+    return null; // Indicates in-memory
   } else {
     throw new Error("Could not determine environment and in-memory fallback is disabled.");
   }
@@ -168,7 +172,7 @@ async function initDB() {
   if (dbInitAttempted) {
     const timeSinceLastAttempt = Date.now() - dbInitAttempted;
     if (timeSinceLastAttempt < 60000) { // Don't retry more than once per minute
-      console.log(`[${new Date().toISOString()}] Skipping DB initialization, last attempt was ${Math.round(timeSinceLastAttempt/1000)}s ago`);
+      console.error(`[${new Date().toISOString()}] Skipping DB initialization, last attempt was ${Math.round(timeSinceLastAttempt/1000)}s ago`);
       return false;
     }
   }
@@ -182,8 +186,8 @@ async function initDB() {
     
     // Initialize PGLite with the vector extension
     if (dbUrl) {
-      console.log(`[${new Date().toISOString()}] Initializing PGLite with URL: ${dbUrl}`);
-      
+      process.stderr.write(`[${new Date().toISOString()}] Initializing PGLite with Storage: ${dbPathInfo}\n`); // Use stderr
+
       // Use modern async creation pattern
       db = await PGlite.create({
         url: dbUrl,
@@ -192,17 +196,17 @@ async function initDB() {
         relaxedDurability: config.database.relaxedDurability
       });
     } else {
-      // Fallback to in-memory DB if no URL is available
-      console.log(`[${new Date().toISOString()}] Initializing PGLite with in-memory database (no persistent storage)`);
+      // Fallback to in-memory DB if no URL is available (dbPathInfo already set)
+      process.stderr.write(`[${new Date().toISOString()}] Initializing PGLite with Storage: ${dbPathInfo}\n`); // Use stderr
       db = await PGlite.create({
-        extensions: { vector }
+        extensions: { vector } // No URL needed for in-memory
       });
       usingInMemoryFallback = true;
     }
 
     // Enable the vector extension
     await db.query("CREATE EXTENSION IF NOT EXISTS vector;");
-    console.log(`[${new Date().toISOString()}] PGLite vector extension enabled`);
+    process.stderr.write(`[${new Date().toISOString()}] PGLite vector extension enabled\n`); // Use stderr
 
     // Create the reports table if it doesn't exist
     await db.query(`
@@ -222,7 +226,7 @@ async function initDB() {
         feedback_entries JSONB DEFAULT '[]'
       );
     `);
-    console.log(`[${new Date().toISOString()}] PGLite reports table created or verified`);
+    process.stderr.write(`[${new Date().toISOString()}] PGLite reports table created or verified\n`); // Use stderr
 
     // Create indexes for better performance
     await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_original_query ON reports (original_query);`);
@@ -230,7 +234,7 @@ async function initDB() {
     
     // Create vector index for similarity search
     await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_query_embedding ON reports USING hnsw (query_embedding vector_cosine_ops);`);
-    console.log(`[${new Date().toISOString()}] PGLite indexes created or verified`);
+    process.stderr.write(`[${new Date().toISOString()}] PGLite indexes created or verified\n`); // Use stderr
 
     dbInitialized = true;
     return true;
@@ -238,13 +242,15 @@ async function initDB() {
     console.error(`[${new Date().toISOString()}] Failed to initialize PGLite database:`, error);
     // Try in-memory fallback if not already using it
     if (!usingInMemoryFallback) {
-      console.log(`[${new Date().toISOString()}] Attempting fallback to in-memory database`);
+      process.stderr.write(`[${new Date().toISOString()}] Attempting fallback to in-memory database\n`); // Use stderr
       try {
+        dbPathInfo = 'In-Memory (Error Fallback)'; // Update path info for error fallback
+        process.stderr.write(`[${new Date().toISOString()}] Initializing PGLite with Storage: ${dbPathInfo}\n`); // Use stderr
         db = await PGlite.create({
-          extensions: { vector }
+          extensions: { vector } // No URL needed for in-memory
         });
         await db.query("CREATE EXTENSION IF NOT EXISTS vector;");
-        
+
         // Create minimal table structure needed for operation
         await db.query(`
           CREATE TABLE IF NOT EXISTS reports (
@@ -258,7 +264,7 @@ async function initDB() {
         
         dbInitialized = true;
         usingInMemoryFallback = true;
-        console.log(`[${new Date().toISOString()}] Successfully initialized in-memory database fallback`);
+        process.stderr.write(`[${new Date().toISOString()}] Successfully initialized in-memory database fallback\n`); // Use stderr
         return true;
       } catch (fallbackError) {
         console.error(`[${new Date().toISOString()}] Failed to initialize in-memory database fallback:`, fallbackError);
@@ -351,7 +357,7 @@ async function saveResearchReport({ originalQuery, parameters, finalReport, rese
       );
       
       const reportId = result.rows[0].id;
-      console.log(`[${new Date().toISOString()}] Successfully saved research report to PGLite with ID: ${reportId}`);
+      console.error(`[${new Date().toISOString()}] Successfully saved research report to PGLite with ID: ${reportId}`);
       return reportId.toString();
     },
     'saveResearchReport',
@@ -382,14 +388,22 @@ async function addFeedbackToReport(reportId, feedback) {
 
       // Parse current feedback entries (will be a string in JSON format)
       let feedbackEntries = [];
+      const currentFeedbackJson = currentResult.rows[0].feedback_entries;
       try {
-        feedbackEntries = JSON.parse(currentResult.rows[0].feedback_entries || '[]');
-        if (!Array.isArray(feedbackEntries)) {
+        // Handle null, undefined, or empty string explicitly before parsing
+        if (currentFeedbackJson && currentFeedbackJson.trim() !== '') {
+          feedbackEntries = JSON.parse(currentFeedbackJson);
+          if (!Array.isArray(feedbackEntries)) {
+             console.warn(`[${new Date().toISOString()}] Parsed feedback for report ${reportId} was not an array, resetting.`);
+             feedbackEntries = [];
+          }
+        } else {
+          // If null, undefined, or empty string, initialize as empty array
           feedbackEntries = [];
         }
       } catch (parseError) {
-        console.error(`[${new Date().toISOString()}] Error parsing feedback entries for report ID ${reportId}:`, parseError);
-        feedbackEntries = [];
+        console.error(`[${new Date().toISOString()}] Error parsing feedback entries for report ID ${reportId}, resetting to empty array. Error:`, parseError);
+        feedbackEntries = []; // Reset to empty array on any parsing error
       }
 
       // Add new feedback
@@ -407,7 +421,7 @@ async function addFeedbackToReport(reportId, feedback) {
         [JSON.stringify(feedbackEntries), new Date().toISOString(), reportIdNum]
       );
 
-      console.log(`[${new Date().toISOString()}] Successfully added feedback to report ID: ${reportId}`);
+      console.error(`[${new Date().toISOString()}] Successfully added feedback to report ID: ${reportId}`);
       return true;
     },
     'addFeedbackToReport',
@@ -479,7 +493,7 @@ async function findReportsBySimilarity(queryText, limit = 5, minSimilarity = 0.7
         researchMetadata: typeof row.research_metadata === 'string' ? JSON.parse(row.research_metadata) : row.research_metadata
       }));
 
-      console.log(`[${new Date().toISOString()}] Found ${reports.length} reports via vector search (minSimilarity: ${minSimilarity}).`);
+      console.error(`[${new Date().toISOString()}] Found ${reports.length} reports via vector search (minSimilarity: ${minSimilarity}).`);
       return reports;
     },
     'findReportsBySimilarity',
@@ -533,7 +547,7 @@ async function listRecentReports(limit = 10, queryFilter = null) {
         researchMetadata: typeof row.research_metadata === 'string' ? JSON.parse(row.research_metadata) : row.research_metadata
       }));
 
-      console.log(`[${new Date().toISOString()}] Found ${reports.length} reports matching filter "${queryFilter || 'None'}" (limit: ${limit}).`);
+      console.error(`[${new Date().toISOString()}] Found ${reports.length} reports matching filter "${queryFilter || 'None'}" (limit: ${limit}).`);
       return reports;
     },
     'listRecentReports',
@@ -557,7 +571,12 @@ module.exports = {
   addFeedbackToReport,
   findReportsBySimilarity,
   listRecentReports,
-  getReportById // Export the new function
+  getReportById, // Export the new function
+  // Export status variables for the status tool
+  isEmbedderReady: () => isEmbedderReady,
+  isDbInitialized: () => dbInitialized,
+  getDbPathInfo: () => dbPathInfo,
+  executeQuery // Export the new function
 };
 
 // Function to retrieve a single report by its ID
@@ -591,12 +610,12 @@ async function getReportById(reportId) {
       );
       
       if (result.rows.length === 0) {
-        console.log(`[${new Date().toISOString()}] Report with ID ${reportId} not found.`);
+        console.error(`[${new Date().toISOString()}] Report with ID ${reportId} not found.`);
         return null; // Return null if report not found
       }
 
       const report = result.rows[0];
-      console.log(`[${new Date().toISOString()}] Successfully retrieved report ID: ${reportId}`);
+      console.error(`[${new Date().toISOString()}] Successfully retrieved report ID: ${reportId}`);
       
       // Convert JSONB strings back to objects for consistency
       return {
@@ -614,5 +633,26 @@ async function getReportById(reportId) {
     },
     `getReportById(${reportId})`,
     null // fallback value if operation fails
+  );
+}
+
+// Function to execute an arbitrary (but validated) SQL query securely
+async function executeQuery(sql, params = []) {
+  // Basic validation: Ensure it's a SELECT query for safety (can be configured later)
+  const lowerSql = sql.trim().toLowerCase();
+  if (!lowerSql.startsWith('select')) {
+    console.error(`[${new Date().toISOString()}] executeQuery: Blocking non-SELECT query: "${sql.substring(0, 100)}..."`);
+    throw new Error("Only SELECT statements are currently allowed via executeQuery.");
+  }
+
+  return executeWithRetry(
+    async () => {
+      // Use parameterized query execution
+      const result = await db.query(sql, params);
+      console.error(`[${new Date().toISOString()}] executeQuery: Successfully executed query. Rows returned: ${result.rows.length}`);
+      return result.rows; // Return the array of row objects
+    },
+    `executeQuery("${sql.substring(0, 50)}...")`,
+    [] // fallback value (empty array) if operation fails
   );
 }
