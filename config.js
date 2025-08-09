@@ -61,7 +61,9 @@ const config = {
      // Default ensemble size for research agent model ensembles
      ensembleSize: parseInt(process.env.ENSEMBLE_SIZE, 10) || 2,
      // Max research iterations (initial + refinements)
-     maxResearchIterations: parseInt(process.env.MAX_RESEARCH_ITERATIONS, 10) || 2 // Default to 1 initial + 1 refinement
+     maxResearchIterations: parseInt(process.env.MAX_RESEARCH_ITERATIONS, 10) || 2, // Default to 1 initial + 1 refinement
+     // Parallelism for concurrent sub-queries
+     parallelism: parseInt(process.env.PARALLELISM, 10) || 4
   },
   // Database configuration for knowledge base using PGLite
   database: {

@@ -3,6 +3,7 @@ const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import the new parser
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
+const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
 const COMPLEXITY_LEVELS = ["simple", "moderate", "complex"];
@@ -173,24 +174,22 @@ class ResearchAgent {
   
   // Updated to include structuredData, inputEmbeddings, and requestId parameters
   async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req') { 
-     // TODO: Add logic to check if the 'model' actually supports vision.
-     // This might involve fetching model details from OpenRouter or maintaining a local list.
-     // For now, use a hardcoded list based on common vision models.
-     const KNOWN_VISION_MODELS = [
-       "openai/gpt-4o", 
-       "openai/gpt-4o-mini", 
-       "openai/gpt-4o-search-preview", // Assuming this supports vision
-       "openai/gpt-4o-mini-search-preview", // Assuming this supports vision
-       "google/gemini-2.0-pro-001", // Add known vision models
-       "google/gemini-2.0-flash-001",
-       "anthropic/claude-3-opus",
-       "anthropic/claude-3-sonnet",
-       "anthropic/claude-3-haiku",
-       "anthropic/claude-3.5-sonnet",
-       "anthropic/claude-3.7-sonnet" 
-       // Add other known vision models from config or OpenRouter list
-     ];
-     const modelSupportsVision = KNOWN_VISION_MODELS.includes(model);
+     // Dynamic capability check via model catalog
+     let modelSupportsVision = false;
+     try {
+       const catalog = await modelCatalog.getCatalog();
+       const entry = catalog.find(m => m.id === model);
+       modelSupportsVision = !!entry?.capabilities?.vision;
+     } catch (_) {}
+     // Fallback known list
+     if (!modelSupportsVision) {
+       const KNOWN_VISION_MODELS = [
+         "openai/gpt-4o", "openai/gpt-4o-mini",
+         "google/gemini-2.0-pro-001", "google/gemini-2.0-flash-001",
+         "anthropic/claude-3.7-sonnet"
+       ];
+       modelSupportsVision = KNOWN_VISION_MODELS.includes(model);
+     }
      
      // Prepare text document context snippet
      let textDocumentContextSnippet = '';
@@ -313,57 +312,33 @@ Be precise, comprehensive, and intellectually rigorous in your analysis.
 
   // Added images, textDocuments, structuredData, inputEmbeddings, and requestId parameters here
   async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req') { 
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Starting parallel ensemble research for ${queries.length} queries with costPreference=${costPreference}. Ensemble size: ${this.ensembleSize}. Images: ${images ? images.length : 0}, TextDocs: ${textDocuments ? textDocuments.length : 0}, StructuredData: ${structuredData ? structuredData.length : 0}`);
+    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Starting parallel ensemble research for ${queries.length} queries with costPreference=${costPreference}. Parallelism=${parallelism}.`);
     const startTime = Date.now();
-    
-    // Map each query to its ensemble research promise, passing all context and requestId along
-    const researchPromises = queries.map((query) => 
-      // Pass images, textDocuments, structuredData, inputEmbeddings, and requestId to conductResearch
-      this.conductResearch(query.query, query.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId) 
-    );
 
-    try {
-      // Use Promise.allSettled to ensure all promises complete, regardless of individual failures
-      const settledResults = await Promise.allSettled(researchPromises);
-      
-      // Process the results: extract values from fulfilled promises and handle rejected ones
-      const processedResults = settledResults.map(result => {
-        if (result.status === 'fulfilled') {
-          // result.value will be an array of results from the ensemble for one agentId
-          return result.value; 
-        } else {
-          // result.reason contains the error for a rejected promise (entire ensemble failed for one agentId)
-          console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Ensemble failed for one agent. Reason:`, result.reason);
-          // We need to know which agentId this was for, but the original query object isn't directly here.
-          // For now, return a generic error structure. Ideally, map queries to promises beforehand.
-          // Returning an array with a single error object to maintain structure.
-          return [{ 
-             agentId: 'unknown', // Placeholder - requires mapping queries to promises
-             model: 'N/A', 
-             query: 'unknown', // Placeholder
-             result: `Ensemble research failed: ${result.reason?.message || result.reason}`, 
-             error: true, 
-             errorMessage: result.reason?.message || result.reason 
-          }];
+    // Bounded concurrency queue
+    const results = [];
+    let idx = 0;
+    const worker = async () => {
+      while (idx < queries.length) {
+        const current = idx++;
+        const q = queries[current];
+        try {
+          const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId);
+          results[current] = value; // array of ensemble results
+        } catch (e) {
+          results[current] = [{ agentId: q.id, model: 'N/A', query: q.query, result: `Error: ${e.message}`, error: true, errorMessage: e.message }];
         }
-      });
+      }
+    };
+    const workers = Array.from({ length: Math.min(parallelism, queries.length) }, () => worker());
+    await Promise.all(workers);
 
-      // Flatten the results (array of arrays)
-      const flatResults = processedResults.flat();
-      
-      const duration = Date.now() - startTime;
-      const successfulTasks = flatResults.filter(r => !r.error).length;
-      const failedTasks = flatResults.length - successfulTasks;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Parallel ensemble research completed (allSettled) in ${duration}ms. Total results processed: ${flatResults.length}. Success: ${successfulTasks}, Failed: ${failedTasks}.`);
-      return flatResults; // Return the flattened list of results/errors
-      
-    } catch (error) { 
-      // This catch block is less likely with allSettled, but kept for safety
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Unexpected error during parallel research execution (allSettled) after ${duration}ms. Error:`, error);
-      // If Promise.allSettled itself fails (unlikely), rethrow
-      throw new Error(`[${requestId}] Critical error during parallel research execution: ${error.message}`);
-    }
+    const flatResults = results.flat();
+    const duration = Date.now() - startTime;
+    const successfulTasks = flatResults.filter(r => !r.error).length;
+    const failedTasks = flatResults.length - successfulTasks;
+    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Parallel research completed in ${duration}ms. Total results: ${flatResults.length}. Success: ${successfulTasks}, Failed: ${failedTasks}.`);
+    return flatResults;
   }
 }
 
