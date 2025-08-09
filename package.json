@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/server/mcpServer.js",
     "dev": "nodemon src/server/mcpServer.js",
-    "stdio": "node src/server/mcpServer.js --stdio"
+    "stdio": "node src/server/mcpServer.js --stdio",
+    "gen:examples": "node scripts/generate-examples.js",
+    "gen:docs": "node scripts/gen-docs.js"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",

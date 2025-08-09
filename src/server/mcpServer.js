@@ -44,6 +44,7 @@ const {
   fetchUrl
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
+const cors = require('cors');
 
 // Create MCP server
 const server = new McpServer({
@@ -497,53 +498,69 @@ server.tool(
   // For HTTP usage, set up Express with SSE
     const app = express();
     const port = config.server.port;
-  const serverApiKey = config.server.apiKey; // Get the API key from config
+  // OAuth2/JWT placeholder: use AUTH_JWKS_URL or fallback to API key until configured
+  const serverApiKey = config.server.apiKey;
+  const jwksUrl = process.env.AUTH_JWKS_URL || null;
+  const expectedAudience = process.env.AUTH_EXPECTED_AUD || 'mcp-server';
 
-  // Authentication Middleware
-  const authenticate = (req, res, next) => {
-    // Check if authentication is explicitly allowed to be disabled via environment variable
-    const allowNoApiKey = process.env.ALLOW_NO_API_KEY === 'true';
+  app.use(cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'], allowedHeaders: ['Content-Type', 'authorization', 'mcp-session-id'] }));
     
-    // Skip auth only if explicitly allowed AND no key is configured
-    if (allowNoApiKey && !serverApiKey) {
-      console.warn(`[${new Date().toISOString()}] WARNING: Running with authentication DISABLED (ALLOW_NO_API_KEY=true and no SERVER_API_KEY set).`);
-      return next();
+  // Authentication Middleware (JWT first, fallback API key if configured)
+  const authenticate = async (req, res, next) => {
+    const allowNoAuth = process.env.ALLOW_NO_API_KEY === 'true';
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ')) {
+      if (allowNoAuth) return next();
+      return res.status(401).json({ error: 'Unauthorized: Missing bearer token' });
     }
-    
-    // If we don't have a server API key but authentication is mandatory (default)
-    if (!serverApiKey) {
-      console.error(`[${new Date().toISOString()}] AUTHENTICATION ERROR: SERVER_API_KEY is not set but authentication is mandatory.`);
-      console.error(`[${new Date().toISOString()}] To disable authentication (NOT RECOMMENDED), set ALLOW_NO_API_KEY=true in the environment.`);
-      return res.status(500).json({ error: 'Server misconfiguration: API key required but not configured.' });
-    }
-    
-    // From here on, we have a serverApiKey and authentication is required
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.warn(`[${new Date().toISOString()}] Authentication failed: Missing or invalid Authorization header.`);
-      return res.status(401).json({ error: 'Unauthorized: Missing or invalid Authorization header.' });
-    }
-
     const token = authHeader.split(' ')[1];
-    if (token !== serverApiKey) {
-      console.warn(`[${new Date().toISOString()}] Authentication failed: Invalid API key provided.`);
-      return res.status(403).json({ error: 'Forbidden: Invalid API key.' });
+    if (jwksUrl) {
+      try {
+        // Lazy import jose to keep dep optional
+        const { createRemoteJWKSet, jwtVerify } = require('jose');
+        const JWKS = createRemoteJWKSet(new URL(jwksUrl));
+        const { payload } = await jwtVerify(token, JWKS, { audience: expectedAudience });
+        if (!payload || (expectedAudience && payload.aud !== expectedAudience && !Array.isArray(payload.aud))) {
+          return res.status(403).json({ error: 'Forbidden: invalid token audience' });
+        }
+        return next();
+      } catch (e) {
+        if (!serverApiKey) {
+          return res.status(403).json({ error: 'Forbidden: JWT verification failed' });
+        }
+        // Fall through to API key if configured
+      }
     }
-
-    // Authentication successful
-    next();
+    if (serverApiKey && token === serverApiKey) return next();
+    if (allowNoAuth) return next();
+    return res.status(403).json({ error: 'Forbidden: Auth failed' });
   };
  
   console.error(`Starting MCP server with HTTP/SSE transport on port ${port}`); // Use error
-  if (serverApiKey) {
-    console.error(`[${new Date().toISOString()}] Basic API key authentication ENABLED for HTTP transport.`); // Use error
+  if (jwksUrl) {
+    console.error(`[${new Date().toISOString()}] OAuth2/JWT auth ENABLED (JWKS=${jwksUrl}, aud=${expectedAudience}).`);
+  } else if (serverApiKey) {
+    console.error(`[${new Date().toISOString()}] API key fallback ENABLED for HTTP transport.`);
   } else if (process.env.ALLOW_NO_API_KEY === 'true') {
     console.error(`[${new Date().toISOString()}] SECURITY WARNING: Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true).`); // Use error, keep as warning level
   } else {
     console.error(`[${new Date().toISOString()}] CRITICAL: SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail.`); // Keep error
   }
- 
- 
+  
+  // Optional streamable HTTP endpoint skeleton with DNS rebinding protection
+  // Note: Keep SSE endpoints for backward compatibility
+  // const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+  // app.all('/mcp', authenticate, async (req, res) => {
+  //   const transport = new StreamableHTTPServerTransport({
+  //     enableDnsRebindingProtection: true,
+  //     allowedHosts: ['127.0.0.1', 'localhost'],
+  //     allowedOrigins: ['http://localhost', 'http://127.0.0.1']
+  //   });
+  //   res.on('close', () => transport.close());
+  //   await server.connect(transport);
+  //   await transport.handleRequest(req, res, req.body);
+  // });
+
    // Endpoint for SSE - Apply authentication middleware
    // Endpoint for SSE - Apply authentication middleware
    app.get('/sse', authenticate, async (req, res) => {

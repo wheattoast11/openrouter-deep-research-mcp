@@ -18,6 +18,10 @@ class OpenRouterClient {
         'Content-Type': 'application/json'
       }
     });
+    this._batchQueue = [];
+    this._batchTimer = null;
+    this._batchMaxSize = Number(process.env.BATCH_MAX_SIZE) || 8;
+    this._batchMaxDelayMs = Number(process.env.BATCH_MAX_DELAY_MS) || 150;
   }
 
   async chatCompletion(model, messages, options = {}) {
@@ -142,6 +146,31 @@ class OpenRouterClient {
       yield { error: { message: `Stream failed: ${error.message}` } };
       throw error;
     }
+  }
+
+  // Hybrid batching: size OR timeout policy
+  enqueueBatch(taskFn) {
+    return new Promise((resolve, reject) => {
+      this._batchQueue.push({ taskFn, resolve, reject });
+      if (this._batchQueue.length >= this._batchMaxSize) {
+        this._flushBatch();
+      } else if (!this._batchTimer) {
+        this._batchTimer = setTimeout(() => this._flushBatch(), this._batchMaxDelayMs);
+      }
+    });
+  }
+
+  async _flushBatch() {
+    if (this._batchTimer) {
+      clearTimeout(this._batchTimer);
+      this._batchTimer = null;
+    }
+    const queue = this._batchQueue.splice(0, this._batchQueue.length);
+    if (queue.length === 0) return;
+    // Execute in parallel but bounded
+    await Promise.all(queue.map(async ({ taskFn, resolve, reject }) => {
+      try { const res = await taskFn(); resolve(res); } catch (e) { reject(e); }
+    }));
   }
 
   async getModels() {

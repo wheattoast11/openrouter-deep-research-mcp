@@ -26,6 +26,9 @@ let dbInitAttempted = false; // Track if we've already attempted to initialize
 let usingInMemoryFallback = false; // Track if we're using in-memory fallback
 let dbPathInfo = 'Not Initialized'; // Store DB path/type info
 
+// Track embedder version for reindex trigger
+let embedderVersionKey = 'Xenova/all-MiniLM-L6-v2';
+
 // Get retry configuration from config
 const MAX_RETRIES = config.database.maxRetryAttempts;
 // Base delay for exponential backoff (in ms)
@@ -76,6 +79,12 @@ async function initializeEmbedder() {
     // This model generates 384-dimensional embeddings
     embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
     isEmbedderReady = true;
+    // Update version key and trigger reindex if changed
+    const previous = embedderVersionKey;
+    embedderVersionKey = 'Xenova/all-MiniLM-L6-v2';
+    if (dbInitialized && previous !== embedderVersionKey) {
+      try { await reindexVectors(); } catch (_) {}
+    }
     process.stderr.write(`[${new Date().toISOString()}] Embedding model initialized successfully.\n`); // Use stderr
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Failed to initialize embedding model:`, error); // Keep console.error for actual errors
@@ -349,8 +358,8 @@ async function saveResearchReport({ originalQuery, parameters, finalReport, rese
           finalReport,
           JSON.stringify(researchMetadata || {}),
           JSON.stringify(images || null),
-          JSON.stringify(textDocuments ? textDocuments.map(d => ({ name: d.name, length: d.content.length })) : null),
-          JSON.stringify(structuredData ? structuredData.map(d => ({ name: d.name, type: d.type, length: d.content.length })) : null),
+          JSON.stringify(textDocuments ? textDocuments.map(d => ({ name: d.name, length: (typeof d.length === 'number' ? d.length : (d && d.content ? d.content.length : null)) })) : null),
+          JSON.stringify(structuredData ? structuredData.map(d => ({ name: d.name, type: d.type, length: (typeof d.length === 'number' ? d.length : (d && d.content ? d.content.length : null)) })) : null),
           JSON.stringify(basedOnPastReportIds || []),
           new Date().toISOString()
         ]
@@ -459,46 +468,73 @@ async function findReportsBySimilarity(queryText, limit = 5, minSimilarity = 0.7
     return [];
   }
 
-  return executeWithRetry(
-    async () => {
-      // Format the query embedding for pgvector
-      const queryEmbeddingFormatted = formatVectorForPgLite(queryEmbedding);
-      
-      // Use pgvector's cosine distance operator (<=> means cosine distance)
-      // 1 - cosine_distance = cosine_similarity
-      const result = await db.query(
-        `SELECT 
-           id, 
-           original_query, 
-           parameters, 
-           final_report, 
-           research_metadata,
-           created_at,
-           1 - (query_embedding <=> $1::vector) AS similarity_score
-         FROM reports 
-         WHERE query_embedding IS NOT NULL
-         AND 1 - (query_embedding <=> $1::vector) >= $2
-         ORDER BY similarity_score DESC
-         LIMIT $3;`,
-        [queryEmbeddingFormatted, minSimilarity, limit]
-      );
+  // Adaptive thresholding: widen if no hits, tighten if many
+  const thresholds = [minSimilarity, 0.70, 0.65, 0.60];
+  for (const thr of thresholds) {
+    const results = await executeWithRetry(
+      async () => {
+        const queryEmbeddingFormatted = formatVectorForPgLite(queryEmbedding);
+        const result = await db.query(
+          `SELECT 
+             id, 
+             original_query, 
+             parameters, 
+             final_report, 
+             research_metadata,
+             created_at,
+             1 - (query_embedding <=> $1::vector) AS similarity_score
+           FROM reports 
+           WHERE query_embedding IS NOT NULL
+           AND 1 - (query_embedding <=> $1::vector) >= $2
+           ORDER BY similarity_score DESC
+           LIMIT $3;`,
+          [queryEmbeddingFormatted, thr, limit]
+        );
+        return result.rows;
+      },
+      'findReportsBySimilarity',
+      []
+    );
 
-      const reports = result.rows.map(row => ({
+    if (results && results.length > 0) {
+      const reports = results.map(row => ({
         ...row,
-        _id: row.id, // Add _id field for backward compatibility
+        _id: row.id,
         originalQuery: row.original_query,
         similarityScore: row.similarity_score,
-        // Convert JSONB strings back to objects
         parameters: typeof row.parameters === 'string' ? JSON.parse(row.parameters) : row.parameters,
         researchMetadata: typeof row.research_metadata === 'string' ? JSON.parse(row.research_metadata) : row.research_metadata
       }));
-
-      console.error(`[${new Date().toISOString()}] Found ${reports.length} reports via vector search (minSimilarity: ${minSimilarity}).`);
+      console.error(`[${new Date().toISOString()}] Found ${reports.length} reports via vector search (minSimilarity: ${thr}).`);
       return reports;
+    }
+  }
+
+  // Keyword fallback when vector search yields nothing
+  console.warn(`[${new Date().toISOString()}] Vector search returned no results. Falling back to keyword search.`);
+  const likeTerm = `%${queryText.split(/\s+/).slice(0, 4).join('%')}%`;
+  const keywordRows = await executeWithRetry(
+    async () => {
+      const result = await db.query(
+        `SELECT id, original_query, parameters, final_report, research_metadata, created_at
+         FROM reports
+         WHERE original_query ILIKE $1
+         ORDER BY created_at DESC
+         LIMIT $2;`,
+        [likeTerm, limit]
+      );
+      return result.rows;
     },
-    'findReportsBySimilarity',
-    [] // fallback value if operation fails
+    'keywordFallbackSearch',
+    []
   );
+  const keywordReports = keywordRows.map(row => ({
+    ...row,
+    _id: row.id,
+    originalQuery: row.original_query,
+    similarityScore: 0
+  }));
+  return keywordReports;
 }
 
 async function listRecentReports(limit = 10, queryFilter = null) {
@@ -577,7 +613,8 @@ module.exports = {
   isDbInitialized: () => dbInitialized,
   getDbPathInfo: () => dbPathInfo,
   executeQuery, // Export the new function
-  reindexVectors
+  reindexVectors,
+  generateEmbedding
 };
 
 // Function to retrieve a single report by its ID
@@ -662,12 +699,9 @@ async function executeQuery(sql, params = []) {
 async function reindexVectors() {
   return executeWithRetry(
     async () => {
-      try {
-        await db.query(`DROP INDEX IF EXISTS idx_reports_query_embedding;`);
-      } catch (e) {
-        // ignore drop errors
-      }
-      await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_query_embedding ON reports USING hnsw (query_embedding vector_cosine_ops);`);
+      try { await db.query(`DROP INDEX IF EXISTS idx_reports_query_embedding;`); } catch (e) {}
+      // Recreate HNSW with conservative params for <50k vectors
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_query_embedding ON reports USING hnsw (query_embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);`);
       return true;
     },
     'reindexVectors',

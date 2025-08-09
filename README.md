@@ -69,4 +69,4 @@ Notes
 - macOS/Linux (bash/zsh): `export SERVER_API_KEY=...`
 - VS Code/Cursor MCP: point the server to `node src/server/mcpServer.js --stdio`
 
-If this helped you, please ⭐ the repo—it helps others find it.
+## Example Research Outputs (Auto-Generated)

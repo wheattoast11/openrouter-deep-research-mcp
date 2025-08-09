@@ -9,6 +9,24 @@ class PlanningAgent {
   constructor() {
     this.model = config.models.planning;
     this.classificationModel = config.models.classification; // Use classification model here too
+    // AIMD controller state
+    this.currentConcurrency = Math.max(1, Number(process.env.PARALLELISM) || 4);
+    this.minConcurrency = 1;
+    this.maxConcurrency = Math.max(this.currentConcurrency, 16);
+    this.additiveStep = 1;
+    this.multiplicativeFactor = 0.7; // reduce on error
+  }
+
+  getSemaphoreSize() {
+    return Math.max(this.minConcurrency, Math.min(this.maxConcurrency, this.currentConcurrency));
+  }
+
+  recordSuccess() {
+    this.currentConcurrency = Math.min(this.maxConcurrency, this.currentConcurrency + this.additiveStep);
+  }
+
+  recordFailure() {
+    this.currentConcurrency = Math.max(this.minConcurrency, Math.floor(this.currentConcurrency * this.multiplicativeFactor));
   }
 
   // Reusing classification logic here, could be moved to a utility
@@ -131,10 +149,12 @@ Refinement Guidelines:
 
       const planResult = response.choices[0].message.content;
       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Successfully generated ${requestType}. Result: ${planResult.substring(0, 100)}...`);
+      this.recordSuccess();
       return planResult;
 
     } catch (error) {
       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Error generating ${requestType} for query "${query.substring(0, 50)}...". Model: ${this.model}. Error:`, error);
+      this.recordFailure();
       throw new Error(`[${requestId}] PlanningAgent failed to generate ${requestType} for query "${query.substring(0, 50)}...": ${error.message}`);
     }
   }

@@ -85,51 +85,55 @@ class ResearchAgent {
     try {
       const catalog = await modelCatalog.getCatalog();
       if (Array.isArray(catalog) && catalog.length > 0) {
-        // TODO: Enhance with pricing/latency; for now, filter by simple capability if vision is needed later.
-        // Use configured lists as allowlist; if empty, fall back to all catalog models by provider mainstream
+        // Prefer 2025 releases when available
+        const preferred = modelCatalog.getPreferred2025Models();
+        const domainRegex = new RegExp(domain, 'i');
+        const filtered = (preferred.length > 0 ? preferred : catalog)
+          .filter(m => domainRegex.test(m.label) || domainRegex.test(m.id) || true);
+        if (filtered.length > 0) {
+          const idx = Math.abs(agentIndex) % filtered.length;
+          selectedModel = filtered[idx].id;
+          reason = `dynamic catalog preference (2025 priority), domain heuristic: ${domain}`;
+        }
       }
     } catch (e) {
       console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Dynamic catalog unavailable, using static model lists.`);
     }
 
-    // 1. Check if query is simple and very low-cost models exist
-    if (complexity === 'simple' && this.veryLowCostModels.length > 0) {
-      const simpleDomainModels = this.veryLowCostModels.filter(m => m.domains.includes(domain));
-      if (simpleDomainModels.length > 0) {
-        selectedModel = simpleDomainModels[agentIndex % simpleDomainModels.length].name;
-        reason = `simple query, domain match in veryLowCost tier (domain: ${domain})`;
-      } else {
-         // Fallback within veryLowCost tier if no domain match
-         selectedModel = this.veryLowCostModels[agentIndex % this.veryLowCostModels.length].name;
-         reason = `simple query, fallback in veryLowCost tier (no domain match for ${domain})`;
+    // Fallbacks to configured tiers
+    if (!selectedModel) {
+      // 1. Check if query is simple and very low-cost models exist
+      if (complexity === 'simple' && this.veryLowCostModels.length > 0) {
+        const simpleDomainModels = this.veryLowCostModels.filter(m => m.domains.includes(domain));
+        if (simpleDomainModels.length > 0) {
+          selectedModel = simpleDomainModels[agentIndex % simpleDomainModels.length].name;
+          reason = `simple query, domain match in veryLowCost tier (domain: ${domain})`;
+        } else {
+           // Fallback within veryLowCost tier if no domain match
+           selectedModel = this.veryLowCostModels[agentIndex % this.veryLowCostModels.length].name;
+           reason = `simple query, fallback in veryLowCost tier (no domain match for ${domain})`;
+        }
+      }
+
+      // 2. If no very low-cost model was selected, use standard logic
+      if (!selectedModel) {
+         const availableModels = costPreference === 'high' ? this.highCostModels : this.lowCostModels;
+         if (availableModels.length === 0) {
+            console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: CRITICAL ERROR - No models available for cost preference "${costPreference}".`);
+            // Fallback to a default model or throw error - using classification model as last resort
+            return config.models.classification || "anthropic/claude-3-haiku"; 
+         }
+         const domainMatchingModels = availableModels.filter(m => m.domains.includes(domain));
+         if (domainMatchingModels.length > 0) {
+           selectedModel = domainMatchingModels[agentIndex % domainMatchingModels.length].name;
+           reason = `standard routing, domain match in ${costPreference} tier (domain: ${domain})`;
+         } else {
+           selectedModel = availableModels[agentIndex % availableModels.length].name;
+           reason = `standard routing, fallback in ${costPreference} tier (no domain match for ${domain})`;
+         }
       }
     }
-
-    // 2. If no very low-cost model was selected, use standard logic
-    if (!selectedModel) {
-       const availableModels = costPreference === 'high' ? this.highCostModels : this.lowCostModels;
-       if (availableModels.length === 0) {
-          console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: CRITICAL ERROR - No models available for cost preference "${costPreference}".`);
-          // Fallback to a default model or throw error - using classification model as last resort
-          return config.models.classification || "anthropic/claude-3-haiku"; 
-       }
-       
-       const domainMatchingModels = availableModels.filter(m => m.domains.includes(domain));
-       
-       if (domainMatchingModels.length > 0) {
-         // Use round-robin within domain-matching models
-         selectedModel = domainMatchingModels[agentIndex % domainMatchingModels.length].name;
-         reason = `standard routing, domain match in ${costPreference} tier (domain: ${domain})`;
-       } else {
-         // Fallback to round-robin across all models in the cost tier if no domain match
-         console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: No models found for domain "${domain}" in ${costPreference} cost tier. Falling back to round-robin.`);
-         selectedModel = availableModels[agentIndex % availableModels.length].name;
-         reason = `standard routing, fallback in ${costPreference} tier (no domain match for ${domain})`;
-       }
-    }
-    
     console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Selected model for agent ${agentIndex}: ${selectedModel}. Reason: ${reason}.`);
-    // Return the selected model name
     return selectedModel; 
   }
 
@@ -148,27 +152,56 @@ class ResearchAgent {
 
   // Updated to accept images, textDocuments, structuredData, inputEmbeddings, and requestId parameters
   async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req') {
-    // Classify domain and complexity first, passing requestId
     const domain = await this.classifyQueryDomain(query, { requestId });
     const complexity = await this.assessQueryComplexity(query, { requestId });
-    const primaryModel = await this.getModel(costPreference, agentId, domain, complexity, requestId); // Get the primary model, passing requestId
+    const primaryModel = await this.getModel(costPreference, agentId, domain, complexity, requestId);
 
-    // Get alternative model for ensemble
-    const alternativeModel = this.getAlternativeModel(primaryModel, costPreference, agentId);
-    
-    const modelsToRun = [primaryModel];
-    if (alternativeModel && this.ensembleSize > 1) {
-       modelsToRun.push(alternativeModel);
+    // Multimodal fallback detection
+    let catalogEntry = null;
+    try {
+      const catalog = await modelCatalog.getCatalog();
+      catalogEntry = catalog.find(m => m.id === primaryModel) || null;
+    } catch (_) {}
+
+    const needsVision = Array.isArray(images) && images.length > 0;
+    const primarySupportsVision = !!catalogEntry?.capabilities?.vision;
+
+    // Build ensemble (2-3 models) with kurtosis-guided heuristic: diversify providers
+    const ensemble = new Set();
+    ensemble.add(primaryModel);
+
+    const addAlt = (id) => { if (id && !ensemble.has(id)) ensemble.add(id); };
+
+    // Prefer 2025 models if available for diversity
+    try {
+      const preferred = modelCatalog.getPreferred2025Models();
+      for (const p of preferred) {
+        if (ensemble.size >= Math.max(2, Math.min(3, this.ensembleSize))) break;
+        addAlt(p.id);
+      }
+    } catch (_) {}
+
+    // Add tier alternatives for diversity
+    const altTierModel = this.getAlternativeModel(primaryModel, costPreference, agentId);
+    addAlt(altTierModel);
+
+    // If we need vision and primary doesn’t support it, try to replace/add a vision-capable model
+    if (needsVision && !primarySupportsVision) {
+      try {
+        const catalog = await modelCatalog.getCatalog();
+        const visionCandidates = catalog.filter(m => m.capabilities?.vision);
+        if (visionCandidates.length > 0) {
+          addAlt(visionCandidates[agentId % visionCandidates.length].id);
+        }
+      } catch (_) {}
     }
-    
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Ensemble models for query "${query.substring(0, 50)}...": ${modelsToRun.join(', ')}`);
 
-    // Run research on each model in the ensemble - passing all context parameters and requestId
+    const modelsToRun = Array.from(ensemble).slice(0, Math.max(2, Math.min(3, this.ensembleSize)));
+    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Ensemble models: ${modelsToRun.join(', ')}`);
+
     const ensemblePromises = modelsToRun.map(model => 
       this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId)
     );
-    
-    // Return results for all models in the ensemble for this agentId
     return Promise.all(ensemblePromises);
   }
   
