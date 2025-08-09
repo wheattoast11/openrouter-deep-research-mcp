@@ -1,6 +1,7 @@
 // src/utils/openRouterClient.js
 const axios = require('axios');
 const fetch = require('node-fetch'); // Use node-fetch v2 for CommonJS
+const { createParser } = require('eventsource-parser');
 const config = require('../../config');
 
 class OpenRouterClient {
@@ -34,13 +35,13 @@ class OpenRouterClient {
     }
   }
 
-  // New method for streaming chat completions
+  // New method for streaming chat completions (robust SSE parsing)
   async *streamChatCompletion(model, messages, options = {}) {
     const url = `${this.baseUrl}/chat/completions`;
     const body = JSON.stringify({
       model,
       messages,
-      stream: true, // Enable streaming
+      stream: true,
       ...options
     });
 
@@ -51,7 +52,7 @@ class OpenRouterClient {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
-          'HTTP-Referer': 'http://localhost:3002', // Adjust as needed
+          'HTTP-Referer': 'http://localhost:3002',
           'X-Title': 'OpenRouter Research Agents',
           'Content-Type': 'application/json'
         },
@@ -64,65 +65,84 @@ class OpenRouterClient {
         throw new Error(`OpenRouter API error: ${response.status} ${response.statusText} - ${errorBody}`);
       }
 
-      const reader = response.body;
       const decoder = new TextDecoder();
-      let buffer = '';
 
-      for await (const chunk of reader) {
-        buffer += decoder.decode(chunk, { stream: true });
-        let boundary = buffer.indexOf('\n\n');
-
-        while (boundary !== -1) {
-          const message = buffer.substring(0, boundary);
-          buffer = buffer.substring(boundary + 2);
-
-          if (message.startsWith('data: ')) {
-            const data = message.substring(6);
-            if (data.trim() === '[DONE]') {
-              console.error(`[${new Date().toISOString()}] OpenRouterClient: Stream finished [DONE]`);
-              yield { done: true }; // Signal stream completion
-              return;
-            }
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) {
-                yield { content: parsed.choices[0].delta.content };
-              } else if (parsed.error) {
-                 console.error(`[${new Date().toISOString()}] OpenRouterClient: Error in stream data:`, parsed.error);
-                 yield { error: parsed.error };
-              }
-            } catch (e) {
-              console.error(`[${new Date().toISOString()}] OpenRouterClient: Error parsing stream chunk: ${data}`, e);
-              // Ignore malformed JSON chunks
-            }
-          }
-          boundary = buffer.indexOf('\n\n');
+      let isDone = false;
+      const parser = createParser(event => {
+        if (event.type !== 'event') return;
+        const { data, event: evt } = event; // evt may be undefined for default "message" events
+        if (evt && /ping|heartbeat/i.test(evt)) {
+          return; // ignore heartbeats
         }
+        if (!data) return;
+        if (data.trim() === '[DONE]') {
+          isDone = true;
+          return;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          // OpenAI/OpenRouter compatible delta format
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.content) {
+            // yield content tokens
+            // Note: Generators cannot yield inside callbacks; set a queue instead
+            this._enqueue?.({ content: delta.content });
+          } else if (parsed.error) {
+            this._enqueue?.({ error: parsed.error });
+          }
+        } catch (e) {
+          // Non-JSON payloads ignored
+          console.error(`[${new Date().toISOString()}] OpenRouterClient: Error parsing stream event data`, e);
+        }
+      });
+
+      // Simple async queue to bridge parser callback and async generator
+      const queue = [];
+      let resolveWaiter;
+      const waitForItem = () => new Promise(res => (resolveWaiter = res));
+      const push = item => {
+        queue.push(item);
+        if (resolveWaiter) {
+          resolveWaiter();
+          resolveWaiter = null;
+        }
+      };
+      this._enqueue = push;
+
+      (async () => {
+        try {
+          for await (const chunk of response.body) {
+            const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+            parser.feed(text);
+            if (isDone) break;
+          }
+        } catch (streamErr) {
+          push({ error: { message: `Stream failed: ${streamErr.message}` } });
+        } finally {
+          push({ done: true });
+        }
+      })();
+
+      // Drain queue as async generator output
+      while (true) {
+        if (queue.length > 0) {
+          const item = queue.shift();
+          if (item.done) {
+            console.error(`[${new Date().toISOString()}] OpenRouterClient: Stream finished [DONE]`);
+            return;
+          }
+          yield item;
+          continue;
+        }
+        await waitForItem();
       }
-      // Process any remaining buffer content if needed, though [DONE] should handle termination
-      if (buffer.trim().length > 0 && buffer.trim().startsWith('data: ')) {
-         const data = buffer.trim().substring(6);
-         if (data.trim() !== '[DONE]') {
-            try {
-               const parsed = JSON.parse(data);
-               if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) {
-                 yield { content: parsed.choices[0].delta.content };
-               }
-            } catch(e) {
-               console.error(`[${new Date().toISOString()}] OpenRouterClient: Error parsing final stream chunk: ${data}`, e);
-            }
-         }
-      }
-       console.error(`[${new Date().toISOString()}] OpenRouterClient: Stream ended naturally.`);
-       yield { done: true }; // Ensure done signal if stream ends without [DONE]
 
     } catch (error) {
       console.error(`[${new Date().toISOString()}] OpenRouterClient: Error during streaming request:`, error);
-      yield { error: { message: `Stream failed: ${error.message}` } }; // Yield an error object
-      throw error; // Re-throw for higher-level handling if necessary
+      yield { error: { message: `Stream failed: ${error.message}` } };
+      throw error;
     }
   }
-
 
   async getModels() {
     try {

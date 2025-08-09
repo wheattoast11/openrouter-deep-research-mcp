@@ -31,6 +31,12 @@ The OpenRouter Agents MCP Server implements a sophisticated orchestration system
 - **Defensive Programming**: Null-safe operations throughout the codebase
 - **Enhanced User Feedback**: Rating system with detailed error recovery
 - **Comprehensive Testing**: Verified functionality across all five MCP tools
+- **Aug 09, 2025 Updates**:
+  - **Per-connection HTTP/SSE routing** with API key auth; legacy fallback retained
+  - **Dynamic model catalog** via OpenRouter `/models` + new `list_models` tool
+  - **Robust SSE parsing** using `eventsource-parser` for stable streaming
+  - **DB QoL tools**: `export_reports`, `import_reports`, `backup_db`, `db_health`, `reindex_vectors`
+  - **Config/env quality**: `SERVER_PORT` support; CSV or JSON parsing for model lists; `ENSEMBLE_SIZE`; clearer Node ≥18 requirement
 
 The beta improves both reliability and research quality through architectural enhancements while maintaining the plug-and-play simplicity of the original implementation. The system seamlessly integrates with Cline in VS Code and Claude Desktop App, providing enterprise-grade research capabilities in a self-contained package.
 
@@ -291,6 +297,12 @@ This MCP server provides the following tools:
 - `list_research_history`: Lists recent research reports, optionally filtered by query text.
 - `get_report_content`: Retrieves the full text content of a specific report by its ID.
 - `get_server_status`: Provides diagnostic information about the server's state (DB connection, embedder status, cache stats, etc.).
+- `list_models`: Returns the current dynamic model catalog snapshot (use `{ "refresh": true }` to refetch).
+- `export_reports`: Export reports as JSON or NDJSON (supports `limit`, `queryFilter`).
+- `import_reports`: Import reports from JSON or NDJSON content.
+- `backup_db`: Create a simple manifest-based backup record for file-backed DBs.
+- `db_health`: Quick database/embedder health summary.
+- `reindex_vectors`: Rebuild the pgvector HNSW index for `reports.query_embedding`.
 
 ## Advanced Configuration
 

@@ -576,7 +576,8 @@ module.exports = {
   isEmbedderReady: () => isEmbedderReady,
   isDbInitialized: () => dbInitialized,
   getDbPathInfo: () => dbPathInfo,
-  executeQuery // Export the new function
+  executeQuery, // Export the new function
+  reindexVectors
 };
 
 // Function to retrieve a single report by its ID
@@ -654,5 +655,22 @@ async function executeQuery(sql, params = []) {
     },
     `executeQuery("${sql.substring(0, 50)}...")`,
     [] // fallback value (empty array) if operation fails
+  );
+}
+
+// Function to rebuild the vector index safely
+async function reindexVectors() {
+  return executeWithRetry(
+    async () => {
+      try {
+        await db.query(`DROP INDEX IF EXISTS idx_reports_query_embedding;`);
+      } catch (e) {
+        // ignore drop errors
+      }
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_query_embedding ON reports USING hnsw (query_embedding vector_cosine_ops);`);
+      return true;
+    },
+    'reindexVectors',
+    false
   );
 }
