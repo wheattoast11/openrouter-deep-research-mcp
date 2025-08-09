@@ -16,7 +16,7 @@ const config = {
   },
   models: {
     // Allow overriding planning model; provide a generally-available safe default
-    planning: process.env.PLANNING_MODEL || "anthropic/claude-3.7-sonnet", // Model for planning and synthesis
+    planning: process.env.PLANNING_MODEL || "anthropic/claude-sonnet-4", // Model for planning and synthesis
     // Define models with domain strengths
     // Accept either JSON array of objects or CSV of model ids in env vars
     highCost: process.env.HIGH_COST_MODELS ? 
@@ -30,8 +30,8 @@ const config = {
       })(process.env.HIGH_COST_MODELS) : [
         { name: "perplexity/sonar-deep-research", domains: ["search", "general"] },
         { name: "perplexity/sonar-pro", domains: ["search", "general"] },
-        { name: "anthropic/claude-3.7-sonnet", domains: ["reasoning", "technical", "general"] },
-        { name: "openai/gpt-4o", domains: ["search", "general", "technical", "reasoning", "creative"] }
+        { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] },
+        { name: "openai/gpt-5", domains: ["general", "technical", "reasoning", "creative"] }
       ],
     lowCost: process.env.LOW_COST_MODELS ? 
       (function parseLowCost(val){
@@ -42,7 +42,7 @@ const config = {
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.LOW_COST_MODELS) : [
         { name: "perplexity/sonar-reasoning", domains: ["reasoning", "general"] },
-        { name: "openai/gpt-4o-mini", domains: ["search", "general", "reasoning"] },
+        { name: "openai/gpt-5-mini", domains: ["search", "general", "reasoning"] },
         { name: "google/gemini-2.0-flash-001", domains: ["general", "creative"] }
       ],
     // Define a tier for potentially simpler tasks (adjust models as needed)
@@ -54,10 +54,10 @@ const config = {
          } catch(_) {}
          return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
        })(process.env.VERY_LOW_COST_MODELS) : [
-         { name: "google/gemini-2.0-flash-001", domains: ["general", "reasoning", "creative"] },
+         { name: "openai/gpt-5-nano", domains: ["general", "reasoning", "creative"] },
        ],
      // Add a model specifically for classification tasks if needed, or reuse planning model
-     classification: process.env.CLASSIFICATION_MODEL || "anthropic/claude-3.7-haiku",
+     classification: process.env.CLASSIFICATION_MODEL || "anthropic/claude-sonnet-4",
      // Default ensemble size for research agent model ensembles
      ensembleSize: parseInt(process.env.ENSEMBLE_SIZE, 10) || 2,
      // Max research iterations (initial + refinements)
