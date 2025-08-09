@@ -17,6 +17,11 @@ const {
   getServerStatusSchema, // Import schema for status tool
   executeSqlSchema, // Import schema for SQL tool
   listModelsSchema, // New: schema for listing models
+  exportReportsSchema,
+  importReportsSchema,
+  backupDbSchema,
+  dbHealthSchema,
+  reindexVectorsSchema,
   
   // Functions
   conductResearch,
@@ -27,7 +32,12 @@ const {
   getReportContent,
   getServerStatus, // Import function for status tool
   executeSql, // Import function for SQL tool
-  listModels // New: function for listing models
+  listModels, // New: function for listing models
+  exportReports,
+  importReports,
+  backupDb,
+  dbHealth,
+  reindexVectorsTool
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 
@@ -348,6 +358,87 @@ server.tool(
       const duration = Date.now() - startTime;
       console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
       return { content: [{ type: 'text', text: `Error listing models: ${error.message}` }], isError: true };
+    }
+  }
+);
+
+// Register DB QoL tools
+server.tool(
+  "export_reports",
+  exportReportsSchema.shape,
+  async (params, exchange) => {
+    const start = Date.now();
+    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+    const toolName = "export_reports";
+    try {
+      const text = await exportReports(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error exporting reports: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "import_reports",
+  importReportsSchema.shape,
+  async (params, exchange) => {
+    const start = Date.now();
+    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+    const toolName = "import_reports";
+    try {
+      const text = await importReports(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error importing reports: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "backup_db",
+  backupDbSchema.shape,
+  async (params, exchange) => {
+    const start = Date.now();
+    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+    const toolName = "backup_db";
+    try {
+      const text = await backupDb(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error backing up DB: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "db_health",
+  dbHealthSchema.shape,
+  async (params, exchange) => {
+    const start = Date.now();
+    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+    const toolName = "db_health";
+    try {
+      const text = await dbHealth(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error getting DB health: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "reindex_vectors",
+  reindexVectorsSchema.shape,
+  async (params, exchange) => {
+    const start = Date.now();
+    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+    const toolName = "reindex_vectors";
+    try {
+      const text = await reindexVectorsTool(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error reindexing vectors: ${e.message}` }], isError: true };
     }
   }
 );

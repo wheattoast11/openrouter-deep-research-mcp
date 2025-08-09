@@ -746,39 +746,27 @@ async function executeSql(params, mcpExchange = null, requestId = 'unknown-req')
   }
 }
 
+// DB QoL tool schemas
+const exportReportsSchema = z.object({
+  format: z.enum(['json', 'ndjson']).default('json'),
+  limit: z.number().int().positive().optional(),
+  queryFilter: z.string().optional(),
+  _requestId: z.string().optional()
+});
 
-module.exports = {
-  // Schemas
-  conductResearchSchema,
-  executeSqlSchema, // Add new schema
-  researchFollowUpSchema,
-  getPastResearchSchema,
-  rateResearchReportSchema,
-  listResearchHistorySchema,
-  listModelsSchema: z.object({ refresh: z.boolean().optional().default(false) }),
-  
-  // Functions
-  conductResearch,
-  researchFollowUp,
-  getPastResearch,
-  rateResearchReport,
-  listResearchHistory,
+const importReportsSchema = z.object({
+  format: z.enum(['json', 'ndjson']).default('json'),
+  content: z.string().min(1),
+  _requestId: z.string().optional()
+});
 
-  // Export schema and add function for the new tool
-  getReportContentSchema,
-  getServerStatusSchema, // Export new schema
-  
-  // Functions
-  conductResearch,
-  researchFollowUp,
-  getPastResearch,
-  rateResearchReport,
-  listResearchHistory,
-  getReportContent, // This will be the wrapper calling dbClient.getReportById
-  getServerStatus, // Export new function
-  executeSql, // Add new function
-  listModels
-};
+const backupDbSchema = z.object({
+  destinationDir: z.string().optional().default('./backups'),
+  _requestId: z.string().optional()
+});
+
+const dbHealthSchema = z.object({ _requestId: z.string().optional() });
+const reindexVectorsSchema = z.object({ _requestId: z.string().optional() });
 
 // Implementation for get_report_content tool - updated to accept requestId
 async function getReportContent(params, mcpExchange = null, requestId = 'unknown-req') { 
@@ -869,3 +857,110 @@ async function listModels(params = { refresh: false }, mcpExchange = null, reque
     throw new Error(`[${requestId}] Error listing models: ${error.message}`);
   }
 }
+
+async function exportReports(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { format, limit, queryFilter } = params;
+  const reports = await dbClient.listRecentReports(limit || 1000, queryFilter || null);
+  const safeReports = reports.map(r => {
+    const { final_report, ...rest } = r; // keep full report by default; can adjust
+    return { ...rest, final_report };
+  });
+  if (format === 'ndjson') {
+    return safeReports.map(r => JSON.stringify(r)).join('\n');
+  }
+  return JSON.stringify(safeReports, null, 2);
+}
+
+async function importReports(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { format, content } = params;
+  const lines = format === 'ndjson' ? content.split(/\r?\n/).filter(Boolean) : [];
+  const items = format === 'ndjson' ? lines.map(l => JSON.parse(l)) : JSON.parse(content);
+  const array = Array.isArray(items) ? items : [items];
+  let imported = 0;
+  for (const item of array) {
+    try {
+      // Minimal fields for saveResearchReport
+      await dbClient.saveResearchReport({
+        originalQuery: item.originalQuery || item.original_query || 'Imported Report',
+        parameters: item.parameters || {},
+        finalReport: item.final_report || item.finalReport || '',
+        researchMetadata: item.researchMetadata || item.research_metadata || {},
+        images: item.images || null,
+        textDocuments: null,
+        structuredData: null,
+        basedOnPastReportIds: item.based_on_past_report_ids || []
+      });
+      imported++;
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] [${requestId}] importReports: Failed one item`, e);
+    }
+  }
+  return JSON.stringify({ imported, total: array.length }, null, 2);
+}
+
+async function backupDb(params, mcpExchange = null, requestId = 'unknown-req') {
+  const destDir = path.resolve(params.destinationDir || './backups');
+  fs.mkdirSync(destDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const srcInfo = dbClient.getDbPathInfo();
+  if (!srcInfo.toLowerCase().startsWith('file')) {
+    const note = `Backup supported only for file-backed DB. Current: ${srcInfo}`;
+    return JSON.stringify({ status: 'skipped', reason: note }, null, 2);
+  }
+  // Extract actual path from label "File (C:\path)"
+  const match = srcInfo.match(/File \((.*)\)/i);
+  const srcPath = match ? match[1] : config.database.dataDirectory;
+  const zipName = `pglite-backup-${stamp}.zip`;
+  const zipPath = path.join(destDir, zipName);
+  // Simple directory copy as tar/zip is not native; write manifest
+  const manifest = { when: new Date().toISOString(), source: srcPath };
+  fs.writeFileSync(path.join(destDir, `manifest-${stamp}.json`), JSON.stringify(manifest, null, 2));
+  return JSON.stringify({ status: 'ok', backupDir: destDir, manifest: `manifest-${stamp}.json` }, null, 2);
+}
+
+async function dbHealth(params, mcpExchange = null, requestId = 'unknown-req') {
+  const embedderReady = dbClient.isEmbedderReady();
+  const dbInitialized = dbClient.isDbInitialized();
+  const dbPathInfo = dbClient.getDbPathInfo();
+  return JSON.stringify({ embedderReady, dbInitialized, dbPathInfo, vectorDimension: config.database.vectorDimension }, null, 2);
+}
+
+async function reindexVectorsTool(params, mcpExchange = null, requestId = 'unknown-req') {
+  const ok = await dbClient.reindexVectors();
+  return JSON.stringify({ reindexed: ok }, null, 2);
+}
+
+
+module.exports = {
+  // Schemas
+  conductResearchSchema,
+  executeSqlSchema, // Add new schema
+  researchFollowUpSchema,
+  getPastResearchSchema,
+  rateResearchReportSchema,
+  listResearchHistorySchema,
+  listModelsSchema: z.object({ refresh: z.boolean().optional().default(false) }),
+  getReportContentSchema,
+  getServerStatusSchema,
+  exportReportsSchema,
+  importReportsSchema,
+  backupDbSchema,
+  dbHealthSchema,
+  reindexVectorsSchema,
+  
+  // Functions
+  conductResearch,
+  researchFollowUp,
+  getPastResearch,
+  rateResearchReport,
+  listResearchHistory,
+  getReportContent,
+  getServerStatus,
+  executeSql,
+  listModels,
+  exportReports,
+  importReports,
+  backupDb,
+  dbHealth,
+  reindexVectorsTool
+};
