@@ -312,6 +312,10 @@ This MCP server provides the following tools:
 - `backup_db`: Create a simple manifest-based backup record for file-backed DBs.
 - `db_health`: Quick database/embedder health summary.
 - `reindex_vectors`: Rebuild the pgvector HNSW index for `reports.query_embedding`.
+- `search_web`: Lightweight web search via DuckDuckGo Instant Answer API; returns related topics.
+- `fetch_url`: Fetch URL content and extract readable text snippet (HTML stripped), capped by `maxBytes`.
+
+> Note: Use `search_web`/`fetch_url` responsibly and respect robots.txt and site policies. These utilities are for lightweight lookups and previews, not bulk crawling.
 
 ## Advanced Configuration
 

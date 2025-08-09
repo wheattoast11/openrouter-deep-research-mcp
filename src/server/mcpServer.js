@@ -22,6 +22,8 @@ const {
   backupDbSchema,
   dbHealthSchema,
   reindexVectorsSchema,
+  searchWebSchema,
+  fetchUrlSchema,
   
   // Functions
   conductResearch,
@@ -37,7 +39,9 @@ const {
   importReports,
   backupDb,
   dbHealth,
-  reindexVectorsTool
+  reindexVectorsTool,
+  searchWeb,
+  fetchUrl
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 
@@ -439,6 +443,38 @@ server.tool(
       return { content: [{ type: 'text', text }] };
     } catch (e) {
       return { content: [{ type: 'text', text: `Error reindexing vectors: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "search_web",
+  searchWebSchema.shape,
+  async (params, exchange) => {
+    const start = Date.now();
+    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+    const toolName = "search_web";
+    try {
+      const text = await searchWeb(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error search_web: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "fetch_url",
+  fetchUrlSchema.shape,
+  async (params, exchange) => {
+    const start = Date.now();
+    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+    const toolName = "fetch_url";
+    try {
+      const text = await fetchUrl(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error fetch_url: ${e.message}` }], isError: true };
     }
   }
 );

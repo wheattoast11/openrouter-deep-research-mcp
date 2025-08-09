@@ -11,6 +11,7 @@ const dbClient = require('../utils/dbClient'); // Imports necessary functions an
 const config = require('../../config');
 const modelCatalog = require('../utils/modelCatalog'); // New: dynamic model catalog
 const tar = require('tar');
+const fetch = require('node-fetch');
 
 // In-memory Cache Configuration
 const CACHE_TTL_SECONDS = config.database.cacheTTL || 3600; // 1 hour in seconds from config
@@ -768,6 +769,16 @@ const backupDbSchema = z.object({
 
 const dbHealthSchema = z.object({ _requestId: z.string().optional() });
 const reindexVectorsSchema = z.object({ _requestId: z.string().optional() });
+const searchWebSchema = z.object({
+  query: z.string().min(1),
+  maxResults: z.number().int().positive().max(10).optional().default(5),
+  _requestId: z.string().optional()
+});
+const fetchUrlSchema = z.object({
+  url: z.string().url(),
+  maxBytes: z.number().int().positive().optional().default(200000),
+  _requestId: z.string().optional()
+});
 
 // Implementation for get_report_content tool - updated to accept requestId
 async function getReportContent(params, mcpExchange = null, requestId = 'unknown-req') { 
@@ -930,6 +941,40 @@ async function reindexVectorsTool(params, mcpExchange = null, requestId = 'unkno
   return JSON.stringify({ reindexed: ok }, null, 2);
 }
 
+function stripHtml(html) {
+  try {
+    const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].trim() : null;
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return { title, text };
+  } catch (e) {
+    return { title: null, text: html };
+  }
+}
+
+async function fetchUrl(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { url, maxBytes } = params;
+  const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+  const contentType = res.headers.get('content-type') || '';
+  const status = res.status;
+  if (!res.ok) {
+    return JSON.stringify({ url, status, error: `HTTP ${status}` }, null, 2);
+  }
+  const buf = await res.arrayBuffer();
+  const limited = Buffer.from(buf).subarray(0, Math.min(maxBytes, buf.byteLength));
+  const body = limited.toString('utf8');
+  if (/text\/html/i.test(contentType)) {
+    const { title, text } = stripHtml(body);
+    return JSON.stringify({ url, status, contentType, title, textSnippet: text.slice(0, 2000), fullTextLength: text.length }, null, 2);
+  }
+  return JSON.stringify({ url, status, contentType, textSnippet: body.slice(0, 2000), length: body.length }, null, 2);
+}
+
 
 module.exports = {
   // Schemas
@@ -947,6 +992,8 @@ module.exports = {
   backupDbSchema,
   dbHealthSchema,
   reindexVectorsSchema,
+  searchWebSchema,
+  fetchUrlSchema,
   
   // Functions
   conductResearch,
@@ -962,5 +1009,7 @@ module.exports = {
   importReports,
   backupDb,
   dbHealth,
-  reindexVectorsTool
+  reindexVectorsTool,
+  searchWeb,
+  fetchUrl
 };
