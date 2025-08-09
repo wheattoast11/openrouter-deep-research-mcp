@@ -5,6 +5,71 @@
 
 A Model Context Protocol (MCP) server implementation for OpenRouter that provides sophisticated research agent capabilities. This server allows your conversational LLM to delegate research to a Claude research orchestrator that uses different specialized agents powered by various OpenRouter models.
 
+## 2025-08-09 Update (v1.1.0)
+
+Rationale for this update:
+- Per-connection HTTP/SSE routing with API key auth (multi-client safe); legacy fallback retained
+- Robust streaming via `eventsource-parser`
+- Dynamic model catalog + new `list_models` tool
+- PGlite tarball backups (`backup_db`) and DB QoL tools (`export_reports`, `import_reports`, `db_health`, `reindex_vectors`)
+- Lightweight web tools: `search_web`, `fetch_url`
+- Parallelization control and orchestration improvements (`PARALLELISM`), dynamic vision detection, better defaults
+- Default models refreshed to `anthropic/claude-sonnet-4` (planning/classification) and OpenAI GPT‑5 family
+- Repo cleanup: docs/ and tests/ organization
+
+### Configuration & Setup (updated)
+1) Prerequisites
+- Node.js ≥ 18 (Node 20 LTS recommended)
+- npm and Git
+- OpenRouter API key
+
+2) Install
+```bash
+npm install
+```
+
+3) Create `.env` (example)
+```dotenv
+# Required
+OPENROUTER_API_KEY=your_openrouter_key
+SERVER_API_KEY=your_http_transport_key
+
+# Server
+SERVER_PORT=3002
+ALLOW_NO_API_KEY=false
+
+# Orchestration
+ENSEMBLE_SIZE=2
+PARALLELISM=4
+
+# Models (override as needed)
+PLANNING_MODEL=anthropic/claude-sonnet-4
+HIGH_COST_MODELS=anthropic/claude-sonnet-4,openai/gpt-5,perplexity/sonar-deep-research
+LOW_COST_MODELS=openai/gpt-5-mini,google/gemini-2.0-flash-001
+VERY_LOW_COST_MODELS=openai/gpt-5-nano
+
+# Storage
+PGLITE_DATA_DIR=./researchAgentDB
+PGLITE_RELAXED_DURABILITY=true
+REPORT_OUTPUT_PATH=./research_outputs/
+```
+
+4) Run
+- STDIO (for VS Code/Cursor MCP):
+```bash
+node src/server/mcpServer.js --stdio
+```
+- HTTP/SSE (daemon-like):
+```bash
+SERVER_API_KEY=$SERVER_API_KEY node src/server/mcpServer.js
+```
+
+5) Useful tools
+- List models (dynamic catalog): `list_models` (use `{ "refresh": true }` to refetch)
+- Back up PGlite data: `backup_db` (produces `.tar.gz` + manifest)
+- Health: `db_health`, reindex: `reindex_vectors`
+- Web helpers: `search_web`, `fetch_url`
+
 ## 🚀 New Beta Branch (03-29-2025)
 
 ### OpenRouter Agents MCP Server Technical Overview
