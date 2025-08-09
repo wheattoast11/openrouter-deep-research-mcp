@@ -941,6 +941,32 @@ async function reindexVectorsTool(params, mcpExchange = null, requestId = 'unkno
   return JSON.stringify({ reindexed: ok }, null, 2);
 }
 
+async function searchWeb(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { query, maxResults } = params;
+  const endpoint = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`;
+  const res = await fetch(endpoint, { method: 'GET', headers: { 'Accept': 'application/json' } });
+  if (!res.ok) {
+    return JSON.stringify({ error: `HTTP ${res.status}`, query }, null, 2);
+  }
+  const data = await res.json();
+  const items = [];
+  if (data.AbstractText) {
+    items.push({ title: data.Heading || 'Abstract', text: data.AbstractText, url: data.AbstractURL || null, source: 'ddg' });
+  }
+  const related = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
+  for (const rt of related) {
+    if (items.length >= maxResults) break;
+    if (rt.Text && rt.FirstURL) items.push({ title: rt.Text.slice(0, 120), text: rt.Text, url: rt.FirstURL, source: 'ddg' });
+    if (Array.isArray(rt.Topics)) {
+      for (const t of rt.Topics) {
+        if (items.length >= maxResults) break;
+        if (t.Text && t.FirstURL) items.push({ title: t.Text.slice(0, 120), text: t.Text, url: t.FirstURL, source: 'ddg' });
+      }
+    }
+  }
+  return JSON.stringify({ query, results: items.slice(0, maxResults) }, null, 2);
+}
+
 function stripHtml(html) {
   try {
     const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
