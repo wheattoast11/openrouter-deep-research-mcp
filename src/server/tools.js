@@ -13,6 +13,95 @@ const modelCatalog = require('../utils/modelCatalog'); // New: dynamic model cat
 const tar = require('tar');
 const fetch = require('node-fetch');
 
+// Compact param normalization for conduct_research
+function normalizeResearchParams(params) {
+  if (!params || typeof params !== 'object') return params;
+  // Only apply when simpleTools enabled (default true)
+  try { if (require('../../config').simpleTools?.enabled === false) return params; } catch (_) {}
+  const out = { ...params };
+  if (out.q && !out.query) out.query = out.q;
+  if (out.cost && !out.costPreference) out.costPreference = out.cost;
+  if (out.aud && !out.audienceLevel) out.audienceLevel = out.aud;
+  if (out.fmt && !out.outputFormat) out.outputFormat = out.fmt;
+  if (typeof out.src === 'boolean' && out.includeSources === undefined) out.includeSources = out.src;
+  if (Array.isArray(out.imgs) && !out.images) out.images = out.imgs;
+  if (out.docs && !out.textDocuments) {
+    if (Array.isArray(out.docs)) {
+      out.textDocuments = out.docs.map((d, i) => typeof d === 'string' ? ({ name: `doc_${i+1}.txt`, content: d }) : d);
+    }
+  }
+  if (out.data && !out.structuredData) {
+    if (Array.isArray(out.data)) {
+      out.structuredData = out.data.map((d, i) => {
+        if (typeof d === 'string') return ({ name: `data_${i+1}.json`, type: 'json', content: d });
+        return d;
+      });
+    }
+  }
+  return out;
+}
+
+// Indexer tool schemas (opt-in)
+const indexTextsSchema = z.object({
+  documents: z.array(z.object({
+    id: z.string().optional(),
+    title: z.string().optional(),
+    content: z.string()
+  })),
+  sourceType: z.enum(['doc','report']).default('doc'),
+  _requestId: z.string().optional()
+});
+
+const indexUrlSchema = z.object({
+  url: z.string().url(),
+  maxBytes: z.number().int().positive().optional().default(200000),
+  _requestId: z.string().optional()
+});
+
+const searchIndexSchema = z.object({
+  query: z.string().min(1),
+  limit: z.number().int().positive().optional().default(10),
+  _requestId: z.string().optional()
+});
+
+const indexStatusSchema = z.object({ _requestId: z.string().optional() });
+
+async function index_texts(params, mcpExchange = null, requestId = 'unknown-req') {
+  if (!require('../../config').indexer?.enabled) return JSON.stringify({ enabled: false });
+  const { documents, sourceType } = params;
+  let indexed = 0;
+  for (const d of documents) {
+    try {
+      const id = await dbClient.indexDocument({ sourceType, sourceId: d.id || `doc:${Date.now()}-${indexed}`, title: d.title || null, content: d.content });
+      if (id) indexed++;
+    } catch (_) {}
+  }
+  return JSON.stringify({ indexed });
+}
+
+async function index_url(params, mcpExchange = null, requestId = 'unknown-req') {
+  if (!require('../../config').indexer?.enabled) return JSON.stringify({ enabled: false });
+  const { url, maxBytes } = params;
+  const raw = await fetchUrl({ url, maxBytes }, mcpExchange, requestId);
+  const obj = JSON.parse(raw);
+  const title = obj.title || url;
+  const content = `${title}\nSource: ${url}\n\n${obj.textSnippet || ''}`;
+  const id = await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title, content });
+  return JSON.stringify({ indexed: !!id, id });
+}
+
+async function search_index(params, mcpExchange = null, requestId = 'unknown-req') {
+  if (!require('../../config').indexer?.enabled) return JSON.stringify({ enabled: false, results: [] });
+  const { query, limit } = params;
+  const rows = await dbClient.searchHybrid(query, limit);
+  return JSON.stringify(rows, null, 2);
+}
+
+async function index_status(params, mcpExchange = null, requestId = 'unknown-req') {
+  const cfg = require('../../config').indexer || {};
+  return JSON.stringify({ enabled: !!cfg.enabled, autoIndexReports: !!cfg.autoIndexReports, embedDocs: !!cfg.embedDocs, weights: cfg.weights || {} }, null, 2);
+}
+
 // In-memory Cache Configuration
 const CACHE_TTL_SECONDS = config.database.cacheTTL || 3600; // 1 hour in seconds from config
 const cache = new NodeCache({
@@ -120,7 +209,8 @@ const executeSqlSchema = z.object({
 
 // Updated to accept requestId
 async function conductResearch(params, mcpExchange = null, requestId = 'unknown-req') {
-  // Removed the immediate debug return block
+  // Normalize shorthand parameters (q,cost,aud,fmt,src,imgs,docs,data)
+  params = normalizeResearchParams(params);
 
   // Destructure all potential inputs, with safety checks
   const query = params.query || ''; // Ensure query is at least an empty string
@@ -488,6 +578,22 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         structuredData: structuredData ? structuredData.map(d => ({ name: d.name, type: d.type, length: d.content.length })) : null, // Store structured data metadata
           basedOnPastReportIds: relevantPastReports.map(r => r.reportId)
         });
+
+        // Auto-index saved report content when enabled
+        try {
+          const cfg = require('../../config');
+          if (cfg.indexer?.enabled && cfg.indexer.autoIndexReports && savedReportId && finalReportContent) {
+            await dbClient.indexDocument({
+              sourceType: 'report',
+              sourceId: String(savedReportId),
+              title: query.slice(0, 120),
+              content: finalReportContent
+            });
+            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Indexed report ${savedReportId} into local BM25 index.`);
+          }
+        } catch (idxErr) {
+          console.warn(`[${new Date().toISOString()}] [${requestId}] conductResearch: Failed to index report ${savedReportId}: ${idxErr.message}`);
+        }
       } catch (dbError) {
          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Error saving report to DB:`, dbError);
          // Decide if this is fatal. Let's allow completion but log the error.
@@ -631,20 +737,59 @@ async function getPastResearch(params, mcpExchange = null, requestId = 'unknown-
     
     // Send initial progress update
     sendProgress({ message: "Searching knowledge base for relevant past research..." });
-    
-    // Use semantic search function from dbClient
-    const reports = await dbClient.findReportsBySimilarity(query, limit, minSimilarity);
+
+    // Prefer local hybrid index when enabled
+    const cfg = require('../../config');
+    let reports = [];
+    if (cfg.indexer?.enabled && typeof dbClient.searchHybrid === 'function') {
+      try {
+        const hybrid = await dbClient.searchHybrid(query, Math.max(limit * 2, 10));
+        const reportIds = [];
+        const idToScore = new Map();
+        for (const r of hybrid) {
+          if (r.source_type === 'report') {
+            const idNum = Number(r.source_id);
+            if (!Number.isNaN(idNum) && !reportIds.includes(idNum)) reportIds.push(idNum);
+            if (!Number.isNaN(idNum) && typeof r.hybridScore === 'number') idToScore.set(idNum, r.hybridScore);
+          }
+          if (reportIds.length >= limit) break;
+        }
+        const enriched = [];
+        for (const id of reportIds) {
+          const rep = await dbClient.getReportById(String(id));
+          if (rep) {
+            enriched.push({
+              _id: String(rep.id || rep._id || id),
+              originalQuery: rep.original_query || rep.originalQuery,
+              createdAt: rep.created_at || rep.createdAt,
+              parameters: rep.parameters,
+              similarityScore: idToScore.has(Number(id)) ? idToScore.get(Number(id)) : undefined
+            });
+          }
+        }
+        if (enriched.length > 0) {
+          reports = enriched;
+        }
+      } catch (e) {
+        console.warn(`[${new Date().toISOString()}] [${requestId}] getPastResearch: hybrid index lookup failed, falling back.`, e.message);
+      }
+    }
+
+    // Fallback to vector similarity
+    if (!reports || reports.length === 0) {
+      reports = await dbClient.findReportsBySimilarity(query, limit, minSimilarity);
+      // Normalize to expected shape
+      reports = (reports || []).map(report => ({
+        _id: report._id.toString(),
+        originalQuery: report.originalQuery,
+        createdAt: report.createdAt,
+        parameters: report.parameters,
+        similarityScore: report.similarityScore
+      }));
+    }
     
     sendProgress({ message: `Found ${reports ? reports.length : 0} relevant past reports.` });
-    const formattedReports = reports.map(report => ({
-      _id: report._id.toString(),
-      originalQuery: report.originalQuery,
-      createdAt: report.createdAt,
-      parameters: report.parameters,
-      similarityScore: report.similarityScore
-    }));
-    
-    return JSON.stringify(formattedReports, null, 2);
+    return JSON.stringify(reports, null, 2);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${requestId}] getPastResearch: Error searching for past reports:`, error);
     throw new Error(`[${requestId}] Error retrieving past research: ${error.message}`);
@@ -996,8 +1141,22 @@ async function fetchUrl(params, mcpExchange = null, requestId = 'unknown-req') {
   const body = limited.toString('utf8');
   if (/text\/html/i.test(contentType)) {
     const { title, text } = stripHtml(body);
+    // Auto-index fetched text when enabled
+    try {
+      const cfg = require('../../config');
+      if (cfg.indexer?.enabled && cfg.indexer.autoIndexFetchedContent && text) {
+        await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title: title || url, content: text.slice(0, cfg.indexer.maxDocLength || 8000) });
+      }
+    } catch (_) {}
     return JSON.stringify({ url, status, contentType, title, textSnippet: text.slice(0, 2000), fullTextLength: text.length }, null, 2);
   }
+  // Auto-index non-HTML text payloads where practical
+  try {
+    const cfg = require('../../config');
+    if (cfg.indexer?.enabled && cfg.indexer.autoIndexFetchedContent && /text\//i.test(contentType)) {
+      await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title: url, content: body.slice(0, cfg.indexer.maxDocLength || 8000) });
+    }
+  } catch (_) {}
   return JSON.stringify({ url, status, contentType, textSnippet: body.slice(0, 2000), length: body.length }, null, 2);
 }
 
@@ -1020,6 +1179,10 @@ module.exports = {
   reindexVectorsSchema,
   searchWebSchema,
   fetchUrlSchema,
+  indexTextsSchema,
+  indexUrlSchema,
+  searchIndexSchema,
+  indexStatusSchema,
   
   // Functions
   conductResearch,
@@ -1037,5 +1200,9 @@ module.exports = {
   dbHealth,
   reindexVectorsTool,
   searchWeb,
-  fetchUrl
+  fetchUrl,
+  index_texts,
+  index_url,
+  search_index,
+  index_status
 };

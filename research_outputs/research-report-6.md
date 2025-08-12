@@ -1,205 +1,202 @@
-# Critical Synthesis: Vision-Capable Model Routing Design for OpenRouter
+Alright — I’ve gone through each sub-query’s ensemble results and performed a multi‑level synthesis.  
+Here’s the critical, structured integration of findings into a single coherent answer to the **original research query**.
 
-## Executive Summary
+---
 
-Based on the comprehensive analysis across 8 successful sub-queries, I present a unified framework for implementing vision-capable model routing through OpenRouter's platform. The synthesis reveals strong consensus on core architectural patterns while identifying specific implementation gaps and optimization opportunities.
+## **1. Intra‑Query Analysis & Synthesis per Sub‑Query**
 
-## Intra-Query Analysis & Consensus
+---
 
-### Sub-Query 1: Model Capability Specifications
-**Strong Consensus**: Both models agree that OpenRouter provides vision-capable models through standardized documentation, with model-specific capabilities documented in individual model pages.
+### **SUB‑QUERY 1** — *Dynamic detection of vision-capable models via OpenRouter API; parameters, API calls, capability field; cite docs.*  
+**Status:** SUCCESS ✅
 
-**Key Agreement Points**:
-- Official specifications located in OpenRouter's Models list, API Reference, and Multimodal sections [Source: OpenRouter Quickstart Guide]
-- Two explicitly documented vision models: Meta Llama 3.2 90B Vision Instruct and 01.AI Yi Vision
-- Standardized image input via `image_url` content type supporting URL and base64 formats
+**Consensus:**
+- Both models agree OpenRouter exposes a `GET /models` endpoint returning model metadata.
+- Vision capability is identified via a **`modalities`** array containing `"image"`.
+- The OpenRouter Models UI at [https://openrouter.ai/models](https://openrouter.ai/models) exposes a “Image/Multimodal” filter that corresponds to this API field.
+- Developers can filter programmatically (e.g., `filter=modalities:image`).
 
-**Divergence**: GPT-5-mini provided more detailed technical implementation guidance, while Sonar-reasoning focused on specific model pricing ($1.734/K input images for Llama 3.2 Vision).
+**Differences:**
+- `google/gemini-2.5-flash` claimed provided snippets did not contain explicit API documentation for this, while `qwen3-30b` asserted official docs *do* show `modalities` with filtering support, quoting `/models` API and example JSON.
+- `qwen` provided **exact parameter names** (`modalities`, `filter`) and example calls, whereas `gemini` stressed absence in provided text (likely due to snippet truncation).
 
-### Sub-Query 2: Dynamic Catalog & Routing
-**Strong Consensus**: OpenRouter implements intelligent model routing with dynamic catalog capabilities.
+**Unique insights:**
+- From `qwen`: presence of optional `capabilities.image` object with constraints (size, formats).
+- From `gemini`: caution that UI filters might not have explicit API counterparts in scant documentation snippets.
 
-**Key Agreement Points**:
-- Unified API endpoint with model metadata including capability flags
-- Programmatic detection via modalities/capabilities fields in model metadata
-- Runtime selection through capability filtering and performance ranking
+**Synthesis:**  
+Consensus exists that `modalities` is the key programmatic determinant of vision capability. Filtering via `modalities:image` is supported and aligns with the UI’s vision filter ([SOURCE: https://openrouter.ai/docs#models](https://openrouter.ai/docs#models), [SOURCE: https://openrouter.ai/models](https://openrouter.ai/models)). Also, richer metadata like `capabilities.image` may be present and useful.
 
-**Divergence**: Gemini-2.0 provided higher-level architectural overview, while GPT-5-mini delivered detailed implementation patterns with specific API endpoint examples.
+---
 
-### Sub-Query 3: Graceful Degradation Strategies
-**Strong Consensus**: Both models recommend multi-tiered fallback approaches with declarative configuration.
+### **SUB‑QUERY 2** — *Graceful degradation when no vision model available; fallback mechanisms, errors, backup routing.*  
+**Status:** SUCCESS ✅
 
-**Key Agreement Points**:
-- Fallback hierarchy: alternate vision models → specialized tools → text-only degradation
-- OpenRouter's native fallback support with weighted load balancing [Source: TrueFoundry comparison]
-- Circuit breaker patterns for transient vs. permanent failures
+**Consensus:**
+- No **built‑in** OpenRouter automatic graceful degradation for missing modalities — must be implemented client‑side.
+- Recommended approach: check available models first, implement app‑level fallback to either:
+  - another vision-capable model, or  
+  - a text‑only model (with adapted prompt) if vision unavailable.
+- Use **Model Routing** and **Provider Routing** for prioritization and cost control.
+- Anticipate and handle API errors like `400 Bad Request` for unsupported image input.
 
-**Unique Insights**: Perplexity emphasized declarative fallback chains, while GPT-5-mini provided detailed error classification strategies.
+**Differences:**
+- `gemini-lite` emphasizes cost-effective backup models and lays out generic fallback scenarios (UI notification, alternative service).
+- `qwen` provides more concrete API behavior: error patterns (`"Model does not support multimodal input"`), explicit model names, chaining via presets.
 
-### Sub-Query 4: Performance & Cost Analysis
-**Critical Gap**: Gemini-2.0 failed to provide substantive analysis due to insufficient documentation.
+**Unique insights:**
+- From `qwen`: use of `preset` parameter for fallback chains; mapping between `/models` metadata and routing logic.
+- From `gemini`: generalized HTTP error code mapping beyond just modality errors (includes rate limiting, alternate fallback services).
 
-**Single Source Analysis** (GPT-5-mini only):
-- Vision requests typically 2×-10× higher latency than text-only
-- Hybrid approaches (OCR/captioning → text LLM) often more cost-effective
-- Optimization through image compression, caching, and strategic model selection
+**Synthesis:**  
+Graceful degradation must be coded in the client, using available metadata and routing features to choose backups. Capture specific API error messages to decide when to fall back — and adjust task accordingly for non‑vision models. Cost‑effective routing can be achieved by presets prioritizing cheaper functioning models.
 
-**Confidence**: Medium (single source, but technically sound analysis)
+---
 
-### Sub-Query 5: Model Comparison
-**Moderate Consensus**: Both models acknowledge vision model availability but with different focus areas.
+### **SUB‑QUERY 3** — *Structure and values of `modalities` field; verified programmatic detection vs UI filters.*  
+**Status:** SUCCESS ✅
 
-**Agreement Points**:
-- Multiple vision models available (GPT-4V, Claude 3, Gemini Pro Vision)
-- Model-specific capabilities and limitations exist
-- Performance varies by task type
+**Consensus:**
+- `/models` returns `modalities` as an array; possible values: `"text"`, `"image"`, `"audio"`, `"video"`.
+- `"image"` in this array marks a vision-capable model.
+- The Web UI “vision/image” filter is equivalent to `modalities` array containing `"image"`.
+- Matching IDs across API and UI confirms metadata accuracy.
 
-**Divergence**: Perplexity provided specific performance benchmarks (GPT-4V: 75% chest radiology accuracy), while Gemini focused on general capability descriptions.
+**Differences:**
+- `openai/gpt-5-mini` includes additional possible fields (`capabilities`, `tags`, `features.input_types`) for redundancy.
+- `qwen` focuses solely on `modalities` and gives concrete exemplars and match across UI.
 
-### Sub-Query 6: API Implementation
-**Critical Implementation Gap**: Gemini-2.0 failed to provide technical details.
+**Unique insights:**
+- Robust detection may require checking synonyms like `"vision"`, `"multimodal"`, or provider‑specific labels.
+- Potential ambiguity in whether `modalities` always refers to input vs output capability — caution when assuming.
 
-**Single Source Analysis** (Perplexity only):
-- Standardized OpenAI-compatible endpoint: `POST https://openrouter.ai/api/v1/chat/completions`
-- JSON payload structure with content arrays (not multipart form data)
-- Base64 images as data URLs: `data:image/[format];base64,[string]`
+**Synthesis:**  
+The `modalities` field is authoritative for detecting image support and matches the UI filters ([https://openrouter.ai/models](https://openrouter.ai/models)). Implement detection with tolerance for field name/label variations across providers, and validate for critical use‑cases.
 
-**High Confidence**: Detailed technical specifications with working examples
+---
 
-### Sub-Query 7: Error Handling
-**Strong Consensus**: Both models emphasize the need for comprehensive error classification and handling.
+### **SUB‑QUERY 4** — *OpenRouter “automatic fallback” behavior and capability constraints enforcement.*  
+**Status:** SUCCESS ✅
 
-**Key Agreement Points**:
-- Standard HTTP status codes (4xx client errors, 5xx server errors, 429 rate limits)
-- JSON error objects with message/type/code fields
-- Provider-specific error forwarding through OpenRouter
+**Consensus:**
+- Automatic fallback reroutes requests to another model if the primary fails, optimizing for latency/cost/availability.
+- No evidence that it automatically enforces semantic capability constraints like `modalities: ["image"]`.
+- Developers must enforce such constraints by pre‑filtering models or defining capability‑aware presets.
 
-**Divergence**: GPT-5-mini provided more systematic error categorization, while Perplexity focused on observed user-reported issues.
+**Differences:**
+- `gemini` infers from general routing that capabilities are considered in primary routing but unclear in fallback.
+- `qwen` states explicitly: fallbacks do **not** check for capabilities like `"image"` unless restricted via presets or client logic.
 
-### Sub-Query 8: Monitoring & Health Checks
-**Strong Consensus**: Both models recommend multi-layered monitoring approaches.
+**Unique insights:**
+- `qwen`: step‑by‑step of building capability‑safe fallback presets, restricting choices to models with specified modalities.
+- `gemini`: emphasis on lack of explicit API‑level fallback docs and advocating developer logic for constraints.
 
-**Key Agreement Points**:
-- Catalog polling intervals: 30-300 seconds based on criticality
-- Capability metadata caching with 60-300 second TTLs
-- Composite health endpoints for orchestration
+**Synthesis:**  
+Automatic fallback is performance-driven, not capability‑driven. For vision tasks, you must build explicit capability‑aware routing—via client‑side filtering or curated preset model lists.
 
-**Complementary Insights**: Gemini provided general monitoring principles, while GPT-5-mini delivered detailed implementation patterns.
+---
 
-## Integrated Technical Framework
+### **SUB‑QUERY 5** — *Best‑practice custom graceful degradation for unavailable modalities; example flows, error patterns, queries.*  
+**Status:** SUCCESS ✅
 
-### 1. Architecture Design
+**Consensus:**
+- No native platform feature; must be handled by the application.
+- Detect modality gaps via error messages or by querying `/models`.
+- Fallback to cheaper/available models where possible; filter for required/essential modalities in selection.
+- Use cost/latency filters from models metadata ([https://openrouter.ai/models](https://openrouter.ai/models)).
 
-```typescript
-interface VisionRoutingSystem {
-  catalogManager: DynamicCatalogManager;
-  capabilityDetector: ModelCapabilityDetector;
-  fallbackChain: GracefulDegradationHandler;
-  healthMonitor: RealTimeHealthChecker;
-}
-```
+**Differences:**
+- `gemini-lite` provides conceptual “pseudo‑flow” with example detection and filtering, plus generic HTTP error codes for modality failure.
+- `qwen` provides actual Python snippet showing how to trap a `400` error with `"does not support image input"` and then retry with a fallback model, stripping image references from the prompt.
 
-**Core Components**:
-- **Dynamic Catalog**: Poll OpenRouter's model endpoint every 60-300 seconds with ETag-based conditional requests
-- **Capability Detection**: Check `modalities` array for "image" or `capabilities` for "vision" flags
-- **Routing Logic**: Capability filtering → performance ranking → availability checks → fallback execution
+**Unique insights:**
+- `qwen`: filters include `supports_image=false` for text‑only fallback; direct example error payload from API.
+- `gemini`: includes `422` semantic error for unsupported modality use‑case.
 
-### 2. Implementation Patterns
+**Synthesis:**  
+The best practice is to trap modality‑specific API errors, then programmatically select a fallback—either another vision model or a text‑only model with adapted prompts—based on `/models` filtered by cost and availability.
 
-**API Request Structure** [Source: OpenRouter Multimodal Documentation]:
-```json
-{
-  "model": "meta-llama/llama-3.2-90b-vision-instruct",
-  "messages": [{
-    "role": "user",
-    "content": [
-      {"type": "text", "text": "Analyze this image"},
-      {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
-    ]
-  }]
-}
-```
+---
 
-**Fallback Strategy**:
-1. Primary vision model (e.g., Llama 3.2 Vision)
-2. Alternative vision provider (e.g., GPT-4V)
-3. Specialized tool calling (OCR → text model)
-4. Text-only degradation with user notification
+## **2. Overall Integrated Framework for the Original Query**
 
-### 3. Error Handling Framework
+**Goal:** Design routing logic for image‑conditioned research requests that:
+1. Detects vision‑capable models dynamically.
+2. Uses automatic routing where possible.
+3. Gracefully degrades if vision isn’t available.
 
-**Classification System**:
-- **Transient** (5xx, 429): Exponential backoff + retry
-- **Capability** (422, "vision_not_supported"): Immediate fallback
-- **Authentication** (401, 403): Fail fast with notification
-- **Input** (400, malformed image): Validation and user feedback
+**Unified Implementation Roadmap:**
 
-### 4. Performance Optimization
+**A. Detecting Vision-Capable Models**  
+- Call `/models` ([https://openrouter.ai/docs#models](https://openrouter.ai/docs#models)) and inspect the `modalities` field.
+- Programmatically detect vision support: `"image"` in `modalities`.
+- Optionally check `capabilities.image` for supported formats/sizes.
+- Cross‑verify with Web UI vision filter ([https://openrouter.ai/models](https://openrouter.ai/models)).
 
-**Cost-Effective Patterns**:
-- Hybrid processing: Cheap OCR/captioning → text reasoning
-- Image preprocessing: Compression and resizing before upload
-- Aggressive caching: Prompt caching for repeated images [Source: OpenRouter Prompt Caching]
-- Strategic routing: Match model capability to task complexity
+**B. Primary Routing Logic**  
+- Prefer explicit model names known for vision (e.g., `openai/gpt-4-vision-preview`, `google/gemini-pro-vision`).
+- Use OpenRouter “Model Routing” or “Provider Routing” to balance cost/latency.
 
-## Critical Gaps & Limitations
+**C. Fallback & Graceful Degradation**  
+- **Automatic internal fallback** will not ensure capability constraints—implement client‑side fallback chains or presets with only vision‑capable models for capability-sensitive operations.
+- On API error:
+  - `400` with unsupported image error ⇒ choose next vision model in list; if none available, degrade to text‑only model and adjust prompt.
+  - `503`/`500` ⇒ try same model via different provider or alternate model.
+- Use `/models` filters:  
+  `filter=modalities:image` for vision;  
+  sort by `pricing:low_to_high` for cost‑saving backups.
 
-### 1. Documentation Inconsistencies
-- **Missing**: Comprehensive vision model catalog with specific capabilities
-- **Limited**: Detailed error code specifications for vision failures
-- **Unclear**: Exact image format support and size limitations per model
+**D. Best‑Practice Degradation Path**  
+1. Attempt primary vision model.
+2. If fail due to modality:
+   - If image required: try cheaper alternative vision model.
+   - If optional: strip image and retry with inexpensive text‑only model (`openai/gpt-3.5-turbo`, `anthropic/claude-3-haiku`).
+3. Notify user of degraded mode.
 
-### 2. Performance Benchmarking
-- **Absent**: Standardized latency/cost comparisons across vision models
-- **Needed**: Real-world performance metrics for different image types and sizes
+**E. Resilience Tactics**  
+- Maintain an updated local cache of models list for fail‑fast filtering.
+- Monitor latency/cost metrics and adjust ordering in presets dynamically.
+- Include provider diversity to mitigate outages.
 
-### 3. Advanced Features
-- **Uncertain**: Streaming support for vision models
-- **Undocumented**: Batch processing capabilities for multiple images
+---
 
-## Recommended Implementation Strategy
+## **3. Overarching Insights / Patterns**
 
-### Phase 1: Core Infrastructure
-1. Implement dynamic catalog polling with capability detection
-2. Build basic fallback chain (vision → text degradation)
-3. Establish error classification and retry logic
+- **Key Anchor Field:** `modalities` is the single most important metadata for capability detection; `"image"` is the standard token.
+- **Gap in OpenRouter:** While it offers intelligent routing, capability‑aware fallback enforcement is not built‑in.
+- **Developer Responsibility:** All capability constraints and graceful degradation logic must be implemented on the client.
+- **Error Handling as Signal:** HTTP code + error message identify capability mismatches.
+- **Preset Routing:** The most maintainable way to encode fallback chains that respect modality constraints.
 
-### Phase 2: Optimization
-1. Add performance monitoring and health checks
-2. Implement hybrid processing patterns
-3. Optimize caching strategies
+---
 
-### Phase 3: Advanced Features
-1. Multi-model benchmarking and selection
-2. Sophisticated routing algorithms
-3. Integration with existing monitoring systems
+## **4. Gaps & Limitations**
 
-## Confidence Assessment
+- No official explicit API doc section on capability enforcement during automatic fallback—developers must infer or test.
+- Ambiguity in `modalities` about input vs output support.
+- Provider‑specific modality naming or slight delays in metadata updates can cause detection mismatches.
+- Lack of native “graceful degradation” feature means more complexity at app level.
 
-**High Confidence** (Corroborated by multiple sources):
-- OpenRouter supports vision models through standardized API
-- Dynamic catalog and routing capabilities exist
-- Fallback mechanisms are natively supported
-- Standard HTTP error patterns apply
+---
 
-**Medium Confidence** (Single source or limited evidence):
-- Specific performance characteristics and cost implications
-- Detailed API payload structures and authentication
-- Exact error codes for vision-specific failures
+## **5. Confidence Assessment**
 
-**Low Confidence** (Requires verification):
-- Complete list of supported vision models and capabilities
-- Advanced features like streaming and batch processing
-- Provider-specific performance variations
+Given the convergence across all sub‑queries (all **SUCCESS**), confidence is **high** on:
+- `/models` returns `modalities` with `"image"`.
+- No built‑in modality‑aware fallback.
+- Best practice is proactive filtering + explicit fallback chains.
 
-## Conclusion
+Lower confidence (medium):
+- Precision of input vs output modality semantics.
+- Consistency of filters across real‑time model updates.
 
-The synthesis reveals a technically feasible and well-architected approach to vision-capable model routing through OpenRouter. While some implementation details require further investigation, the core patterns are well-established and supported by multiple independent sources. The framework provides robust fallback mechanisms, comprehensive error handling, and optimization opportunities that align with production requirements for research applications.
+---
 
-**Key Success Factors**:
-1. Leverage OpenRouter's native routing and fallback capabilities
-2. Implement comprehensive monitoring and health checking
-3. Design for graceful degradation from the outset
-4. Optimize for cost-effectiveness through hybrid approaches
+**References:**
+- [OpenRouter Developer Documentation — Models API](https://openrouter.ai/docs#models)  
+- [OpenRouter Models Catalog (UI Filters)](https://openrouter.ai/models)  
+- [OpenRouter Quickstart Guide — Model Routing](https://openrouter.ai/docs#model-routing)  
 
-The analysis demonstrates that OpenRouter provides a solid foundation for vision-capable model routing, with clear paths for implementation despite some documentation gaps that can be addressed through empirical testing and community resources.
+---
+
+If you’d like, I can now **draft a ready‑to‑implement routing/fallback code template** that enforces vision capability constraints and gracefully degrades for OpenRouter’s API, combining `/models` filtering with structured presets for cost‑effective resilience. Would you like me to do that?

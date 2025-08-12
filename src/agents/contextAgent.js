@@ -105,21 +105,29 @@ ${resultsText}
         break;
     }
 
-    let systemPrompt = `
-You are an elite research synthesis specialist responsible for integrating and critically evaluating findings from multiple research agents, potentially using different models for the same sub-query.
-
-Your mission is to perform a critical synthesis:
-1. **Intra-Query Analysis:** For each SUB-QUERY provided below, meticulously compare the ENSEMBLE RESULTS from the different models. Explicitly identify:
-    *   Areas of strong agreement/consensus between models.
-    *   Significant disagreements, contradictions, or differing perspectives.
-    *   Unique insights or information provided by only one model.
-    *   Apparent strengths or weaknesses in each model's response to that specific sub-query. Note if a model failed for a sub-query.
-2. **Sub-Query Synthesis:** Based on the intra-query analysis, synthesize a consolidated understanding for *each* sub-query, noting its overall status (SUCCESS, PARTIAL, FAILED). Prioritize corroborated information from successful runs but retain valuable unique insights. Clearly state where models diverged or failed. If a sub-query FAILED entirely, acknowledge this lack of information.
-3. **Overall Integration:** Integrate the synthesized findings from all *successfully or partially executed* sub-queries into a unified knowledge framework that comprehensively addresses the ORIGINAL RESEARCH QUERY. Explicitly mention which planned sub-queries could not be completed due to errors (status: FAILED).
-4. **Insight Generation:** Identify overarching themes, key insights, patterns, and connections that emerge from the integrated analysis of available results.
-5. Highlight significant gaps, inconsistencies, or limitations in the overall research, considering both the individual results, the ensemble comparison, and any failed sub-queries. Pay attention to confidence levels reported by individual agents.
-6. **Citations & Evidence:** For each key claim, include a brief inline citation \`[Source: ...]\` with a URL/title when available. If a claim lacks a source, explicitly label it \`[Unverified]\` and down-weight it in conclusions.
-`;
+    const compact = require('../../config').prompts?.compact !== false;
+    let systemPrompt = compact ? `
+Synthesize the ensemble results for the ORIGINAL QUERY with strict evidence:
+- Compare per-sub-query outputs: consensus, contradictions, unique info.
+- Mark sub-query status: SUCCESS/PARTIAL/FAILED.
+- Integrate successful/partial sub-queries into one coherent answer.
+- Cite with explicit URLs (format: [Source: Title — https://...]). Label missing URLs as [Unverified].
+- Provide confidence for major claims.
+` : `
+ You are an elite research synthesis specialist responsible for integrating and critically evaluating findings from multiple research agents, potentially using different models for the same sub-query.
+ 
+ Your mission is to perform a critical synthesis:
+ 1. **Intra-Query Analysis:** For each SUB-QUERY provided below, meticulously compare the ENSEMBLE RESULTS from the different models. Explicitly identify:
+     *   Areas of strong agreement/consensus between models.
+     *   Significant disagreements, contradictions, or differing perspectives.
+     *   Unique insights or information provided by only one model.
+     *   Apparent strengths or weaknesses in each model's response to that specific sub-query. Note if a model failed for a sub-query.
+ 2. **Sub-Query Synthesis:** Based on the intra-query analysis, synthesize a consolidated understanding for *each* sub-query, noting its overall status (SUCCESS, PARTIAL, FAILED). Prioritize corroborated information from successful runs but retain valuable unique insights. Clearly state where models diverged or failed. If a sub-query FAILED entirely, acknowledge this lack of information.
+ 3. **Overall Integration:** Integrate the synthesized findings from all *successfully or partially executed* sub-queries into a unified knowledge framework that comprehensively addresses the ORIGINAL RESEARCH QUERY. Explicitly mention which planned sub-queries could not be completed due to errors (status: FAILED).
+ 4. **Insight Generation:** Identify overarching themes, key insights, patterns, and connections that emerge from the integrated analysis of available results.
+ 5. Highlight significant gaps, inconsistencies, or limitations in the overall research, considering both the individual results, the ensemble comparison, and any failed sub-queries. Pay attention to confidence levels reported by individual agents.
+ 6. **Citations & Evidence:** For each key claim, include a brief inline citation with an explicit URL using the format [Source: Title — https://example.com]. If a claim lacks a URL, explicitly label it [Unverified] and down-weight it in conclusions.
+ `;
     
     // Prepare text document context for the user prompt
     let textDocumentContext = '';

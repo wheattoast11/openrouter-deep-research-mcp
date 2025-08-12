@@ -237,6 +237,37 @@ async function initDB() {
     `);
     process.stderr.write(`[${new Date().toISOString()}] PGLite reports table created or verified\n`); // Use stderr
 
+    // Optional: BM25-style inverted index tables (enabled via config.indexer.enabled)
+    if (config.indexer?.enabled) {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS index_documents (
+          id SERIAL PRIMARY KEY,
+          source_type TEXT NOT NULL, -- 'report' | 'url' | 'doc'
+          source_id TEXT NOT NULL,   -- report id or URL or custom id
+          title TEXT,
+          content TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS index_terms (
+          term TEXT PRIMARY KEY,
+          df INTEGER DEFAULT 0
+        );
+      `);
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS index_postings (
+          term TEXT NOT NULL,
+          doc_id INTEGER NOT NULL REFERENCES index_documents(id) ON DELETE CASCADE,
+          tf INTEGER NOT NULL,
+          PRIMARY KEY (term, doc_id)
+        );
+      `);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_postings_term ON index_postings(term);`);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_postings_doc ON index_postings(doc_id);`);
+      process.stderr.write(`[${new Date().toISOString()}] BM25 index tables created or verified\n`);
+    }
+
     // Create indexes for better performance
     await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_original_query ON reports (original_query);`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports (created_at DESC);`);
@@ -287,6 +318,112 @@ async function initDB() {
       return false;
     }
   }
+}
+
+// --- Simple tokenizer and BM25 helpers ---
+function tokenize(text) {
+  const stop = new Set((config.indexer?.stopwords || []).map(s => s.toLowerCase()));
+  return String(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(t => t && !stop.has(t));
+}
+
+async function indexDocument({ sourceType, sourceId, title, content }) {
+  if (!config.indexer?.enabled) return null;
+  if (!content) return null;
+  const truncated = content.slice(0, config.indexer.maxDocLength || 8000);
+  return executeWithRetry(async () => {
+    const ins = await db.query(
+      `INSERT INTO index_documents (source_type, source_id, title, content) VALUES ($1,$2,$3,$4) RETURNING id;`,
+      [sourceType, sourceId, title || null, truncated]
+    );
+    const docId = ins.rows[0].id;
+    const terms = tokenize(`${title || ''} ${truncated}`);
+    const tfMap = new Map();
+    for (const term of terms) tfMap.set(term, (tfMap.get(term) || 0) + 1);
+    for (const [term, tf] of tfMap.entries()) {
+      await db.query(`INSERT INTO index_terms (term, df) VALUES ($1, 1) ON CONFLICT (term) DO UPDATE SET df = index_terms.df + 1;`, [term]);
+      await db.query(`INSERT INTO index_postings (term, doc_id, tf) VALUES ($1,$2,$3) ON CONFLICT (term, doc_id) DO UPDATE SET tf = EXCLUDED.tf;`, [term, docId, tf]);
+    }
+    return docId;
+  }, 'indexDocument', null);
+}
+
+async function searchHybrid(queryText, limit = 10) {
+  const weights = config.indexer?.weights || { bm25: 0.7, vector: 0.3 };
+  const terms = tokenize(queryText);
+  if (terms.length === 0) return [];
+  // BM25-like scoring (simplified) using SQL aggregates
+  const placeholders = terms.map((_, i) => `$${i + 1}`).join(',');
+  const bm25Rows = await executeWithRetry(async () => {
+    const res = await db.query(
+      `WITH term_stats AS (
+         SELECT term, df FROM index_terms WHERE term IN (${placeholders})
+       ),
+       scores AS (
+         SELECT p.doc_id,
+                SUM( ( (LOG((SELECT COUNT(*) FROM index_documents)::float) - LOG(GREATEST(ts.df,1))) ) * p.tf ) AS score
+         FROM index_postings p
+         JOIN term_stats ts ON ts.term = p.term
+         WHERE p.term IN (${placeholders})
+         GROUP BY p.doc_id
+       )
+       SELECT d.id, d.source_type, d.source_id, d.title, d.content, s.score
+       FROM scores s JOIN index_documents d ON d.id = s.doc_id
+       ORDER BY s.score DESC
+       LIMIT ${limit}
+      `,
+      terms
+    );
+    return res.rows;
+  }, 'searchBM25', []);
+
+  // Optional vector rerank: use query embedding vs. report embeddings when source_type='report'
+  let reranked = bm25Rows;
+  if (weights.vector > 0 && isEmbedderReady && bm25Rows.length > 0) {
+    const qEmb = await generateEmbedding(queryText);
+    if (qEmb) {
+      const qVec = formatVectorForPgLite(qEmb);
+      // Get vector similarity where possible by joining to reports table via source_id
+      const ids = bm25Rows.filter(r => r.source_type === 'report').map(r => Number(r.source_id)).filter(n => !Number.isNaN(n));
+      let vecScores = new Map();
+      if (ids.length > 0) {
+        const ph = ids.map((_, i) => `$${i + 1}`).join(',');
+        const rows = await executeWithRetry(async () => {
+          const r = await db.query(
+            `SELECT id, 1 - (query_embedding <=> $${ids.length + 1}::vector) AS sim
+             FROM reports WHERE id IN (${ph}) AND query_embedding IS NOT NULL`,
+            [...ids, qVec]
+          );
+          return r.rows;
+        }, 'vectorRerankLookup', []);
+        for (const row of rows) vecScores.set(row.id, Number(row.sim));
+      }
+      reranked = bm25Rows.map(r => {
+        const vs = r.source_type === 'report' ? (vecScores.get(Number(r.source_id)) || 0) : 0;
+        const hybrid = weights.bm25 * Number(r.score || 0) + weights.vector * vs;
+        return { ...r, hybridScore: hybrid, vectorScore: vs };
+      }).sort((a, b) => b.hybridScore - a.hybridScore);
+    }
+  }
+  return reranked.slice(0, limit);
+}
+
+async function indexExistingReports(limit = 1000) {
+  if (!config.indexer?.enabled) return 0;
+  const rows = await executeWithRetry(async () => {
+    const r = await db.query(`SELECT id, original_query, final_report, created_at FROM reports ORDER BY id DESC LIMIT $1;`, [limit]);
+    return r.rows;
+  }, 'loadReportsForIndex', []);
+  let count = 0;
+  for (const row of rows) {
+    const title = row.original_query?.slice(0, 120) || `Report ${row.id}`;
+    const ok = await indexDocument({ sourceType: 'report', sourceId: String(row.id), title, content: row.final_report || '' });
+    if (ok) count++;
+  }
+  return count;
 }
 
 /**
@@ -595,6 +732,9 @@ async function listRecentReports(limit = 10, queryFilter = null) {
 (async () => {
   try {
     await initDB();
+    if (config.indexer?.enabled && config.indexer.autoIndexReports) {
+      try { const n = await indexExistingReports(500); process.stderr.write(`[${new Date().toISOString()}] Indexed existing reports: ${n}\n`); } catch (e) {}
+    }
   } catch (dbInitError) {
     console.error(`[${new Date().toISOString()}] Critical error during initial DB connection:`, dbInitError);
     // Don't exit - allow operation without database if necessary
@@ -614,7 +754,11 @@ module.exports = {
   getDbPathInfo: () => dbPathInfo,
   executeQuery, // Export the new function
   reindexVectors,
-  generateEmbedding
+  generateEmbedding,
+  // Indexer API
+  indexDocument,
+  searchHybrid,
+  indexExistingReports
 };
 
 // Function to retrieve a single report by its ID

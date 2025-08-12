@@ -8,6 +8,7 @@ const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
 class PlanningAgent {
   constructor() {
     this.model = config.models.planning;
+    this.candidates = Array.isArray(config.models.planningCandidates) ? config.models.planningCandidates : [config.models.planning];
     this.classificationModel = config.models.classification; // Use classification model here too
     // AIMD controller state
     this.currentConcurrency = Math.max(1, Number(process.env.PARALLELISM) || 4);
@@ -141,11 +142,24 @@ Refinement Guidelines:
     console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Requesting ${requestType} for query "${query.substring(0, 50)}..."`);
 
     try {
-      // Pass requestId to openRouterClient if it supports it, otherwise log here
-      const response = await openRouterClient.chatCompletion(this.model, messages, {
-        temperature: previousResults ? 0.5 : 0.7, // Slightly lower temp for refinement
-        max_tokens: 2000
-      });
+      // Try primary planning model, then fall back through candidates
+      let response;
+      let lastErr;
+      const lineup = [this.model, ...this.candidates.filter(m => m !== this.model)];
+      for (const m of lineup) {
+        try {
+          response = await openRouterClient.chatCompletion(m, messages, {
+            temperature: previousResults ? 0.5 : 0.7, // Slightly lower temp for refinement
+            max_tokens: 2000
+          });
+          this.model = m; // stick to a working model
+          break;
+        } catch (e) {
+          lastErr = e;
+          this.recordFailure();
+        }
+      }
+      if (!response) throw lastErr || new Error('No planning model succeeded');
 
       const planResult = response.choices[0].message.content;
       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Successfully generated ${requestType}. Result: ${planResult.substring(0, 100)}...`);
@@ -188,15 +202,15 @@ ${pastReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateString()
 
 
     let basePrompt = `
-You are a research planning agent specialized in breaking down complex queries into well-structured components. The primary domain of this query is classified as: ${domain}.
-${knowledgeBaseContext}
-${documentContextInstruction}
-
-First, verify the query's assumptions (dates, entities, definitions). If assumptions are suspect, include a sub-query to validate them before deeper analysis.
-Prefer primary sources (official specs, docs, release notes) over tertiary commentary.
-For each sub-query, plan where to look (official docs, reputable blogs, academic sources) and what to extract (dates, versions, metrics, limitations).
-Require citations in the final synthesis: each key claim must reference a source.
-`;
+ You are a research planning agent specialized in breaking down complex queries into well-structured components. The primary domain of this query is classified as: ${domain}.
+ ${knowledgeBaseContext}
+ ${documentContextInstruction}
+ 
+ First, verify the query's assumptions (dates, entities, definitions). If assumptions are suspect, include a sub-query to validate them before deeper analysis.
+ Prefer primary sources (official specs, docs, release notes) over tertiary commentary.
+ For each sub-query, plan where to look (official docs, reputable blogs, academic sources) and what to extract (dates, versions, metrics, limitations).
+ Require explicit citations with URLs in the final synthesis: each key claim must reference a source with an inline URL (e.g., [Source: Title — https://...]). Claims without URLs are marked [Unverified] and down-weighted in conclusions.
+ `;
 
     let specificInstructions = '';
     let dimensions = `Consider standard dimensions like:

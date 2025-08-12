@@ -24,6 +24,10 @@ const {
   reindexVectorsSchema,
   searchWebSchema,
   fetchUrlSchema,
+  indexTextsSchema,
+  indexUrlSchema,
+  searchIndexSchema,
+  indexStatusSchema,
   
   // Functions
   conductResearch,
@@ -41,7 +45,11 @@ const {
   dbHealth,
   reindexVectorsTool,
   searchWeb,
-  fetchUrl
+  fetchUrl,
+  index_texts,
+  index_url,
+  search_index,
+  index_status
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 const cors = require('cors');
@@ -51,6 +59,43 @@ const server = new McpServer({
   name: config.server.name,
   version: config.server.version
 });
+
+// Optional: register prompts and resources when enabled
+if (config.mcp?.features?.prompts && typeof server.prompt === 'function') {
+  server.prompt('planning_prompt', {
+    description: 'Generate a research plan XML for a query; outputs <agent_n> tags only.',
+    arguments: { query: { type: 'string' } }
+  }, async ({ query }) => {
+    const p = require('../agents/planningAgent');
+    const result = await p.planResearch(query, {}, null, 'prompt');
+    return { messages: [{ role: 'assistant', content: result }] };
+  });
+
+  server.prompt('synthesis_prompt', {
+    description: 'Synthesize ensemble results into a report with explicit URL citations.',
+    arguments: { query: { type: 'string' }, results: { type: 'string' } }
+  }, async ({ query, results }) => {
+    const c = require('../agents/contextAgent');
+    let full = '';
+    for await (const ch of c.contextualizeResultsStream(query, JSON.parse(results), [], { includeSources: true }, 'prompt')) {
+      if (ch.content) full += ch.content;
+    }
+    return { messages: [{ role: 'assistant', content: full }] };
+  });
+}
+
+if (config.mcp?.features?.resources && typeof server.resource === 'function') {
+  server.resource('mcp_spec_links', {
+    description: 'Canonical MCP specification links and core resources',
+    mimeType: 'application/json'
+  }, async () => ({
+    data: JSON.stringify({
+      spec: 'https://github.com/modelcontextprotocol/specification',
+      jsonrpc: 'https://www.jsonrpc.org/specification',
+      org: 'https://github.com/modelcontextprotocol'
+    })
+  }));
+}
 
 // Register tools
    // The second argument to the tool handler is the exchange context from the SDK
@@ -480,7 +525,53 @@ server.tool(
   }
 );
 
+// Optional Indexer tools
+if (require('../../config').indexer?.enabled) {
+  server.tool(
+    "index_texts",
+    indexTextsSchema.shape,
+    async (params, exchange) => {
+      const start = Date.now();
+      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+      try { const text = await index_texts(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
+      catch (e) { return { content: [{ type: 'text', text: `Error index_texts: ${e.message}` }], isError: true }; }
+    }
+  );
 
+  server.tool(
+    "index_url",
+    indexUrlSchema.shape,
+    async (params, exchange) => {
+      const start = Date.now();
+      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+      try { const text = await index_url(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
+      catch (e) { return { content: [{ type: 'text', text: `Error index_url: ${e.message}` }], isError: true }; }
+    }
+  );
+
+  server.tool(
+    "search_index",
+    searchIndexSchema.shape,
+    async (params, exchange) => {
+      const start = Date.now();
+      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+      try { const text = await search_index(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
+      catch (e) { return { content: [{ type: 'text', text: `Error search_index: ${e.message}` }], isError: true }; }
+    }
+  );
+
+  server.tool(
+    "index_status",
+    indexStatusSchema.shape,
+    async (params, exchange) => {
+      const start = Date.now();
+      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
+      try { const text = await index_status(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
+      catch (e) { return { content: [{ type: 'text', text: `Error index_status: ${e.message}` }], isError: true }; }
+    }
+  );
+}
+ 
  // Set up transports based on environment
  const setupTransports = async () => {
   let lastSseTransport = null; // Variable to hold the last SSE transport

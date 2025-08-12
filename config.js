@@ -16,7 +16,10 @@ const config = {
   },
   models: {
     // Allow overriding planning model; provide a generally-available safe default
-    planning: process.env.PLANNING_MODEL || "anthropic/claude-sonnet-4", // Model for planning and synthesis
+    planning: process.env.PLANNING_MODEL || "openai/gpt-5-chat", // Default planning/synthesis model
+    planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4")
+      .split(',').map(s=>s.trim()).filter(Boolean),
+    useDynamicCatalog: process.env.USE_DYNAMIC_CATALOG === 'true',
     // Define models with domain strengths
     // Accept either JSON array of objects or CSV of model ids in env vars
     highCost: process.env.HIGH_COST_MODELS ? 
@@ -28,10 +31,9 @@ const config = {
         // CSV fallback -> wrap ids as objects without explicit domains
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.HIGH_COST_MODELS) : [
-        { name: "perplexity/sonar-deep-research", domains: ["search", "general"] },
-        { name: "perplexity/sonar-pro", domains: ["search", "general"] },
-        { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] },
-        { name: "openai/gpt-5", domains: ["general", "technical", "reasoning", "creative"] }
+        { name: "openai/gpt-5-chat", domains: ["reasoning", "technical", "general"] },
+        { name: "google/gemini-2.5-pro", domains: ["reasoning", "technical", "general"] },
+        { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] }
       ],
     lowCost: process.env.LOW_COST_MODELS ? 
       (function parseLowCost(val){
@@ -41,9 +43,9 @@ const config = {
         } catch(_) {}
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.LOW_COST_MODELS) : [
-        { name: "perplexity/sonar-reasoning", domains: ["search", "reasoning", "general"] },
-        { name: "openai/gpt-5-mini", domains: ["search", "general", "reasoning"] },
-        { name: "google/gemini-2.0-flash-001", domains: ["general", "creative"] }
+        { name: "openai/gpt-5-mini", domains: ["general", "reasoning", "search"] },
+        { name: "google/gemini-2.5-flash", domains: ["general", "creative", "technical"] },
+        { name: "google/gemini-2.5-flash-lite", domains: ["general", "creative"] }
       ],
     // Define a tier for potentially simpler tasks (adjust models as needed)
     veryLowCost: process.env.VERY_LOW_COST_MODELS ?
@@ -54,10 +56,10 @@ const config = {
          } catch(_) {}
          return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
        })(process.env.VERY_LOW_COST_MODELS) : [
-         { name: "openai/gpt-5-nano", domains: ["general", "reasoning", "creative"] },
+         { name: "openai/gpt-5-nano", domains: ["general", "reasoning", "creative"] }
        ],
      // Add a model specifically for classification tasks if needed, or reuse planning model
-     classification: process.env.CLASSIFICATION_MODEL || "anthropic/claude-sonnet-4",
+     classification: process.env.CLASSIFICATION_MODEL || "openai/gpt-5-mini",
      // Default ensemble size for research agent model ensembles
      ensembleSize: parseInt(process.env.ENSEMBLE_SIZE, 10) || 2,
      // Max research iterations (initial + refinements)
@@ -77,8 +79,45 @@ const config = {
     retryDelayBaseMs: parseInt(process.env.PGLITE_RETRY_DELAY_BASE_MS, 10) || 200, // Base delay in milliseconds
     allowInMemoryFallback: process.env.PGLITE_ALLOW_IN_MEMORY_FALLBACK === 'false' ? false : true // Default to true
   },
+  // Local indexing/search configuration (opt-in by default)
+  indexer: {
+    enabled: process.env.INDEXER_ENABLED === 'true',
+    autoIndexReports: process.env.INDEXER_AUTO_INDEX_REPORTS === 'true',
+    autoIndexFetchedContent: process.env.INDEXER_AUTO_INDEX_FETCHED === 'true',
+    embedDocs: process.env.INDEXER_EMBED_DOCS !== 'false',
+    maxDocLength: parseInt(process.env.INDEXER_MAX_DOC_LENGTH, 10) || 8000,
+    bm25: {
+      k1: Number(process.env.INDEXER_BM25_K1) || 1.2,
+      b: Number(process.env.INDEXER_BM25_B) || 0.75
+    },
+    weights: {
+      bm25: Number(process.env.INDEXER_WEIGHT_BM25) || 0.7,
+      vector: Number(process.env.INDEXER_WEIGHT_VECTOR) || 0.3
+    },
+    stopwords: (process.env.INDEXER_STOPWORDS || '').split(',').map(s => s.trim()).filter(Boolean)
+  },
   // Configuration for where to save full research reports
   reportOutputPath: process.env.REPORT_OUTPUT_PATH || './research_outputs/'
+};
+
+// MCP feature toggles (opt-in by default; can be disabled via env)
+config.mcp = {
+  features: {
+    prompts: process.env.MCP_ENABLE_PROMPTS === 'false' ? false : true,
+    resources: process.env.MCP_ENABLE_RESOURCES === 'false' ? false : true
+  }
+};
+
+// Prompt strategy configuration
+config.prompts = {
+  compact: process.env.PROMPTS_COMPACT === 'false' ? false : true, // default compact prompts on
+  requireUrls: process.env.PROMPTS_REQUIRE_URLS === 'false' ? false : true,
+  confidenceScoring: process.env.PROMPTS_CONFIDENCE === 'false' ? false : true
+};
+
+// Simple tool aliasing (short params) for minimal token overhead
+config.simpleTools = {
+  enabled: process.env.SIMPLE_TOOLS === 'false' ? false : true
 };
 
 module.exports = config;

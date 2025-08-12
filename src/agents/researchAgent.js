@@ -81,23 +81,24 @@ class ResearchAgent {
   async getModel(costPreference, agentIndex, domain = 'general', complexity = 'moderate', requestId = 'unknown-req') {
     let selectedModel;
     let reason = '';
-    // Try dynamic catalog first
-    try {
-      const catalog = await modelCatalog.getCatalog();
-      if (Array.isArray(catalog) && catalog.length > 0) {
-        // Prefer 2025 releases when available
-        const preferred = modelCatalog.getPreferred2025Models();
-        const domainRegex = new RegExp(domain, 'i');
-        const filtered = (preferred.length > 0 ? preferred : catalog)
-          .filter(m => domainRegex.test(m.label) || domainRegex.test(m.id) || true);
-        if (filtered.length > 0) {
-          const idx = Math.abs(agentIndex) % filtered.length;
-          selectedModel = filtered[idx].id;
-          reason = `dynamic catalog preference (2025 priority), domain heuristic: ${domain}`;
+    // Try dynamic catalog first if enabled
+    if (config.models.useDynamicCatalog) {
+      try {
+        const catalog = await modelCatalog.getCatalog();
+        if (Array.isArray(catalog) && catalog.length > 0) {
+          const preferred = modelCatalog.getPreferred2025Models();
+          const domainRegex = new RegExp(domain, 'i');
+          const filtered = (preferred.length > 0 ? preferred : catalog)
+            .filter(m => domainRegex.test(m.label) || domainRegex.test(m.id) || true);
+          if (filtered.length > 0) {
+            const idx = Math.abs(agentIndex) % filtered.length;
+            selectedModel = filtered[idx].id;
+            reason = `dynamic catalog preference (2025 priority), domain heuristic: ${domain}`;
+          }
         }
+      } catch (e) {
+        console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Dynamic catalog unavailable, using static model lists.`);
       }
-    } catch (e) {
-      console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Dynamic catalog unavailable, using static model lists.`);
     }
 
     // Fallbacks to configured tiers
@@ -120,8 +121,8 @@ class ResearchAgent {
          const availableModels = costPreference === 'high' ? this.highCostModels : this.lowCostModels;
          if (availableModels.length === 0) {
             console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: CRITICAL ERROR - No models available for cost preference "${costPreference}".`);
-            // Fallback to a default model or throw error - using classification model as last resort
-            return config.models.classification || "anthropic/claude-3-haiku"; 
+            // Fallback to planning model as last resort
+            return config.models.planning || "openai/gpt-5-chat"; 
          }
          const domainMatchingModels = availableModels.filter(m => m.domains.includes(domain));
          if (domainMatchingModels.length > 0) {
@@ -248,25 +249,25 @@ class ResearchAgent {
 
 
      const systemPrompt = `
-You are Research Agent ${agentId} using model ${model}, an elite AI research specialist tasked with providing authoritative information on specific topics.
-${textDocumentContextSnippet} 
-${structuredDataContextSnippet}
-Your mission is to thoroughly investigate the assigned research question and deliver a comprehensive, evidence-based analysis.
-
-Audience level: ${audienceLevel} (adjust technical depth accordingly)
-${includeSources ? 'Include sources: When available, cite credible sources for key claims using [SOURCE: description] format' : ''}
-
-Structure your response with these components:
-1. KEY FINDINGS: Summarize the most important discoveries (2-3 sentences)
-2. DETAILED ANALYSIS: Present organized findings with suitable depth
-3. EVIDENCE & CONTEXT: Support claims with empirical evidence and proper context
-4. LIMITATIONS: Acknowledge boundaries of current knowledge or conflicting viewpoints
-5. CONFIDENCE ASSESSMENT: For each significant claim, indicate confidence level (High/Medium/Low) with brief justification
-
-Prioritize recent developments, verified information, and multiple perspectives when relevant.
-Avoid speculation and clearly distinguish between facts and expert opinions.
-Be precise, comprehensive, and intellectually rigorous in your analysis.
-`;
+ You are Research Agent ${agentId} using model ${model}, an elite AI research specialist tasked with providing authoritative information on specific topics.
+ ${textDocumentContextSnippet} 
+ ${structuredDataContextSnippet}
+ Your mission is to thoroughly investigate the assigned research question and deliver a comprehensive, evidence-based analysis.
+ 
+ Audience level: ${audienceLevel} (adjust technical depth accordingly)
+ ${includeSources ? 'Citations: For every key claim, include an inline citation with an explicit URL using the format [Source: Title — https://...]. If a claim cannot be sourced with a URL, label it [Unverified] and de-emphasize it. Never invent repository names, package names, IDs, or registry URLs. If you cannot find an exact official URL (e.g., GitHub org repo path, docs page), state [Unverified] rather than guessing.' : ''}
+ 
+ Structure your response with these components:
+ 1. KEY FINDINGS: Summarize the most important discoveries (2-3 sentences)
+ 2. DETAILED ANALYSIS: Present organized findings with suitable depth
+ 3. EVIDENCE & CONTEXT: Support claims with empirical evidence and proper context
+ 4. LIMITATIONS: Acknowledge boundaries of current knowledge or conflicting viewpoints
+ 5. CONFIDENCE ASSESSMENT: For each significant claim, indicate confidence level (High/Medium/Low) with brief justification
+ 
+ Prioritize recent developments, verified information, and multiple perspectives when relevant.
+ Avoid speculation and clearly distinguish between facts and expert opinions.
+ Be precise, comprehensive, and intellectually rigorous in your analysis.
+ `;
 
     const messages = [
       { role: 'system', content: systemPrompt },

@@ -9,9 +9,10 @@ async function safeFetchUrl(url, maxBytes = 200000) {
   try {
     const res = await tools.fetchUrl({ url, maxBytes });
     const obj = JSON.parse(res);
-    const name = obj.title ? `${obj.title} (${url})` : url;
-    const content = obj.textSnippet || obj.snippet || obj.text || JSON.stringify(obj).slice(0, 2000);
-    return { name, content };
+    const title = obj.title || 'Untitled';
+    // Embed URL prominently to encourage explicit citation
+    const content = `Title: ${title}\nSource URL: ${url}\n\nSnippet:\n${obj.textSnippet || obj.snippet || obj.text || JSON.stringify(obj).slice(0, 2000)}`;
+    return { name: `${title}`, content };
   } catch (e) {
     console.error('fetchUrl failed for', url, e.message);
     return null;
@@ -38,7 +39,7 @@ async function generateAll() {
   const examples = [
     {
       name: 'MCP status (July 2025) — grounded',
-      query: 'Executive briefing on Model Context Protocol status and adoption as of July 2025. Focus on origins, JSON-RPC transport, tools/resources/prompts, stdio vs HTTP(SSE), and key ecosystem links. Avoid speculation; cite primary sources.',
+      query: 'Executive briefing on Model Context Protocol status and adoption as of July 2025. Focus on origins, JSON-RPC transport, tools/resources/prompts, stdio vs HTTP(SSE)/Streamable HTTP, and key ecosystem links. Avoid speculation; cite primary sources with explicit URLs.',
       costPreference: 'low',
       urls: [
         'https://github.com/modelcontextprotocol/specification',
@@ -48,7 +49,7 @@ async function generateAll() {
     },
     {
       name: 'MCP architecture deep-dive',
-      query: 'Technical deep-dive into MCP architecture: message schema, JSON-RPC usage, tool invocation, resources, prompts, transports (stdio, streamable HTTP/SSE). Include example flows and cite spec.',
+      query: 'Technical deep-dive into MCP architecture: message schema, JSON-RPC usage, tool invocation, resources, prompts, transports (stdio, streamable HTTP). Include example flows and cite spec with explicit URLs.',
       costPreference: 'low',
       urls: [
         'https://github.com/modelcontextprotocol/specification',
@@ -57,15 +58,16 @@ async function generateAll() {
     },
     {
       name: 'OpenRouter usage in research agents',
-      query: 'How to use OpenRouter chat completions and streaming for research orchestration. Include model discovery, streaming parsing, and auth headers. Cite OpenRouter docs.',
+      query: 'How to use OpenRouter chat completions and streaming for research orchestration. Include model discovery, streaming parsing, and auth headers. Cite OpenRouter docs with explicit URLs.',
       costPreference: 'low',
       urls: [
-        'https://openrouter.ai/docs'
+        'https://openrouter.ai/docs',
+        'https://openrouter.ai/models'
       ]
     },
     {
       name: 'Local KB with PGlite + pgvector',
-      query: 'Guide to building a local knowledge base for research agents using PGlite with pgvector: schema, vector index, cosine similarity, and fallbacks. Include code-level considerations. Cite docs.',
+      query: 'Guide to building a local knowledge base for research agents using PGlite with pgvector: schema, vector index, cosine similarity, and fallbacks. Include code-level considerations. Cite docs with explicit URLs.',
       costPreference: 'low',
       urls: [
         'https://electric-sql.com/docs/pglite',
@@ -74,23 +76,32 @@ async function generateAll() {
     },
     {
       name: 'Parallel orchestration patterns',
-      query: 'Best practices for bounded parallelism in multi-agent research: planning, fan-out, rate-limit friendly batching, ensemble comparison, and synthesis with citations.',
+      query: 'Best practices for bounded parallelism in multi-agent research: planning, fan-out, rate-limit friendly batching, ensemble comparison, and synthesis with citations. Include at least 3 explicit references (URLs).',
       costPreference: 'low',
-      urls: []
+      urls: [
+        'https://en.wikipedia.org/wiki/Little%27s_law',
+        'https://temporal.io/',
+        'https://airflow.apache.org/',
+        'https://opentelemetry.io/'
+      ]
     },
     {
       name: 'Vision-capable model handling',
-      query: 'Design for routing to vision-capable models for image-conditioned research; include model detection via dynamic catalog and graceful degradation if not supported. Cite official model capability pages where possible.',
+      query: 'Design for routing to vision-capable models for image-conditioned research; include model detection via dynamic catalog and graceful degradation if not supported. Cite official model capability pages and OpenRouter docs with explicit URLs.',
       costPreference: 'low',
       urls: [
-        'https://openrouter.ai/docs'
+        'https://openrouter.ai/docs',
+        'https://openrouter.ai/models'
       ]
     },
     {
       name: 'HTTP/SSE per-connection auth',
-      query: 'Patterns for per-connection API-key auth with MCP HTTP/SSE transport; security considerations and error reporting. Include practical examples and references.',
+      query: 'Patterns for MCP transport authentication with modern guidance: prefer OAuth2/JWT over API keys; security considerations and error reporting for Streamable HTTP and SSE. Include practical examples and references with explicit URLs.',
       costPreference: 'low',
-      urls: []
+      urls: [
+        'https://github.com/modelcontextprotocol/specification',
+        'https://modelcontextprotocol.io/'
+      ]
     }
   ];
 
@@ -142,11 +153,12 @@ async function generateAll() {
         }
       }
 
-      // Validate citations lightly
+      // Validate citations by counting explicit URLs
       let content = '';
       try { content = fs.readFileSync(fixedName, 'utf8'); } catch {}
-      const citationCount = (content.match(/\[Source:/g) || []).length;
-      const ok = citationCount >= 2; // simple threshold
+      const citationCount = (content.match(/https?:\/\//g) || []).length;
+      const unverifiedCount = (content.match(/\[Unverified\]/gi) || []).length;
+      const ok = citationCount >= 6 && unverifiedCount <= 2;
 
       summary.push({ idx: i + 1, name: ex.name, reportId: id, savedPath, fixedName, citations: citationCount, ok });
       console.log(`Saved ${fixedName} (citations: ${citationCount}${ok ? '' : ' – LOW'})`);

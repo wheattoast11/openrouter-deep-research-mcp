@@ -10,6 +10,13 @@ A practical MCP server that turns your LLM into a research team. It plans, fans�
   - Lightweight web helpers: quick search and page fetch for context
   - Robust streaming (SSE), per‑connection auth, clean logs
 
+## What’s new (v1.2)
+- Local hybrid indexer (BM25 + optional vector rerank) with MCP tools: `index_texts`, `index_url`, `search_index`.
+- Auto‑indexing during research: every saved report and fetched page can be indexed on the fly.
+- Prompt/resource registration (MCP): `planning_prompt`, `synthesis_prompt`, and `mcp_spec_links`.
+- Compact prompts option: minimize tokens while enforcing explicit URL citations and confidence scoring.
+- Planning model fallbacks and simplified routing per strategy.
+
 [Changelog →](docs/CHANGELOG.md)
 
 ## Quick start
@@ -32,15 +39,31 @@ ENSEMBLE_SIZE=2
 PARALLELISM=4
 
 # Models (override as needed)
-PLANNING_MODEL=anthropic/claude-sonnet-4
-HIGH_COST_MODELS=anthropic/claude-sonnet-4,openai/gpt-5,perplexity/sonar-deep-research
-LOW_COST_MODELS=openai/gpt-5-mini,google/gemini-2.0-flash-001
+PLANNING_MODEL=openai/gpt-5-chat
+PLANNING_CANDIDATES=openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4
+HIGH_COST_MODELS=openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4
+LOW_COST_MODELS=openai/gpt-5-mini,google/gemini-2.5-flash,google/gemini-2.5-flash-lite
 VERY_LOW_COST_MODELS=openai/gpt-5-nano
 
 # Storage
 PGLITE_DATA_DIR=./researchAgentDB
 PGLITE_RELAXED_DURABILITY=true
 REPORT_OUTPUT_PATH=./research_outputs/
+
+# Indexer
+INDEXER_ENABLED=true
+INDEXER_AUTO_INDEX_REPORTS=true
+INDEXER_AUTO_INDEX_FETCHED=true
+
+# MCP features
+MCP_ENABLE_PROMPTS=true
+MCP_ENABLE_RESOURCES=true
+
+# Prompt strategy
+PROMPTS_COMPACT=true
+PROMPTS_REQUIRE_URLS=true
+PROMPTS_CONFIDENCE=true
+
 ```
 
 4) Run
@@ -59,14 +82,62 @@ SERVER_API_KEY=$SERVER_API_KEY node src/server/mcpServer.js
 - DB ops: `backup_db` (tar.gz), `export_reports`, `import_reports`, `db_health`, `reindex_vectors`
 - Models: `list_models`
 - Web: `search_web`, `fetch_url`
+- Indexer (new): `index_texts`, `index_url`, `search_index`, `index_status`
 
 Notes
 - Data lives locally under `PGLITE_DATA_DIR` (default `./researchAgentDB`). Backups are tarballs in `./backups`.
 - Use `list_models` to discover current provider capabilities and ids.
 
-## Platform tips
-- Windows (PowerShell): set env with `$env:SERVER_API_KEY="..."`
-- macOS/Linux (bash/zsh): `export SERVER_API_KEY=...`
-- VS Code/Cursor MCP: point the server to `node src/server/mcpServer.js --stdio`
+## Architecture at a glance
+```mermaid
+flowchart LR
+  U[User/Client\n(Cursor MCP/stdio or HTTP/SSE)] -->|query| P(Planning Agent)
+  subgraph Fan-out
+    P -->|XML <agent_n>| R1(Research Agent n=1)
+    P --> R2(Research Agent n=2)
+    P --> Rk(Research Agent n=k)
+  end
+  R1 --> S(Synthesis)
+  R2 --> S
+  Rk --> S
+  S -->|final report+citations| U
+  R1 --> IDX[(Hybrid Index\nBM25 + vector)]
+  R2 --> IDX
+  Rk --> IDX
+  F[fetch_url/search_web] --> R1
+  F --> R2
+  F --> Rk
+```
 
-## Example Research Outputs (Auto-Generated)
+How it differs from typical “agent chains”:
+- Not just hardcoded handoffs; the plan is computed, then parallel agents search, then a synthesis step reasons over consensus, contradictions, and gaps.
+- The system indexes what it reads during research, so subsequent queries get faster/smarter.
+- Guardrails shape attention: explicit URL citations, [Unverified] labelling, and confidence scoring.
+
+## Minimal‑token prompt strategy
+- Compact mode strips preambles to essential constraints; everything else is inferred.
+- Enforced rules: explicit URL citations, no guessing IDs/URLs, confidence labels.
+- Short tool specs: use concise param names and rely on server defaults.
+
+## Common user journeys
+- “Give me an executive briefing on MCP status as of July 2025.”
+  - Server plans sub‑queries, fetches authoritative sources, synthesizes with citations.
+  - Indexed outputs make related follow‑ups faster.
+
+- “Find vision‑capable models and route images gracefully.”
+  - `/models` discovered and filtered, router template generated, fallback to text models.
+
+- “Compare orchestration patterns for bounded parallelism.”
+  - Pulls OTel/Airflow/Temporal docs, produces a MECE synthesis and code pointers.
+
+## Cursor IDE usage
+- Add this server in Cursor MCP settings pointing to `node src/server/mcpServer.js --stdio`.
+- Use the new prompts (`planning_prompt`, `synthesis_prompt`) directly in Cursor to scaffold tasks.
+
+## FAQ (quick glance)
+- How does it avoid hallucinations?
+  - Strict citation rules, [Unverified] labels, retrieval of past work, on‑the‑fly indexing.
+- Can I disable features?
+  - Yes, via env flags listed above.
+- Does it support streaming?
+  - Yes, SSE for HTTP; stdio for MCP.
