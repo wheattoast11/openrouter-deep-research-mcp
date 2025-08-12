@@ -1,7 +1,7 @@
 [![Star on GitHub](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research-mcp?style=social)](https://github.com/wheattoast11/openrouter-deep-research-mcp)
 # OpenRouter Agents MCP Server
 
-A practical MCP server that turns your LLM into a research team. It plans, fans‑out, reads, and synthesizes—then stores results in a searchable local knowledge base.
+[MAJOR UPDATE – August 12, 2025] An intelligent MCP server that orchestrates GPT‑5 / Gemini / Claude agents to research in parallel, indexing as it goes (PGlite + vectors), then synthesizes consensus with strict, URL‑backed citations.
 
 - Killer features
   - Plan → parallelize → synthesize workflow with bounded parallelism

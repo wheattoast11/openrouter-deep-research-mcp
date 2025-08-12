@@ -1,17 +1,19 @@
 flowchart LR
-  U[User/Client\n(Cursor MCP/stdio or HTTP/SSE)] -->|query| P(Planning Agent)
-  subgraph Fan-out
-    P -->|XML <agent_n>| R1(Research Agent n=1)
-    P --> R2(Research Agent n=2)
-    P --> Rk(Research Agent n=k)
+
+  U["User/Client (Cursor MCP/stdio or HTTP/SSE)"]
+  U -->|query| P[Planning Agent]
+  subgraph Fan_out
+    P -->|XML agent_n| R1[Research Agent 1]
+    P --> R2[Research Agent 2]
+    P --> Rk[Research Agent k]
   end
-  R1 --> S(Synthesis)
+  R1 --> S[Synthesis]
   R2 --> S
   Rk --> S
-  S -->|final report+citations| U
-  R1 --> IDX[(Hybrid Index\nBM25 + vector)]
+  S -->|final report + citations| U
+  R1 --> IDX[("Hybrid Index: BM25 + vector")]
   R2 --> IDX
   Rk --> IDX
-  F[search_web/fetch_url] --> R1
+  F[search_web / fetch_url] --> R1
   F --> R2
   F --> Rk
