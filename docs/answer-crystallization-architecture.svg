@@ -1,0 +1,252 @@
+<svg viewBox="0 0 1400 920" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark background -->
+  <rect width="1400" height="920" fill="#0a0a0a"/>
+  
+  <!-- ZERO System Title -->
+  <g id="zero-title" transform="translate(50, 50)">
+    <text x="0" y="0" font-family="Courier New, monospace" font-size="16" font-weight="300" fill="#888888">
+      //ZERO - Society of Minds Agent System
+    </text>
+    <rect x="0" y="5" width="60" height="0.5" fill="#444444"/>
+  </g>
+  
+  <!-- Terminals Logo -->
+  <g id="terminals-logo" transform="translate(1250, 50)">
+    <text x="0" y="0" font-family="Courier New, monospace" font-size="28" font-weight="300" fill="#ffffff" text-anchor="end">
+      terminals
+    </text>
+    <rect x="-100" y="10" width="100" height="1" fill="#333333"/>
+  </g>
+  
+  <defs>
+    <!-- Arrow marker -->
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ffffff"/>
+    </marker>
+    
+    <!-- Gradient for emphasis -->
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a1a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2a2a2a;stop-opacity:1" />
+    </linearGradient>
+    
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#333333;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1a1a;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Main Architecture Description -->
+  <text x="50" y="110" font-family="Arial, sans-serif" font-size="14" fill="#999999">
+    OBSERVABLE: A population of agents evolves through parallel exploration paths toward optimal solutions
+  </text>
+  
+  <!-- Input Query -->
+  <g id="query-input">
+    <rect x="50" y="170" width="140" height="80" rx="5" fill="none" stroke="#ffffff" stroke-width="1"/>
+    <text x="120" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#ffffff">QUERY</text>
+    <text x="120" y="220" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666666">Initial State</text>
+    <text x="120" y="235" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#444444">λ(task)</text>
+  </g>
+  
+  <!-- Agent Population Pool -->
+  <g id="agent-population">
+    <rect x="240" y="150" width="260" height="200" rx="10" fill="url(#grad1)" stroke="#333333" stroke-width="1"/>
+    <text x="370" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#ffffff">AGENT POPULATION</text>
+    <text x="370" y="195" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#666666">Parallel exploration space</text>
+    
+    <!-- Multiple agent paths -->
+    <g id="path1">
+      <circle cx="290" cy="230" r="15" fill="none" stroke="#666666" stroke-width="1"/>
+      <text x="290" y="235" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#999999">A₁</text>
+      <path d="M 305 230 Q 340 210 370 230" fill="none" stroke="#444444" stroke-width="1" stroke-dasharray="2,2"/>
+    </g>
+    
+    <g id="path2">
+      <circle cx="290" cy="270" r="15" fill="none" stroke="#666666" stroke-width="1"/>
+      <text x="290" y="275" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#999999">A₂</text>
+      <path d="M 305 270 Q 340 250 370 260" fill="none" stroke="#444444" stroke-width="1" stroke-dasharray="2,2"/>
+    </g>
+    
+    <g id="path3">
+      <circle cx="290" cy="310" r="15" fill="none" stroke="#666666" stroke-width="1" opacity="0.6"/>
+      <text x="290" y="315" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666666">Aₙ</text>
+      <path d="M 305 310 Q 340 290 370 300" fill="none" stroke="#333333" stroke-width="1" stroke-dasharray="2,2" opacity="0.6"/>
+    </g>
+    
+    <!-- Converged states -->
+    <circle cx="370" cy="240" r="20" fill="none" stroke="#888888" stroke-width="1.5"/>
+    <circle cx="370" cy="280" r="20" fill="none" stroke="#888888" stroke-width="1.5"/>
+    
+    <text x="370" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#444444">
+      Each agent explores solution space
+    </text>
+  </g>
+  
+  <!-- Evolution Engine -->
+  <g id="evolution-engine">
+    <rect x="550" y="150" width="240" height="200" rx="10" fill="none" stroke="#ffffff" stroke-width="2"/>
+    <text x="670" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#ffffff">EVOLUTION ENGINE</text>
+    <text x="670" y="195" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#666666">Selection + Mutation dynamics</text>
+    
+    <!-- Physical/Digital separation -->
+    <line x1="670" y1="210" x2="670" y2="330" stroke="#333333" stroke-width="1"/>
+    
+    <g id="physical-domain">
+      <rect x="560" y="220" width="100" height="100" rx="5" fill="#1a1a1a" stroke="#444444" stroke-width="1"/>
+      <text x="610" y="245" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#999999">PHYSICAL</text>
+      <text x="610" y="265" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#555555">Constraints</text>
+      <text x="610" y="280" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#555555">Fitness</text>
+      <text x="610" y="295" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#555555">Selection</text>
+    </g>
+    
+    <g id="digital-domain">
+      <rect x="680" y="220" width="100" height="100" rx="5" fill="#222222" stroke="#666666" stroke-width="1"/>
+      <text x="730" y="245" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#cccccc">DIGITAL</text>
+      <text x="730" y="265" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#777777">Computation</text>
+      <text x="730" y="280" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#777777">Mutation</text>
+      <text x="730" y="295" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#777777">Replication</text>
+    </g>
+  </g>
+  
+  <!-- Information Flow -->
+  <g id="information-flow">
+    <rect x="840" y="180" width="180" height="80" rx="5" fill="none" stroke="#666666" stroke-width="1"/>
+    <text x="930" y="205" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#ffffff">INFORMATION GEOMETRY</text>
+    <text x="930" y="225" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#666666">Curvature of solution space</text>
+    <text x="930" y="245" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#444444">I(θ) = -E[∂²L/∂θ²]</text>
+  </g>
+  
+  <!-- Superposition State -->
+  <g id="superposition">
+    <circle cx="930" cy="350" r="50" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-dasharray="5,5"/>
+    <text x="930" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#ffffff">|ψ⟩</text>
+    <text x="930" y="375" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#666666">Superposition</text>
+    <text x="930" y="420" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#444444">All viable paths coexist</text>
+  </g>
+  
+  <!-- Convergence -->
+  <g id="convergence">
+    <path d="M 1050 350 L 1150 350" stroke="#ffffff" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <text x="1100" y="340" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666666">Collapse</text>
+  </g>
+  
+  <!-- Final Solution -->
+  <g id="solution">
+    <rect x="1180" y="320" width="140" height="60" rx="30" fill="none" stroke="#ffffff" stroke-width="3"/>
+    <text x="1250" y="345" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#ffffff">SOLUTION</text>
+    <text x="1250" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666666">Optimal state</text>
+  </g>
+  
+  <!-- Process Flow Arrows -->
+  <path d="M 190 210 L 240 210" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <path d="M 500 250 L 550 250" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <path d="M 790 250 L 840 220" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <path d="M 930 260 L 930 300" stroke="#ffffff" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  
+  <!-- Topology optimization path -->
+  <g id="topology-path">
+    <circle cx="670" cy="430" r="35" fill="none" stroke="#888888" stroke-width="1.5"/>
+    <text x="670" y="435" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#cccccc">OPTIMIZE</text>
+    <text x="670" y="450" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666666">Topology</text>
+    <path d="M 670 350 L 670 395" stroke="#666666" stroke-width="1" marker-end="url(#arrowhead)"/>
+    <path d="M 705 430 Q 800 430 880 350" stroke="#666666" stroke-width="1" marker-end="url(#arrowhead)"/>
+  </g>
+  
+  <!-- Agent Lifecycle Visualization -->
+  <g id="lifecycle" transform="translate(100, 550)">
+    <text x="0" y="0" font-family="Arial, sans-serif" font-size="12" fill="#ffffff">AGENT LIFECYCLE</text>
+    <text x="0" y="20" font-family="Arial, sans-serif" font-size="10" fill="#666666">Observable: Agents spawn, explore, compete, and evolve through selection pressure</text>
+    
+    <line x1="0" y1="40" x2="1200" y2="40" stroke="#333333" stroke-width="1"/>
+    
+    <!-- Birth -->
+    <g transform="translate(50, 40)">
+      <circle cx="0" cy="0" r="5" fill="#333333"/>
+      <text x="0" y="25" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666666">BIRTH</text>
+      <text x="0" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#444444">Initialize</text>
+    </g>
+    
+    <!-- Exploration -->
+    <g transform="translate(250, 40)">
+      <g id="explore-visual">
+        <circle cx="0" cy="-10" r="3" fill="#555555"/>
+        <circle cx="-10" cy="5" r="3" fill="#555555"/>
+        <circle cx="10" cy="5" r="3" fill="#555555"/>
+        <path d="M 0 -10 L -10 5 M 0 -10 L 10 5 M -10 5 L 10 5" stroke="#444444" stroke-width="0.5"/>
+      </g>
+      <text x="0" y="25" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#888888">EXPLORATION</text>
+      <text x="0" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#555555">Parallel paths</text>
+    </g>
+    
+    <!-- Competition -->
+    <g transform="translate(450, 40)">
+      <circle cx="-5" cy="0" r="8" fill="none" stroke="#777777" stroke-width="1"/>
+      <circle cx="5" cy="0" r="8" fill="none" stroke="#777777" stroke-width="1"/>
+      <text x="0" y="25" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#aaaaaa">COMPETITION</text>
+      <text x="0" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666666">Selection pressure</text>
+    </g>
+    
+    <!-- Evolution -->
+    <g transform="translate(650, 40)">
+      <circle cx="0" cy="0" r="10" fill="none" stroke="#999999" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#666666"/>
+      <text x="0" y="25" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#cccccc">EVOLUTION</text>
+      <text x="0" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#777777">Mutation + Growth</text>
+    </g>
+    
+    <!-- Convergence -->
+    <g transform="translate(850, 40)">
+      <circle cx="0" cy="0" r="12" fill="none" stroke="#cccccc" stroke-width="2"/>
+      <circle cx="0" cy="0" r="8" fill="none" stroke="#aaaaaa" stroke-width="1"/>
+      <circle cx="0" cy="0" r="4" fill="#888888"/>
+      <text x="0" y="25" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#ffffff">CONVERGENCE</text>
+      <text x="0" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#888888">Optimal form</text>
+    </g>
+    
+    <!-- Success/Termination -->
+    <g transform="translate(1050, 40)">
+      <rect x="-15" y="-15" width="30" height="30" rx="15" fill="none" stroke="#ffffff" stroke-width="2"/>
+      <text x="0" y="25" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#ffffff">SUCCESS</text>
+      <text x="0" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#999999">Solution found</text>
+    </g>
+    
+    <!-- Flow indicators -->
+    <path d="M 70 40 L 220 40" stroke="#444444" stroke-width="1" marker-end="url(#arrowhead)"/>
+    <path d="M 280 40 L 420 40" stroke="#555555" stroke-width="1" marker-end="url(#arrowhead)"/>
+    <path d="M 480 40 L 620 40" stroke="#666666" stroke-width="1" marker-end="url(#arrowhead)"/>
+    <path d="M 680 40 L 820 40" stroke="#777777" stroke-width="1" marker-end="url(#arrowhead)"/>
+    <path d="M 880 40 L 1020 40" stroke="#888888" stroke-width="1" marker-end="url(#arrowhead)"/>
+  </g>
+  
+  <!-- Natural Language Descriptions -->
+  <g id="descriptions" transform="translate(100, 800)">
+    <text x="0" y="0" font-family="Arial, sans-serif" font-size="11" fill="#999999">PROCESS DESCRIPTION</text>
+    <line x1="0" y1="10" x2="1200" y2="10" stroke="#333333" stroke-width="1"/>
+    
+    <text x="0" y="30" font-family="Arial, sans-serif" font-size="10" fill="#666666">
+      1. Multiple agents spawn with diverse strategies to explore the solution space in parallel
+    </text>
+    <text x="0" y="50" font-family="Arial, sans-serif" font-size="10" fill="#666666">
+      2. Evolution engine applies selection pressure based on fitness in both physical constraints and digital computation
+    </text>
+    <text x="0" y="70" font-family="Arial, sans-serif" font-size="10" fill="#666666">
+      3. Information geometry guides the search by measuring the curvature of the optimization landscape
+    </text>
+    <text x="0" y="90" font-family="Arial, sans-serif" font-size="10" fill="#666666">
+      4. Viable solution paths exist in superposition until observation collapses to the optimal solution
+    </text>
+  </g>
+  
+  <!-- Watermark and Logo -->
+  <g id="watermark" transform="translate(1350, 870)">
+    <!-- Logo text -->
+    <text x="0" y="0" font-family="Arial, sans-serif" font-size="11" fill="#444444" text-anchor="end">
+      Intuition Labs © 2025
+    </text>
+    <!-- URL -->
+    <text x="0" y="20" font-family="Courier New, monospace" font-size="10" fill="#333333" text-anchor="end">
+      https://terminals.tech
+    </text>
+  </g>
+</svg>

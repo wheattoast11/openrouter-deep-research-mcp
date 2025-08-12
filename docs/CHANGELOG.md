@@ -8,7 +8,7 @@
 - Auto-index saved reports and fetched content during research (opt-in)
 - Planning model fallbacks and simplified model strategy; optional dynamic catalog
 - Compact tool params for `conduct_research` (`q,cost,aud,fmt,src,imgs,docs,data`)
-- README overhaul: architecture diagram source, user journeys, Cursor IDE usage, command map
+- README/Docs: branded architecture SVG with hyperlink, MSeeP validation + feedback loop, star badges
 
 ## v1.1.0 — 2025-08-09
 

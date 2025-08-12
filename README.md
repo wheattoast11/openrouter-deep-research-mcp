@@ -1,4 +1,4 @@
-[![Star on GitHub](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research-mcp?style=social)](https://github.com/wheattoast11/openrouter-deep-research-mcp)
+[![Star on GitHub](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research?style=social)](https://github.com/wheattoast11/openrouter-deep-research)
 # OpenRouter Agents MCP Server
 
 [MAJOR UPDATE – August 12, 2025] An intelligent MCP server that orchestrates GPT‑5 / Gemini / Claude agents to research in parallel, indexing as it goes (PGlite + vectors), then synthesizes consensus with strict, URL‑backed citations.
@@ -136,3 +136,24 @@ How it differs from typical “agent chains”:
 - Get past research: `get_past_research { query:"<query>", limit:5 }`
 - Index URL (if enabled): `index_url { url:"https://..." }`
 - Search index (if enabled): `search_index { query:"<q>", limit:10 }`
+
+## Validation – MSeeP (Multi‑Source Evidence & Evaluation Protocol)
+- **Citations enforced**: explicit URLs, confidence tags; unknowns marked `[Unverified]`.
+- **Cross‑model triangulation**: plan fans out to multiple models; synthesis scores consensus vs contradictions.
+- **KB grounding**: local hybrid index (BM25+vector) retrieves past work for cross‑checking.
+- **Human feedback**: `rate_research_report { rating, comment }` stored to DB; drives follow‑ups.
+- **Reproducibility**: `export_reports` + `backup_db` capture artifacts for audit.
+
+## Quality feedback loop
+- Run examples: `npm run gen:examples`
+- Review: `list_research_history`, `get_report_content {reportId}`
+- Rate: `rate_research_report { reportId, rating:1..5, comment }`
+- Improve retrieval: `reindex_vectors`, `index_status`, `search_index { query }`
+
+## Architecture diagram (branded)
+- See `docs/diagram-architecture-branded.svg` (logo links to `https://terminals.tech`).
+
+## Stargazers
+[![Star on GitHub](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research?style=social)](https://github.com/wheattoast11/openrouter-deep-research)
+
+[![Star History Chart](https://api.star-history.com/svg?repos=wheattoast11/openrouter-deep-research&type=Date)](https://star-history.com/#wheattoast11/openrouter-deep-research)
