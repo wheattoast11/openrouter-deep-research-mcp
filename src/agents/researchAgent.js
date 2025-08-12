@@ -30,7 +30,7 @@ class ResearchAgent {
     try {
       const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
         temperature: 0.1, // Low temp for consistent classification
-        max_tokens: 10 // Short response needed
+        max_tokens: 32 // Ensure above provider minimum
       });
       let domain = response.choices[0].message.content.trim().toLowerCase();
       // Basic cleanup if model adds punctuation etc.
@@ -58,7 +58,7 @@ class ResearchAgent {
         const systemPrompt = `Assess the complexity of the following research query. Is it likely answerable with a concise factual statement or does it require deep analysis? Respond with ONLY one complexity level: ${COMPLEXITY_LEVELS.join(', ')}.`;
         const messages = [ { role: 'system', content: systemPrompt }, { role: 'user', content: query } ];
         try {
-           const response = await openRouterClient.chatCompletion(this.classificationModel, messages, { temperature: 0.1, max_tokens: 10 });
+           const response = await openRouterClient.chatCompletion(this.classificationModel, messages, { temperature: 0.1, max_tokens: 32 });
            let complexity = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
            if (COMPLEXITY_LEVELS.includes(complexity)) {
               console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Classified query complexity for "${query.substring(0, 50)}..." as: ${complexity}`);

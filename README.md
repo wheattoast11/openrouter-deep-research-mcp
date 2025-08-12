@@ -89,24 +89,9 @@ Notes
 - Use `list_models` to discover current provider capabilities and ids.
 
 ## Architecture at a glance
-```mermaid
-flowchart LR
-  U[User/Client\n(Cursor MCP/stdio or HTTP/SSE)] -->|query| P(Planning Agent)
-  subgraph Fan-out
-    P -->|XML <agent_n>| R1(Research Agent n=1)
-    P --> R2(Research Agent n=2)
-    P --> Rk(Research Agent n=k)
-  end
-  R1 --> S(Synthesis)
-  R2 --> S
-  Rk --> S
-  S -->|final report+citations| U
-  R1 --> IDX[(Hybrid Index\nBM25 + vector)]
-  R2 --> IDX
-  Rk --> IDX
-  F[fetch_url/search_web] --> R1
-  F --> R2
-  F --> Rk
+See `docs/diagram-architecture.mmd` (Mermaid). Render to SVG with Mermaid CLI if installed:
+```bash
+npx @mermaid-js/mermaid-cli -i docs/diagram-architecture.mmd -o docs/diagram-architecture.svg
 ```
 
 How it differs from typical “agent chains”:
@@ -141,3 +126,13 @@ How it differs from typical “agent chains”:
   - Yes, via env flags listed above.
 - Does it support streaming?
   - Yes, SSE for HTTP; stdio for MCP.
+
+## Command Map (quick reference)
+- Start (stdio): `npm run stdio`
+- Start (HTTP/SSE): `npm start`
+- Generate examples: `npm run gen:examples`
+- List models: MCP `list_models { refresh:false }`
+- Research (compact): `conduct_research { q:"<query>", cost:"low", aud:"intermediate", fmt:"report", src:true }`
+- Get past research: `get_past_research { query:"<query>", limit:5 }`
+- Index URL (if enabled): `index_url { url:"https://..." }`
+- Search index (if enabled): `search_index { query:"<q>", limit:10 }`

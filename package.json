@@ -8,7 +8,8 @@
     "dev": "nodemon src/server/mcpServer.js",
     "stdio": "node src/server/mcpServer.js --stdio",
     "gen:examples": "node scripts/generate-examples.js",
-    "gen:docs": "node scripts/gen-docs.js"
+    "gen:docs": "node scripts/gen-docs.js",
+    "gen:diagram": "mmdc -i docs/diagram-architecture.mmd -o docs/diagram-architecture.svg"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",

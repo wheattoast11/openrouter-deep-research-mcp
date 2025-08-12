@@ -1,263 +1,180 @@
-Alright — here’s the **critical synthesis** of the ensemble research results for your **Executive Briefing on the Model Context Protocol (MCP) status and adoption as of July 2025**.  
-
-I proceed in five steps exactly as you requested — intra-query comparison, per-sub-query synthesis, overall integration, insight generation, and identification of limitations/gaps — with explicit citations to authoritative sources.
+Below is a **critical synthesis** of all sub-query results for the **ORIGINAL RESEARCH QUERY**:
 
 ---
 
-## 1. **Intra-Query Analysis** – Comparing Ensemble Results Per Sub‑Query
+## **Executive Briefing: Model Context Protocol (MCP) — Status & Adoption as of July 2025**
+
+### **Sub-query Coverage & Status**
+| Sub-query | Topic | Status | Notes |
+|-----------|-------|--------|-------|
+| 1 | Origins & release timeline | **SUCCESS** | High consensus: open-sourced Nov 25 2024 by Anthropic; spec on GitHub. |
+| 2 | Technical architecture & JSON-RPC 2.0 | **SUCCESS** | Strong alignment on JSON-RPC 2.0 core, request/response/batch/notifications; transport-agnostic. |
+| 3 | Transports (stdio, HTTP+SSE, Streamable HTTP) | **SUCCESS** | Clear enumeration, comparative advantages, use cases. |
+| 4 | Official tools/SDKs/samples | **SUCCESS** | Mixed detail: some models confirm multiple SDKs & examples; others note only spec repo. |
+| 5 | Available servers & clients incl. Claude Desktop | **SUCCESS** | Consensus: only reference server/client; Claude Desktop embeds MCP client; no documented 3rd-party impls. |
+| 6 | Key ecosystem / reference links | **SUCCESS** | Agreement on authoritative links: spec repo, Anthropic post, JSON-RPC spec. |
+| 7 | Real-world adoption | **SUCCESS** | Consensus: early-stage, mostly Anthropic ecosystem; some open-source & partner pilot adoption; no broad enterprise integration. |
+| 8 | Implementation details, message flows, auth, streaming | **SUCCESS** | Agreement on conceptual flows; lack of official, detailed examples & auth specifics, especially for stdio; HTTP auth via headers. |
+| 9 | Example prompts/templates | **SUCCESS** | Consensus: examples exist in `examples/` within spec repo; structured per JSON-RPC 2.0; limited community prompts. |
 
 ---
 
-### **SUB-QUERY 1 – Origins, release date, stated purpose** – **Status: SUCCESS**
+## **Synthesis by Thematic Area**
 
-**Consensus:**  
-- Both models agree MCP was *developed and open-sourced by Anthropic* and first released on **November 25 2024**.  
-- Both cite Anthropic’s official announcement [Source: Anthropic – https://www.anthropic.com/news/model-context-protocol] as the authoritative primary source.  
-- Purpose: “new standard for connecting AI assistants to the systems where data lives” — enabling access to external real-time/contextual data for reliable, accurate responses.  
+### 1. **Origins & Governance**
+- **Launch**: MCP was officially **announced and open-sourced** by **Anthropic** on **Nov 25 2024** as “a new standard” for connecting AI assistants to systems where data lives ([Anthropic announcement](https://www.anthropic.com/news/model-context-protocol)).
+- **Stewardship**: Led by Anthropic; hosted under the [modelcontextprotocol GitHub org](https://github.com/modelcontextprotocol).
+- **Goal**: Standardize secure, structured, vendor-neutral context exchange between AI models and external tools, APIs, and data repositories.
 
-**Unique insights:**  
-- **qwen** explicitly details that MCP seeks a “secure, predictable, and modular” standardized interface for LLMs, and notes JSON‑RPC 2.0 as the foundational transport.  
-- **gemini** emphasizes the problem statement (“AI assistants trapped behind information silos”) and situates MCP as an interoperability standard.
-
-**Weaknesses:**  
-- Both note absence of deep technical detail from the snippets; understanding *how* it achieves its goals requires looking at the full spec.
-
-**Synthesis:** Strong agreement on origin, date, purpose, and authoritative sources.  
-**Confidence:** **High** (direct quotes and links from Anthropic).
+**Confidence**: **High** — Multiple authoritative confirmations.
 
 ---
 
-### **SUB-QUERY 2 – Architecture, client-server model, JSON‑RPC semantics** – **SUCCESS**
+### 2. **Technical Architecture**
+- **Foundation**: **JSON-RPC 2.0** ([spec](https://www.jsonrpc.org/specification)) is the underlying transport-agnostic RPC format.
+- **Core JSON-RPC features used by MCP**:
+  - **Request/Response** objects (`method`, `params`, `id`)
+  - **Batching**
+  - **Notifications** (no `id`, no reply)
+- **Transport-Agnosticism**: Messaging defined independent of transport — can run over stdio, HTTP(SSE), or other mediums.
 
-**Consensus:**  
-- MCP follows a **client-server model** — AI assistant = client, context provider/data system = server.  
-- Communication uses **JSON‑RPC 2.0** for structured request/response, method calls, notifications, and error handling.  
-- Both agree on explicit parameter handling (`method`, `params`, `id`) and use of JSON-RPC primitives.
-
-**Unique insights:**  
-- **qwen** gives more architectural granularity — includes “context provider” and optional “gateway/router”.  
-- **gemini** provides simplified high-level mapping of JSON‑RPC message structures in MCP context.
-
-**Weaknesses:**  
-- Neither shows the exact MCP-defined method namespace or custom parameters from the actual spec (e.g., `context.get`).  
-- Security/auth not fully documented; both flag this as a limitation.
-
-**Synthesis:** Shared view: JSON‑RPC 2.0 transport semantics applied directly; client/server roles clear. Extra architectural subcomponents from **qwen** enrich context.  
-**Confidence:** **High**.
+**Confidence**: **High** — Documented in GitHub spec, JSON-RPC spec.
 
 ---
 
-### **SUB-QUERY 3 – Official tools, SDKs, open-source resources** – **SUCCESS**
+### 3. **Officially Supported Transports**
+From the [MCP Specification](https://github.com/modelcontextprotocol/specification):
+1. **stdio**
+   - Local, process-based, simplest.
+   - No network stack; minimal latency.
+   - Best for CLI tools or embedded agents.
+2. **HTTP with Server-Sent Events (SSE)**
+   - Server→client uni‑directional streaming via `text/event-stream`.
+   - Browser‑friendly, auto‑reconnect via EventSource.
+3. **Streamable HTTP**
+   - Chunked/bidirectional streaming over HTTP.
+   - Handles proxies/load balancers; richer semantics than SSE.
+   - Best for server↔server or high‑throughput contexts.
 
-**Consensus:**  
-- **Originating points** are Anthropic’s announcement and the [specification repo](https://github.com/modelcontextprotocol/specification).  
-- GitHub *modelcontextprotocol* org is the main hub, plus SDKs on npm/PyPI.  
-- Multi-language SDKs (Python, JavaScript/TypeScript) exist and are actively maintained.
-
-**Unique insights:**  
-- **qwen** gives specific repo-level URLs for Python SDK, JS SDK, Go SDK (experimental), CLI tool, and docs site `modelcontextprotocol.org`.  
-- **openai** outlines discovery methodology (GitHub org, registries), but doesn’t list those concrete repos (due to snippet limits).
-
-**Weaknesses:**  
-- Lack of confirmation for language coverage beyond Python, JS, Go — other SDKs may be community-driven.
-
-**Synthesis:** Solid confirmation of Python + JS SDKs, repo discovery path, and CLI tooling; qwen’s named repos tighten specificity.  
-**Confidence:** **High**.
-
----
-
-### **SUB-QUERY 4 – Officially supported transports (stdio, HTTP/SSE, streamable HTTP)** – **SUCCESS**
-
-**Consensus:**  
-- JSON‑RPC 2.0 underpins all; **stdio** and **HTTP/SSE** are officially supported.  
-- **Streamable HTTP** is conceptualized as SSE/HTTP chunked streaming.
-
-**Disagreement/coverage gaps:**  
-- **gemini** only infers likely transports from JSON‑RPC and lacks confirmation in MCP spec.  
-- **qwen** explicitly confirms stdio, HTTP/SSE, and streamable HTTP in the official spec, including operational details and use-cases.
-
-**Unique insights:**  
-- **qwen** clarifies practical use-cases (stdio for CLI/local tools, SSE for continuous updates, streamable HTTP for bidirectional low-latency workloads).
-
-**Synthesis:** Trust qwen for definitive transport list and description; gemini’s answer is more speculative.  
-**Confidence:** **High** for qwen’s account.
+**Confidence**: **High** — Explicitly listed with pros/cons in spec.
 
 ---
 
-### **SUB-QUERY 5 – Adoption status, named integrations** – **SUCCESS**
+### 4. **Tools, SDKs, and Samples**
+- **Spec repo**: [https://github.com/modelcontextprotocol/specification](https://github.com/modelcontextprotocol/specification) — canonical documentation.
+- **SDKs** (per one ensemble source):
+  - Python: `sdk-python` — helper library for MCP tool integration.
+  - JS/TS: `sdk-js` — browser/server-side integrations.
+  - Go: `sdk-go` — backend/microservices impls.
+- **Examples**:
+  - `/examples` in spec repo: DB connectors, API clients, file system readers.
+- Other models note **only spec & docs confirmed** — SDK repo names/links not verified in all sources.
 
-**Consensus:**  
-- MCP is early‑stage; Anthropic is primary driver and integrated MCP into Claude API.  
-- Adoption is concentrated in developer/agent ecosystems rather than broad consumer apps.
-
-**Disagreements:**  
-- **gemini** says no other named integrations beyond Anthropic are in sources provided.  
-- **qwen** lists multiple verified third-party adoptions (LangChain, AutoGen from Microsoft Research, Dify, Hugging Face Agents) with dates and sources.
-
-**Unique insights:**  
-- **qwen** mentions MCP Registry with 120+ certified providers (e.g., Stripe, Salesforce, GitHub, Google Calendar).
-
-**Synthesis:** Take qwen’s detailed integration list (backed by org announcements) over gemini’s absence — likely that gemini’s scope was limited by snippet coverage.  
-**Confidence:** **High** for existence of those integrations; **Medium** for breadth of adoption.
+**Confidence**: Medium–High (spec/examples confirmed; full SDK list partially verified).
 
 ---
 
-### **SUB-QUERY 6 – Canonical references and directories** – **SUCCESS**
+### 5. **Available Servers & Clients**
+- **Reference server & client** included in spec repo.
+- **Claude Desktop** integrates an MCP client to connect to local/remote MCP servers securely for file/db/script tasks.
+- **Third-party impls**: None officially listed as of July 2025.
 
-**Consensus:**  
-- **Canonical entry point:** [modelcontextprotocol/specification](https://github.com/modelcontextprotocol/specification).  
-- **Anthropic announcement** is the high‑level orientation.  
-- JSON‑RPC 2.0 is foundational.
-
-**Unique insights:**  
-- **qwen** stresses absence of a single authoritative registry yet (Jul 2025), discovery via GitHub org and community repos.  
-- **openai** details how to navigate repo structure, issues, discussions.
-
-**Synthesis:** High agreement; both see spec repo + announcement as canonical; limited centralization for registries.  
-**Confidence:** **High**.
+**Confidence**: High (ref impl + Claude integration confirmed; absence of others noted).
 
 ---
 
-### **SUB-QUERY 7 – Published server/client implementations & transport support** – **SUCCESS**
-
-**Consensus:**  
-- Official reference implementations exist in the spec/org repos, in JS/TS (Node-based).  
-- Support stdio, HTTP/SSE, streamable HTTP.
-
-**Disagreements:**  
-- **gemini** claims no distinct public implementations beyond the spec.  
-- **qwen** gives specifics: npm packages `@modelcontextprotocol/client`/`server`, CLI tool, examples; community Python & Rust ports (unofficial).
-
-**Synthesis:** qwen’s detailed repo/package references outweigh gemini’s negative result (likely a source coverage gap).  
-**Confidence:** **High** for qwen’s official client/server; **Medium** for completeness of community list.
+### 6. **Key Ecosystem Links** *(Authoritative only)*
+- **Spec & Docs**: [GitHub — modelcontextprotocol/specification](https://github.com/modelcontextprotocol/specification)
+- **Org root**: [https://github.com/modelcontextprotocol](https://github.com/modelcontextprotocol)
+- **Announcement**: [Anthropic blog](https://www.anthropic.com/news/model-context-protocol)
+- **JSON-RPC 2.0 spec**: [jsonrpc.org/specification](https://www.jsonrpc.org/specification)
 
 ---
 
-### **SUB-QUERY 8 – Operational/framing details for each transport** – **SUCCESS**
+### 7. **Real-World Adoption by July 2025**
+- **Anthropic**:
+  - **Claude API v2.1.0** (Jan 2025) — native MCP support.
+  - MCP integrated into Claude Desktop.
+- **Open-source**:
+  - `claude-agent` toolkit (v0.8.2, Apr 2025): MCP client libraries, example providers for Google Calendar, Notion.
+  - **CrewAI** framework (v0.7.0, Mar 2025): Experimental MCP provider integration.
+  - `mcp-provider-template` (GitHub): template for GitHub, Slack, PostgreSQL; 1.2k+ stars.
+- **Stage**: Early adoption, mostly Anthropic-linked tooling & some community OSS; no clear enterprise-scale adoption beyond pilots.
 
-**Consensus:**  
-- MCP has stdio, HTTP/SSE, streamable HTTP, each with specific message/stream semantics.
-
-**Disagreements:**  
-- **gemini** says: not enough detail in snippets.  
-- **qwen** extracts handshake, framing, streaming details, constraints, with direct spec anchors.
-
-**Synthesis:** qwen’s output should be taken as the substantive answer; gemini’s reflects snippet limitation.  
-**Confidence:** **High** for qwen’s description.
-
----
-
-### **SUB-QUERY 9 – Official prompt/resource libraries & guidance** – **SUCCESS**
-
-**Consensus:**  
-- No single separate official “prompt library” from Anthropic; examples live in spec repo/documentation.  
-- Prompt design guidance is embedded in the structured context/tool manifest patterns.
-
-**Unique insights:**  
-- **openai** lists detailed principles (structured context, layered message separation, schema constraints).  
-- **qwen** stresses lack of explicit public prompt design docs — devs infer patterns from spec.
-
-**Synthesis:** Merge them for guidance principles + recognition that no standalone prompt library exists.  
-**Confidence:** **High**.
+**Confidence**: High for Anthropic/OSS cases; low for broader market penetration.
 
 ---
 
-## 2. **Sub‑Query Synthesis Table**
+### 8. **Implementation & Message Flow Details**
+From [spec](https://github.com/modelcontextprotocol/specification):
+- **All transports**: JSON-RPC 2.0 messages encoded as UTF‑8 JSON.
+- **Stdio**: newline-delimited JSON; lifecycle = process lifetime; auth out-of-band.
+- **SSE**: GET → `text/event-stream`; server sends JSON-RPC messages as `data:` events; auth via HTTP headers.
+- **Streamable HTTP**: POST with JSON; response = chunked transfer encoding; multiple chunks mapped to streaming JSON-RPC results; auth via HTTP headers.
+- **Streaming**: all three support incremental/partial responses.
+- **Auth**: HTTP transports support `Authorization` header; stdio requires external auth provisioning.
+- **Limitations**: Spec lacks detailed JSON examples for each transport, explicit error handling, stream end signalling.
 
-| Sub‑Query | Synthesized Finding | Status | Confidence |
-|-----------|--------------------|--------|------------|
-| 1 | Origin: Anthropic, Nov 25 2024; purpose: standard for AI assistants to connect to data systems; GitHub spec repo. | SUCCESS | High |
-| 2 | Architecture: client–server; AI agent as client, context providers servers; transport: JSON‑RPC 2.0 request/response, notifications. | SUCCESS | High |
-| 3 | Official SDKs/tools: [spec repo](https://github.com/modelcontextprotocol/specification), Python SDK, JS SDK, Go SDK (experimental), CLI tool, docs site; discover others via GitHub org, npm, PyPI. | SUCCESS | High |
-| 4 | Official transports: **stdio**, **HTTP/SSE**, **streamable HTTP** (via SSE/chunked HTTP); each documented with operational context. | SUCCESS | High |
-| 5 | Adoption: Early stage but with integrations into Claude API, LangChain, AutoGen, Dify, Hugging Face Agents; MCP Registry has 120+ providers; no mass market adoption yet. | SUCCESS | High–Med |
-| 6 | Canonical references: Spec repo + Anthropic announcement + JSON‑RPC spec; directories via GitHub org; no unified registry yet. | SUCCESS | High |
-| 7 | Ref impls: Official JS/TS client/server packages with support for stdio, HTTP/SSE, streamable HTTP; community Python/Rust ports (unofficial). | SUCCESS | High |
-| 8 | Transport framing: Stdio newline‑delimited JSON with hello handshake; HTTP/SSE event/data framing; Streamable HTTP chunked JSON; each with constraints. | SUCCESS | High |
-| 9 | Prompt/resources: No dedicated library; examples in spec; design guidance stresses structured context & tool manifests, schema‑bound outputs, layered system/tool/user messages. | SUCCESS | High |
+**Confidence**: High on conceptual behavior; Low on low-level example completeness.
 
 ---
 
-## 3. **Overall Integrated Framework – Executive Briefing**
+### 9. **Example Prompts, Scenario Guides, Templates**
+- **Official examples**: In spec repo `/examples`.
+  - **Data retrieval** — e.g., calendar events, user profiles.
+  - **Tool invocation** — send email, generate reports.
+  - **Multi-step agent workflows** — chaining context across calls.
+- **Format**: JSON-RPC-compliant MCP requests with structured metadata.
+- **Use**: Dev starting point for MCP context provider integration.
+- **Community examples**: minimal; no major third-party prompt libraries confirmed.
 
-### **Origins & Purpose**
-The **Model Context Protocol** (MCP) was **open‑sourced by Anthropic** on **November 25 2024** as a **standardized, open protocol** for connecting AI assistants to external data, tools, and systems in a secure and structured way [Source: Anthropic – https://www.anthropic.com/news/model-context-protocol]. Its aim: address the “isolation” problem by enabling **interoperable, modular context integration** between models and the ecosystems in which they operate.
-
-**Spec:** Hosted at [https://github.com/modelcontextprotocol/specification](https://github.com/modelcontextprotocol/specification).
-
----
-
-### **Architecture & Protocol Foundation**
-- **Client–Server** model: AI assistants are clients, context providers are servers.
-- **Transport:** Built on **JSON‑RPC 2.0** [Source: JSON-RPC Specification – https://www.jsonrpc.org/specification], which supplies request/response, notification patterns, error handling (`code`, `message`, `data`).
-- Context providers can run behind **gateways** for routing and load balancing.
+**Confidence**: High for existence in spec repo; Low for breadth of community examples.
 
 ---
 
-### **Official Transports**
-- **stdio** – Simple newline‑delimited JSON over stdin/stdout; used for local/CLI integrations.
-- **HTTP with Server-Sent Events (SSE)** – For real‑time server‑to‑client pushes (e.g., context updates); client‑to‑server via POST.
-- **Streamable HTTP** – Chunked transfer encoding JSON; full bidirectional streaming.
+## **Cross-Result Consensus & Discrepancies**
+- **Consensus**:
+  - Anthropic origin & 2024-11-25 launch; JSON-RPC 2.0 base; transport trio well-defined.
+  - Reference impl in spec repo; Claude Desktop integration; early-stage ecosystem maturity.
+  - Key authoritative URLs validated.
+- **Contradictions**:
+  - SDK availability: Some results list specific repos (Python, JS/TS, Go); others note no SDKs confirmed from authoritative sources — suggests partial or later-added repos not visible in all source sets.
+- **Unique Contributions**:
+  - One model surfaced adoption details (CrewAI, `claude-agent`, `mcp-provider-template`) absent in others — valuable but needs confirmation.
+  - One highlighted detailed transport flows & streaming semantics missing from announcement-level docs.
 
 ---
 
-### **Ecosystem & Tooling**
-- **Official SDKs:**  
-  - Python ([repo link](https://github.com/modelcontextprotocol/python-sdk))  
-  - JavaScript/TypeScript ([repo link](https://github.com/modelcontextprotocol/js-sdk))  
-  - Go SDK (experimental)  
-  - CLI tooling (`mcp-cli`)
-- **Reference server/client packages:** npm: `@modelcontextprotocol/server`/`client`.
-- Discovery: GitHub org [https://github.com/modelcontextprotocol](https://github.com/modelcontextprotocol), npm, PyPI.
+## **Overall Assessment**
+MCP is a **new, open protocol** with clear technical underpinnings, a working reference implementation, and **early but growing adoption** — primarily within Anthropic's own stack and a small set of OSS projects. It offers **well-defined transport and messaging semantics** rooted in JSON-RPC 2.0, but **developer ergonomics** (SDKs, detailed examples) and **ecosystem breadth** are in early phases. **Enterprise adoption** outside Anthropic-associated ecosystems is not yet visible.
 
 ---
 
-### **Adoption Status (July 2025)**
-- **Anthropic Claude API v2.5+** has native MCP context provider support.
-- Integrated in **LangChain**, **Microsoft AutoGen**, **Dify AI**, **Hugging Face Agents**.
-- MCP Registry: 120+ certified providers (Stripe, Salesforce, GitHub, Google Calendar).
-- Still early-stage — not yet broadly adopted in mainstream consumer or enterprise apps; no formal standards‑body governance.
+### **Major Claims & Confidence**
+1. **Launch**: Nov 25 2024 by Anthropic — **High** ([Anthropic blog](https://www.anthropic.com/news/model-context-protocol)).
+2. **Spec hosted at** github.com/modelcontextprotocol/specification — **High**.
+3. **JSON-RPC 2.0 base** — **High** ([jsonrpc.org/specification](https://www.jsonrpc.org/specification)).
+4. **Three official transports (stdio/SSE/Streamable HTTP)** — **High**.
+5. **Claude Desktop MCP integration** — **High**.
+6. **Reference server/client only; 3rd‑party impls undocumented officially** — **High**.
+7. **OSS adoption (CrewAI, claude-agent)** — **Medium** (one source; not uniformly corroborated).
+8. **SDK repos exist across languages** — **Medium** (confirmation inconsistent).
+9. **Examples in spec repo** — **High**.
+10. **Enterprise-scale adoption** — **Low** (no public evidence).
 
 ---
 
-### **Canonical References**
-- Protocol Specification: [https://github.com/modelcontextprotocol/specification](https://github.com/modelcontextprotocol/specification)  
-- Anthropic Intro: [https://www.anthropic.com/news/model-context-protocol](https://www.anthropic.com/news/model-context-protocol)  
-- JSON-RPC 2.0 Spec: [https://www.jsonrpc.org/specification](https://www.jsonrpc.org/specification)
+**Final Recommended Resources**:
+- **MCP Spec & Reference**: [https://github.com/modelcontextprotocol/specification](https://github.com/modelcontextprotocol/specification)  
+- **Announcement**: [https://www.anthropic.com/news/model-context-protocol](https://www.anthropic.com/news/model-context-protocol)  
+- **JSON-RPC 2.0**: [https://www.jsonrpc.org/specification](https://www.jsonrpc.org/specification)  
+- **Org root** (check for SDKs/examples): [https://github.com/modelcontextprotocol](https://github.com/modelcontextprotocol)  
 
 ---
 
-### **Prompt / Resource Guidance**
-- No separate official “prompt library”; examples embedded in spec/examples.
-- Prompt design patterns: structured JSON context, explicit tool manifests and calls, schema-bound outputs, separation of system/tool/user layers.
+If you want, I can **extend this briefing into an MCP developer quick-start**, including:
+- Verified SDK repo links,
+- Transport-specific code snippets for stdio/SSE/Streamable HTTP,
+- Example prompt templates consolidated from the spec `/examples` dir. 
 
----
-
-## 4. **Overarching Themes & Insights**
-- **Strategic position**: MCP is *Anthropic’s bid to standardize model–context interaction*, with growing traction in agent frameworks.
-- **Design philosophy**: Born transport‑agnostic, but grounded in JSON‑RPC to leverage existing tooling.
-- **Ecosystem strategy**: Open-source spec + SDKs + integration with key developer tooling.
-- **Adoption path**: Early momentum in developer/agent tooling; registry builds network effects.
-- **Gap**: Still centrally governed; no independent standardization.
-
----
-
-## 5. **Gaps, Inconsistencies, Limitations**
-- **Prompt Libraries:** No central curated set; guidance is implicit.
-- **Adoption Metrics:** Beyond named early adopters, no quantified industry penetration data.  
-- **Spec Access:** For full transport framing details, the live spec is needed; some subqueries had to rely on a single model’s deep detail (qwen).  
-- **Governance:** No formal multi‑stakeholder standardization body; registry controlled by Anthropic.  
-- **Security Model:** Detailed auth schemes not finalized in public spec.
-- **Performance data:** No independent benchmarks.
-
----
-
-**FINAL CONFIDENCE ASSESSMENT:**  
-- Core facts (origin/date/purpose, architecture, spec location, transport list, SDK existence): **High** confidence.  
-- Breadth of adoption beyond listed platforms: **Medium** confidence.  
-- Operational details per transport: **High** for qwen’s sourced account.  
-- Prompt libraries: **High** confidence in absence; Medium in inferred design guidance.
-
----
-
-If desired, I can produce **an annex table mapping each integration/adopter to their announcement source URL**, as a verified reference list for decision‑makers. Would you like me to compile that?
+Would you like me to prepare that next?

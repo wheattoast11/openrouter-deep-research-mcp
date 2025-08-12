@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.0 — 2025-08-12
+
+- Compact prompt strategy with strict URL citations and confidence labels; reduced token overhead
+- MCP prompts/resources: `planning_prompt`, `synthesis_prompt`, and `mcp_spec_links`
+- Local hybrid indexer (BM25 + optional vector rerank) and MCP tools: `index_texts`, `index_url`, `search_index`, `index_status`
+- Auto-index saved reports and fetched content during research (opt-in)
+- Planning model fallbacks and simplified model strategy; optional dynamic catalog
+- Compact tool params for `conduct_research` (`q,cost,aud,fmt,src,imgs,docs,data`)
+- README overhaul: architecture diagram source, user journeys, Cursor IDE usage, command map
+
 ## v1.1.0 — 2025-08-09
 
 - Per-connection HTTP/SSE routing with API‑key auth (multi‑client safe)
