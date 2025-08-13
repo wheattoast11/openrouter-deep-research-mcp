@@ -93,6 +93,17 @@ See `docs/diagram-architecture.mmd` (Mermaid). Render to SVG with Mermaid CLI if
 ```bash
 npx @mermaid-js/mermaid-cli -i docs/diagram-architecture.mmd -o docs/diagram-architecture.svg
 ```
+Or use the script:
+```bash
+npm run gen:diagram
+```
+
+![Architecture Diagram (branded)](docs/diagram-architecture-branded.svg)
+
+If the image doesn’t render in your viewer, open `docs/diagram-architecture-branded.svg` directly.
+
+### Answer crystallization view
+![Answer Crystallization Diagram](docs/answer-crystallization-architecture.svg)
 
 How it differs from typical “agent chains”:
 - Not just hardcoded handoffs; the plan is computed, then parallel agents search, then a synthesis step reasons over consensus, contradictions, and gaps.
