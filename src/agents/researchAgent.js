@@ -152,7 +152,7 @@ class ResearchAgent {
   }
 
   // Updated to accept images, textDocuments, structuredData, inputEmbeddings, and requestId parameters
-  async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req') {
+  async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null) {
     const domain = await this.classifyQueryDomain(query, { requestId });
     const complexity = await this.assessQueryComplexity(query, { requestId });
     const primaryModel = await this.getModel(costPreference, agentId, domain, complexity, requestId);
@@ -318,6 +318,11 @@ class ResearchAgent {
         temperature: 0.3, // Low temperature for factual research
         max_tokens: 4000 // Allow ample space for detailed analysis
       });
+      // Capture usage if provided
+      const usage = response.usage || null;
+      if (onEvent && usage) {
+        await onEvent('agent_usage', { agent_id: agentId, model, usage });
+      }
       
       const duration = Date.now() - startTime;
       console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Research completed successfully in ${duration}ms using model ${model}.`);
@@ -326,7 +331,8 @@ class ResearchAgent {
         model,   // Record the specific model used
         query,
         result: response.choices[0].message.content,
-        error: false // Indicate success
+        error: false, // Indicate success
+        usage
       };
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -345,7 +351,7 @@ class ResearchAgent {
   }
 
   // Added images, textDocuments, structuredData, inputEmbeddings, and requestId parameters here
-  async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req') { 
+  async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null) { 
     console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Starting parallel ensemble research for ${queries.length} queries with costPreference=${costPreference}. Parallelism=${parallelism}.`);
     const startTime = Date.now();
 
@@ -357,10 +363,14 @@ class ResearchAgent {
         const current = idx++;
         const q = queries[current];
         try {
-          const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId);
+          if (onEvent) await onEvent('agent_started', { agent_id: q.id, query: q.query, cost: costPreference });
+          const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent);
           results[current] = value; // array of ensemble results
+          const ok = Array.isArray(value) ? value.every(v => !v.error) : !value.error;
+          if (onEvent) await onEvent('agent_completed', { agent_id: q.id, ok });
         } catch (e) {
           results[current] = [{ agentId: q.id, model: 'N/A', query: q.query, result: `Error: ${e.message}`, error: true, errorMessage: e.message }];
+          if (onEvent) await onEvent('agent_completed', { agent_id: q.id, ok: false });
         }
       }
     };

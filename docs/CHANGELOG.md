@@ -1,14 +1,14 @@
 # Changelog
 
-## v1.2.0 — 2025-08-12
+## v1.2.0 — 2025-08-19
 
-- Compact prompt strategy with strict URL citations and confidence labels; reduced token overhead
-- MCP prompts/resources: `planning_prompt`, `synthesis_prompt`, and `mcp_spec_links`
-- Local hybrid indexer (BM25 + optional vector rerank) and MCP tools: `index_texts`, `index_url`, `search_index`, `index_status`
-- Auto-index saved reports and fetched content during research (opt-in)
-- Planning model fallbacks and simplified model strategy; optional dynamic catalog
-- Compact tool params for `conduct_research` (`q,cost,aud,fmt,src,imgs,docs,data`)
-- README/Docs: branded architecture SVG with hyperlink, MSeeP validation + feedback loop, star badges
+- Async jobs: `submit_research` (returns job_id), `get_job_status`, `cancel_job`; in‑process worker with leasing and SSE events
+- Minimal micro UI at `/ui`: agent lanes, token streaming, usage chips; `/jobs` HTTP submission for testing
+- Unified `search`: true BM25 + vectors across docs/reports, optional LLM rerank; document embeddings on index
+- Token usage capture and aggregation across planning/agents/synthesis → persisted in `research_metadata.usage`; `/metrics` exposes usage totals
+- New resources: `tool_patterns` (recipes) and `multimodal_examples`; tightened tool descriptions for LLM interpretability
+- Packaging: bin `openrouter-agents` for `npx`/global use; README JSON configs for STDIO and HTTP/SSE; UPGRADE-NOTES updated
+- Idempotent migrations: `jobs`, `job_events`, `index_documents.doc_len`, `index_documents.doc_embedding`, HNSW indexes where relevant
 
 ## v1.1.0 — 2025-08-09
 

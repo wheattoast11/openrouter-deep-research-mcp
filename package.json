@@ -1,8 +1,11 @@
 {
   "name": "openrouter-agents",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "OpenRouter MCP server for research agents",
   "main": "src/server/mcpServer.js",
+  "bin": {
+    "openrouter-agents": "src/server/mcpServer.js"
+  },
   "scripts": {
     "start": "node src/server/mcpServer.js",
     "dev": "nodemon src/server/mcpServer.js",
@@ -11,6 +14,11 @@
     "gen:docs": "node scripts/gen-docs.js",
     "gen:diagram": "mmdc -i docs/diagram-architecture.mmd -o docs/diagram-architecture.svg"
   },
+  "author": "Tej Desai <admin@terminals.tech> (https://terminals.tech)",
+  "homepage": "https://terminals.tech",
+  "license": "MIT",
+  "keywords": ["mcp", "model context protocol", "openrouter", "agents", "research", "pglite", "pgvector"],
+  "engines": { "node": ">=18" },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
     "@modelcontextprotocol/sdk": "^1.4.0",

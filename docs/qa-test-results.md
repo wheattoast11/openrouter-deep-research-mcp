@@ -1,3 +1,23 @@
+# QA – Output & Async Validation (v1.2.0)
+
+## Async job flow
+- Submit: `POST /jobs {"query":"Async smoke test"}` → returns `job_id`
+- Stream: `/jobs/:jobId/events` shows `submitted → started → agent_* → synthesis_token → report_saved → complete`
+- UI: `/ui` displays lanes and tokens; `agent_usage` events present when provider returns usage
+- Metrics: `/metrics` includes `jobs` counts and `usageTotals`
+
+## Tools sanity
+- `submit_research` → `get_job_status` shows events; `cancel_job` succeeds on queued jobs
+- `search` returns typed hits from docs & reports; hybrid ordering plausible
+- `query` blocks non-SELECT, `explain:true` returns concise summary
+
+## Retrieval
+- `index_url` adds doc; `search { scope:"docs" }` finds it
+- BM25 k1/b configurable; vector fusion enabled when embeddings present
+
+## Packaging
+- `npx openrouter-agents --stdio` works; MCP JSON configs spawn server
+
 # OpenRouterAI Research Agents MCP Server - QA Test Results
 
 This document contains the results of testing all features in the OpenRouterAI Research Agents MCP server.

@@ -12,6 +12,8 @@ const config = require('../../config');
 const modelCatalog = require('../utils/modelCatalog'); // New: dynamic model catalog
 const tar = require('tar');
 const fetch = require('node-fetch');
+const openRouterClient = require('../utils/openRouterClient');
+const structuredDataParser = require('../utils/structuredDataParser');
 
 // Compact param normalization for conduct_research
 function normalizeResearchParams(params) {
@@ -189,6 +191,26 @@ const conductResearchSchema = z.object({
   _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
+// Async job tool schemas
+const submitResearchSchema = conductResearchSchema.extend({
+  notify: z.string().url().optional().describe("Optional webhook to notify on completion")
+}).describe("Submit a long-running research job asynchronously. Returns a job_id immediately. Use get_job_status/cancel_job to manage. Input synonyms supported (q,cost,aud,fmt,src,imgs,docs,data).");
+const getJobStatusSchema = z.object({ job_id: z.string(), since_event_id: z.number().int().optional() }).describe("Get job status and new events since an optional event id.");
+const cancelJobSchema = z.object({ job_id: z.string() }).describe("Cancel a queued or running job (best-effort).");
+
+// Simplified tools
+const searchSchema = z.object({
+  q: z.string().min(1),
+  k: z.number().int().positive().optional().default(10),
+  scope: z.enum(['both','reports','docs']).optional().default('both'),
+  rerank: z.boolean().optional()
+}).describe("Unified hybrid retrieval across docs and reports (BM25+vector, optional LLM rerank). Returns typed hits with score fields.");
+const querySchema = z.object({
+  sql: z.string().min(1),
+  params: z.array(z.any()).optional().default([]),
+  explain: z.boolean().optional().default(false)
+}).describe("Execute a read-only SELECT with bound params. Optional explain summarizes results in plain English.");
+
 // Schema for the new get_report_content tool
 const getReportContentSchema = z.object({
   reportId: z.string().describe("The ID of the report to retrieve content for (obtained from conduct_research result)."),
@@ -255,6 +277,20 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Cache miss for query "${safeSubstring(query, 0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${textDocuments ? textDocuments.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
 
   const overallStartTime = Date.now();
+  const isJob = typeof requestId === 'string' && requestId.startsWith('job_');
+  const usageAgg = { planning: [], agents: [], synthesis: [], totals: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+  const onEvent = async (type, payload) => {
+    // Aggregate usage metrics when present
+    try {
+      if (type === 'planning_usage' && payload?.usage) usageAgg.planning.push(payload.usage);
+      if (type === 'agent_usage' && payload?.usage) usageAgg.agents.push(payload);
+      if (type === 'synthesis_usage' && payload?.usage) usageAgg.synthesis.push(payload.usage);
+    } catch(_) {}
+    // Forward to job events if running as async job
+    if (isJob) {
+      try { await dbClient.appendJobEvent(requestId, type, payload || {}); } catch (_) {}
+    }
+  };
   // Determine MAX_ITERATIONS dynamically based on complexity assessment
   let MAX_ITERATIONS = config.models.maxResearchIterations; // Default
   try {
@@ -390,7 +426,8 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
           documents: textDocuments, 
           structuredData: structuredData, 
           pastReports: relevantPastReports,
-          inputEmbeddings: inputEmbeddings // Pass generated input embeddings
+          inputEmbeddings: inputEmbeddings, // Pass generated input embeddings
+          onEvent
         },
           previousResultsForRefinement, // Pass previous results for refinement context
           requestId // Pass requestId
@@ -452,7 +489,8 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
            textDocuments, 
            structuredData,
            inputEmbeddings, // Pass input embeddings
-           requestId // Pass requestId
+           requestId, // Pass requestId
+           onEvent
         ); 
         const researchDuration = Date.now() - researchStartTime;
         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixResearch} - Parallel research completed in ${researchDuration}ms.`);
@@ -531,6 +569,11 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
 
       for await (const chunk of contextStream) {
         sendProgress(chunk);
+        if (onEvent) {
+          if (chunk.content) await onEvent('synthesis_token', { content: chunk.content });
+          if (chunk.usage) await onEvent('synthesis_usage', { usage: chunk.usage });
+          if (chunk.error) await onEvent('synthesis_error', { error: chunk.error });
+        }
         if (chunk.content) {
           finalReportContent += chunk.content;
         }
@@ -562,11 +605,18 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       try {
         setInCache(cacheKey, finalReportContent);
 
+        // Compute usage totals
+        const add = (u) => {
+          if (!u) return; const pt=Number(u.prompt_tokens||0), ct=Number(u.completion_tokens||0), tt=Number(u.total_tokens||pt+ct);
+          usageAgg.totals.prompt_tokens += pt; usageAgg.totals.completion_tokens += ct; usageAgg.totals.total_tokens += tt;
+        };
+        usageAgg.planning.forEach(add); usageAgg.synthesis.forEach(add); usageAgg.agents.forEach(a=>add(a.usage));
         const researchMetadata = {
         durationMs: Date.now() - overallStartTime,
         iterations: currentIteration - 1,
         totalSubQueries: allAgentQueries.length,
-          requestId: requestId // Store requestId with metadata
+          requestId: requestId, // Store requestId with metadata
+          usage: usageAgg
         };
         savedReportId = await dbClient.saveResearchReport({
         originalQuery: query,
@@ -578,6 +628,7 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         structuredData: structuredData ? structuredData.map(d => ({ name: d.name, type: d.type, length: d.content.length })) : null, // Store structured data metadata
           basedOnPastReportIds: relevantPastReports.map(r => r.reportId)
         });
+        if (onEvent && savedReportId) await onEvent('report_saved', { report_id: savedReportId });
 
         // Auto-index saved report content when enabled
         try {
@@ -645,6 +696,55 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
     const genericErrorMessage = `[${requestId}] Research process failed for query "${query.substring(0, 50)}..."`;
     // Throw a new generic error
     throw new Error(genericErrorMessage);
+  }
+}
+
+// Submit research job (async)
+async function submitResearch(params, mcpExchange = null, requestId = 'unknown-req') {
+  const normalized = normalizeResearchParams(params);
+  const jobId = await dbClient.createJob('research', normalized);
+  await dbClient.appendJobEvent(jobId, 'submitted', { requestId, query: normalized.query });
+  return JSON.stringify({ job_id: jobId });
+}
+
+async function getJobStatusTool(params) {
+  const stat = await dbClient.getJobStatus(params.job_id);
+  const events = await dbClient.getJobEvents(params.job_id, params.since_event_id || 0, 500);
+  return JSON.stringify({ job: stat, events }, null, 2);
+}
+
+async function cancelJobTool(params) {
+  await dbClient.cancelJob(params.job_id);
+  return JSON.stringify({ canceled: true }, null, 2);
+}
+
+// Unified hybrid search
+async function searchTool(params) {
+  const rows = await dbClient.searchHybrid(params.q, params.k);
+  const filtered = rows.filter(r => {
+    if (params.scope === 'reports') return r.type === 'report';
+    if (params.scope === 'docs') return r.type === 'doc';
+    return true;
+  });
+  return JSON.stringify(filtered, null, 2);
+}
+
+// Guarded SQL + optional LLM explanation
+async function queryTool(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { sql, params: queryParams, explain } = params;
+  const rowsStr = await executeSql({ sql, params: queryParams }, null, requestId);
+  if (!explain) return rowsStr;
+  try {
+    const model = require('../../config').models.planning;
+    const messages = [
+      { role: 'system', content: 'Explain these SQL SELECT results concisely in plain English for a technical reader.' },
+      { role: 'user', content: `Results (first 30 rows max):\n${rowsStr.slice(0, 2000)}` }
+    ];
+    const resp = await openRouterClient.chatCompletion(model, messages, { temperature: 0.2, max_tokens: 400 });
+    const explanation = resp.choices?.[0]?.message?.content || '';
+    return JSON.stringify({ rows: JSON.parse(rowsStr), explanation }, null, 2);
+  } catch (_) {
+    return rowsStr;
   }
 }
 
@@ -1164,6 +1264,9 @@ async function fetchUrl(params, mcpExchange = null, requestId = 'unknown-req') {
 module.exports = {
   // Schemas
   conductResearchSchema,
+  submitResearchSchema,
+  getJobStatusSchema,
+  cancelJobSchema,
   executeSqlSchema, // Add new schema
   researchFollowUpSchema,
   getPastResearchSchema,
@@ -1183,9 +1286,14 @@ module.exports = {
   indexUrlSchema,
   searchIndexSchema,
   indexStatusSchema,
+  searchSchema,
+  querySchema,
   
   // Functions
   conductResearch,
+   submitResearch,
+  getJobStatusTool,
+  cancelJobTool,
   researchFollowUp,
   getPastResearch,
   rateResearchReport,
@@ -1201,6 +1309,8 @@ module.exports = {
   reindexVectorsTool,
   searchWeb,
   fetchUrl,
+  searchTool,
+  queryTool,
   index_texts,
   index_url,
   search_index,

@@ -61,7 +61,7 @@ class PlanningAgent {
 
   // Added previousResults, images, documents, structuredData, pastReports, inputEmbeddings, and requestId parameters
   async planResearch(query, options = {}, previousResults = null, requestId = 'unknown-req') { 
-    const { images, documents, structuredData, pastReports, inputEmbeddings } = options; // Extract context
+    const { images, documents, structuredData, pastReports, inputEmbeddings, onEvent } = options; // Extract context
     let systemPrompt;
     let classifiedDomain = 'general'; // Default domain
 
@@ -153,6 +153,7 @@ Refinement Guidelines:
             max_tokens: 2000
           });
           this.model = m; // stick to a working model
+          if (onEvent && response?.usage) await onEvent('planning_usage', { usage: response.usage });
           break;
         } catch (e) {
           lastErr = e;

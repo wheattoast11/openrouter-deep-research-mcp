@@ -1,3 +1,27 @@
+# Upgrade Notes (v1.2.0)
+
+## Highlights
+- Async jobs (`submit_research`, `get_job_status`, `cancel_job`) with SSE streams.
+- Unified `search` (BM25 + vectors + optional LLM rerank).
+- Usage (tokens) aggregated into `research_metadata.usage`.
+- Minimal micro UI at `/ui` for live monitoring.
+- MCP client JSON config examples in README; package exposes `openrouter-agents` bin.
+
+## Breaking changes
+- None; existing tools remain. `search_index` is still available but superseded by `search`.
+
+## Migrations
+- On startup, tables and columns are created/altered idempotently:
+  - `index_documents.doc_len`, `index_documents.doc_embedding`.
+  - `jobs`, `job_events`.
+
+## New env vars
+- `JOBS_CONCURRENCY`, `JOB_HEARTBEAT_MS`, `JOB_LEASE_TIMEOUT_MS` for job worker.
+- `INDEXER_RERANK_ENABLED`, `INDEXER_RERANK_MODEL` (optional rerank).
+
+## Client configuration
+- See README for STDIO and HTTP/SSE JSON config blocks.
+
 # OpenRouter Agents MCP Server Upgrade Notes
 
 ## Summary of Changes

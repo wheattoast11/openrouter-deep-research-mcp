@@ -2,6 +2,7 @@
 const { PGlite } = require('@electric-sql/pglite');
 const { vector } = require('@electric-sql/pglite/vector');
 const config = require('../../config');
+const openRouterClient = require('./openRouterClient');
 const path = require('path');
 
 // Detect environment
@@ -246,6 +247,8 @@ async function initDB() {
           source_id TEXT NOT NULL,   -- report id or URL or custom id
           title TEXT,
           content TEXT NOT NULL,
+          doc_len INTEGER,
+          doc_embedding VECTOR(${config.database.vectorDimension}),
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
       `);
@@ -265,8 +268,41 @@ async function initDB() {
       `);
       await db.query(`CREATE INDEX IF NOT EXISTS idx_postings_term ON index_postings(term);`);
       await db.query(`CREATE INDEX IF NOT EXISTS idx_postings_doc ON index_postings(doc_id);`);
-      process.stderr.write(`[${new Date().toISOString()}] BM25 index tables created or verified\n`);
+      // Ensure missing columns for legacy installs
+      try { await db.query(`ALTER TABLE index_documents ADD COLUMN IF NOT EXISTS doc_len INTEGER;`); } catch(_) {}
+      try { await db.query(`ALTER TABLE index_documents ADD COLUMN IF NOT EXISTS doc_embedding VECTOR(${config.database.vectorDimension});`); } catch(_) {}
+      try { await db.query(`CREATE INDEX IF NOT EXISTS idx_index_documents_embedding ON index_documents USING hnsw (doc_embedding vector_cosine_ops);`); } catch(_) {}
+      process.stderr.write(`[${new Date().toISOString()}] BM25/vector index tables created or verified\n`);
     }
+
+    // Job tables for async processing
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        params JSONB,
+        status TEXT NOT NULL DEFAULT 'queued',
+        progress JSONB,
+        result JSONB,
+        canceled BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ,
+        heartbeat_at TIMESTAMPTZ
+      );
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS job_events (
+        id SERIAL PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        ts TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        event_type TEXT NOT NULL,
+        payload JSONB
+      );
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);`);
+    process.stderr.write(`[${new Date().toISOString()}] Job tables created or verified\n`);
 
     // Create indexes for better performance
     await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_original_query ON reports (original_query);`);
@@ -334,13 +370,24 @@ async function indexDocument({ sourceType, sourceId, title, content }) {
   if (!config.indexer?.enabled) return null;
   if (!content) return null;
   const truncated = content.slice(0, config.indexer.maxDocLength || 8000);
+  const terms = tokenize(`${title || ''} ${truncated}`);
+  const docLen = terms.length;
+  // Optional embedding
+  let embeddingVec = null;
+  if (config.indexer.embedDocs && isEmbedderReady) {
+    try {
+      const emb = await generateEmbedding(`${title || ''}\n${truncated}`);
+      embeddingVec = formatVectorForPgLite(emb);
+    } catch(_) {}
+  }
   return executeWithRetry(async () => {
     const ins = await db.query(
-      `INSERT INTO index_documents (source_type, source_id, title, content) VALUES ($1,$2,$3,$4) RETURNING id;`,
-      [sourceType, sourceId, title || null, truncated]
+      `INSERT INTO index_documents (source_type, source_id, title, content, doc_len, doc_embedding)
+       VALUES ($1,$2,$3,$4,$5, CASE WHEN $6 IS NULL THEN NULL ELSE $6::vector END)
+       RETURNING id;`,
+      [sourceType, sourceId, title || null, truncated, docLen, embeddingVec]
     );
     const docId = ins.rows[0].id;
-    const terms = tokenize(`${title || ''} ${truncated}`);
     const tfMap = new Map();
     for (const term of terms) tfMap.set(term, (tfMap.get(term) || 0) + 1);
     for (const [term, tf] of tfMap.entries()) {
@@ -355,60 +402,134 @@ async function searchHybrid(queryText, limit = 10) {
   const weights = config.indexer?.weights || { bm25: 0.7, vector: 0.3 };
   const terms = tokenize(queryText);
   if (terms.length === 0) return [];
-  // BM25-like scoring (simplified) using SQL aggregates
   const placeholders = terms.map((_, i) => `$${i + 1}`).join(',');
-  const bm25Rows = await executeWithRetry(async () => {
+
+  // Compute BM25 for documents with true k1/b and avgdl
+  const bm25Docs = await executeWithRetry(async () => {
+    const k1 = config.indexer?.bm25?.k1 || 1.2;
+    const b = config.indexer?.bm25?.b || 0.75;
     const res = await db.query(
-      `WITH term_stats AS (
+      `WITH q_terms AS (
          SELECT term, df FROM index_terms WHERE term IN (${placeholders})
        ),
-       scores AS (
-         SELECT p.doc_id,
-                SUM( ( (LOG((SELECT COUNT(*) FROM index_documents)::float) - LOG(GREATEST(ts.df,1))) ) * p.tf ) AS score
-         FROM index_postings p
-         JOIN term_stats ts ON ts.term = p.term
-         WHERE p.term IN (${placeholders})
-         GROUP BY p.doc_id
+       stats AS (
+         SELECT COUNT(*)::float AS N, COALESCE(AVG(doc_len),1)::float AS avgdl FROM index_documents
+       ),
+       tf AS (
+         SELECT p.doc_id, p.term, p.tf FROM index_postings p WHERE p.term IN (${placeholders})
+       ),
+       joined AS (
+         SELECT tf.doc_id, tf.term, tf.tf, q_terms.df, stats.N, stats.avgdl, d.doc_len
+         FROM tf
+         JOIN q_terms ON q_terms.term = tf.term
+         CROSS JOIN stats
+         JOIN index_documents d ON d.id = tf.doc_id
+       ),
+       scoring AS (
+         SELECT doc_id,
+           SUM( (LN(1 + ((N - df + 0.5)/(df + 0.5)))) * ( (tf * (${k1}+1.0)) / (tf + ${k1} * (1 - ${b} + ${b} * (COALESCE(doc_len,1)::float / NULLIF(avgdl,0))) ) ) ) AS bm25
+         FROM joined
+         GROUP BY doc_id
        )
-       SELECT d.id, d.source_type, d.source_id, d.title, d.content, s.score
-       FROM scores s JOIN index_documents d ON d.id = s.doc_id
-       ORDER BY s.score DESC
+       SELECT d.id, d.source_type, d.source_id, d.title, d.content, s.bm25
+       FROM scoring s JOIN index_documents d ON d.id = s.doc_id
+       ORDER BY s.bm25 DESC
        LIMIT ${limit}
       `,
       terms
     );
-    return res.rows;
-  }, 'searchBM25', []);
+    return res.rows.map(r => ({ ...r, bm25: Number(r.bm25 || 0) }));
+  }, 'searchBM25Docs', []);
 
-  // Optional vector rerank: use query embedding vs. report embeddings when source_type='report'
-  let reranked = bm25Rows;
-  if (weights.vector > 0 && isEmbedderReady && bm25Rows.length > 0) {
-    const qEmb = await generateEmbedding(queryText);
-    if (qEmb) {
-      const qVec = formatVectorForPgLite(qEmb);
-      // Get vector similarity where possible by joining to reports table via source_id
-      const ids = bm25Rows.filter(r => r.source_type === 'report').map(r => Number(r.source_id)).filter(n => !Number.isNaN(n));
-      let vecScores = new Map();
-      if (ids.length > 0) {
-        const ph = ids.map((_, i) => `$${i + 1}`).join(',');
-        const rows = await executeWithRetry(async () => {
-          const r = await db.query(
-            `SELECT id, 1 - (query_embedding <=> $${ids.length + 1}::vector) AS sim
-             FROM reports WHERE id IN (${ph}) AND query_embedding IS NOT NULL`,
-            [...ids, qVec]
-          );
-          return r.rows;
-        }, 'vectorRerankLookup', []);
-        for (const row of rows) vecScores.set(row.id, Number(row.sim));
-      }
-      reranked = bm25Rows.map(r => {
-        const vs = r.source_type === 'report' ? (vecScores.get(Number(r.source_id)) || 0) : 0;
-        const hybrid = weights.bm25 * Number(r.score || 0) + weights.vector * vs;
-        return { ...r, hybridScore: hybrid, vectorScore: vs };
-      }).sort((a, b) => b.hybridScore - a.hybridScore);
+  // Vector similarities
+  let qEmb = null; let qVec = null;
+  if (isEmbedderReady && (weights.vector || 0) > 0) {
+    qEmb = await generateEmbedding(queryText);
+    qVec = qEmb ? formatVectorForPgLite(qEmb) : null;
+  }
+
+  // Doc vector scores
+  let docVecScores = new Map();
+  if (qVec && bm25Docs.length > 0) {
+    const docIds = bm25Docs.map(r => r.id);
+    const ph = docIds.map((_, i) => `$${i + 1}`).join(',');
+    const rows = await executeWithRetry(async () => {
+      const r = await db.query(
+        `SELECT id, 1 - (doc_embedding <=> $${docIds.length + 1}::vector) AS sim
+         FROM index_documents WHERE id IN (${ph}) AND doc_embedding IS NOT NULL`,
+        [...docIds, qVec]
+      );
+      return r.rows;
+    }, 'vectorDocsLookup', []);
+    for (const row of rows) docVecScores.set(Number(row.id), Number(row.sim));
+  }
+
+  // Report vector scores (top-k recent for performance)
+  let reportVecRows = [];
+  if (qVec) {
+    reportVecRows = await executeWithRetry(async () => {
+      const r = await db.query(
+        `SELECT id, original_query, final_report, 1 - (query_embedding <=> $1::vector) AS sim
+         FROM reports WHERE query_embedding IS NOT NULL
+         ORDER BY sim DESC
+         LIMIT $2;`,
+        [qVec, Math.max(50, limit)]
+      );
+      return r.rows.map(row => ({ id: row.id, sim: Number(row.sim), original_query: row.original_query, final_report: row.final_report }));
+    }, 'vectorReportsLookup', []);
+  }
+
+  // Normalize and combine
+  const allDocBm25 = bm25Docs.map(x => x.bm25);
+  const bm25Min = Math.min(...allDocBm25, 0);
+  const bm25Max = Math.max(...allDocBm25, 1);
+  const norm = (v, min, max) => (max - min) > 0 ? (v - min) / (max - min) : 0;
+
+  const docResults = bm25Docs.map(d => {
+    const bm25N = norm(d.bm25 || 0, bm25Min, bm25Max);
+    const v = docVecScores.get(Number(d.id)) || 0;
+    const hybrid = (weights.bm25 || 0) * bm25N + (weights.vector || 0) * v;
+    return {
+      type: 'doc',
+      id: d.id,
+      source_type: 'doc',
+      source_id: d.source_id,
+      title: d.title,
+      snippet: (d.content || '').slice(0, 300),
+      bm25: d.bm25 || 0,
+      vectorScore: v,
+      hybridScore: hybrid
+    };
+  });
+
+  const reportResults = reportVecRows.map(r => ({
+    type: 'report',
+    id: r.id,
+    source_type: 'report',
+    source_id: String(r.id),
+    title: (r.original_query || `Report ${r.id}`).slice(0, 160),
+    snippet: (r.final_report || '').slice(0, 300),
+    bm25: 0,
+    vectorScore: r.sim,
+    hybridScore: (weights.vector || 0) * r.sim
+  }));
+
+  const combined = [...docResults, ...reportResults]
+    .sort((a, b) => b.hybridScore - a.hybridScore)
+    .slice(0, Math.max(limit, 10));
+
+  // Optional LLM rerank of the top window
+  if (config.indexer?.rerankEnabled && (config.indexer?.rerankModel || config.models?.planning)) {
+    try {
+      const window = combined.slice(0, Math.min(50, combined.length));
+      const reranked = await rerankWithLLM(queryText, window);
+      return reranked.slice(0, limit);
+    } catch (e) {
+      console.warn(`[${new Date().toISOString()}] LLM rerank failed, returning hybrid scores.`, e.message);
     }
   }
-  return reranked.slice(0, limit);
+
+  return combined.slice(0, limit);
 }
 
 async function indexExistingReports(limit = 1000) {
@@ -509,6 +630,32 @@ async function saveResearchReport({ originalQuery, parameters, finalReport, rese
     'saveResearchReport',
     null // fallback value if operation fails
   );
+}
+
+// Lightweight LLM reranker using planning model; expects minimal tokens
+async function rerankWithLLM(queryText, items) {
+  const model = config.indexer?.rerankModel || config.models.planning;
+  const prompt = `Rerank the following search results for the query. Return a JSON array of indices in best order. Only output JSON.\n\nQuery: ${queryText}\n\nResults (index, type, title/snippet):\n` +
+    items.map((it, i) => `${i}. [${it.type}] ${it.title || ''} :: ${(it.snippet || '').slice(0, 200)}`).join('\n');
+  const messages = [
+    { role: 'system', content: 'You are a re-ranker. Output only a JSON array of integers representing the best ranking.' },
+    { role: 'user', content: prompt }
+  ];
+  const res = await openRouterClient.chatCompletion(model, messages, { temperature: 0.0, max_tokens: 200 });
+  const text = res.choices?.[0]?.message?.content || '[]';
+  let order = [];
+  try { order = JSON.parse(text); } catch(_) { order = []; }
+  const seen = new Set();
+  const ranked = [];
+  for (const idx of order) {
+    if (Number.isInteger(idx) && idx >= 0 && idx < items.length && !seen.has(idx)) {
+      ranked.push(items[idx]);
+      seen.add(idx);
+    }
+  }
+  // Append any leftovers in original order
+  for (let i = 0; i < items.length; i++) if (!seen.has(i)) ranked.push(items[i]);
+  return ranked;
 }
 
 async function addFeedbackToReport(reportId, feedback) {
@@ -758,7 +905,15 @@ module.exports = {
   // Indexer API
   indexDocument,
   searchHybrid,
-  indexExistingReports
+  indexExistingReports,
+  // Jobs API
+  createJob,
+  appendJobEvent,
+  setJobStatus,
+  getJob,
+  getJobEvents,
+  getJobStatus,
+  cancelJob
 };
 
 // Function to retrieve a single report by its ID
@@ -852,3 +1007,110 @@ async function reindexVectors() {
     false
   );
 }
+
+// --- Async Job Helpers ---
+async function createJob(type, params) {
+  const id = `job_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  await executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO jobs (id, type, params, status, created_at, updated_at) VALUES ($1,$2,$3,'queued', NOW(), NOW());`,
+      [id, type, JSON.stringify(params || {})]
+    );
+  }, 'createJob', null);
+  return id;
+}
+
+async function appendJobEvent(jobId, eventType, payload) {
+  return executeWithRetry(async () => {
+    const res = await db.query(
+      `INSERT INTO job_events (job_id, event_type, payload, ts) VALUES ($1,$2,$3, NOW()) RETURNING id, ts;`,
+      [jobId, eventType, JSON.stringify(payload || {})]
+    );
+    await db.query(`UPDATE jobs SET updated_at = NOW(), heartbeat_at = NOW() WHERE id = $1;`, [jobId]);
+    return res.rows[0];
+  }, 'appendJobEvent', null);
+}
+
+async function setJobStatus(jobId, status, { progress = null, result = null, started = false, finished = false } = {}) {
+  return executeWithRetry(async () => {
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+    const push = (frag, v) => { fields.push(frag); vals.push(v); };
+    push(`status = $${idx++}`, status);
+    if (progress !== null) push(`progress = $${idx++}`, JSON.stringify(progress));
+    if (result !== null) push(`result = $${idx++}`, JSON.stringify(result));
+    if (started) fields.push(`started_at = NOW()`);
+    if (finished) fields.push(`finished_at = NOW()`);
+    fields.push(`updated_at = NOW()`);
+    vals.push(jobId);
+    await db.query(`UPDATE jobs SET ${fields.join(', ')} WHERE id = $${idx};`, vals);
+  }, 'setJobStatus', null);
+}
+
+async function getJob(jobId) {
+  const row = await executeWithRetry(async () => {
+    const r = await db.query(`SELECT * FROM jobs WHERE id = $1;`, [jobId]);
+    return r.rows[0] || null;
+  }, 'getJob', null);
+  return row;
+}
+
+async function getJobEvents(jobId, afterId = 0, limit = 500) {
+  return executeWithRetry(async () => {
+    const r = await db.query(
+      `SELECT id, job_id, ts, event_type, payload FROM job_events WHERE job_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3;`,
+      [jobId, Number(afterId) || 0, limit]
+    );
+    return r.rows;
+  }, 'getJobEvents', []);
+}
+
+async function getJobStatus(jobId) {
+  const job = await getJob(jobId);
+  if (!job) return null;
+  return {
+    id: job.id,
+    status: job.status,
+    progress: typeof job.progress === 'string' ? JSON.parse(job.progress) : job.progress,
+    result: typeof job.result === 'string' ? JSON.parse(job.result) : job.result,
+    canceled: !!job.canceled,
+    updated_at: job.updated_at,
+    started_at: job.started_at,
+    finished_at: job.finished_at
+  };
+}
+
+async function cancelJob(jobId) {
+  await executeWithRetry(async () => {
+    await db.query(`UPDATE jobs SET canceled = TRUE, status = 'canceled', updated_at = NOW(), finished_at = COALESCE(finished_at, NOW()) WHERE id = $1;`, [jobId]);
+  }, 'cancelJob', null);
+  return true;
+}
+
+// Claim the next queued job with a lease
+async function claimNextJob() {
+  const now = new Date().toISOString();
+  const leaseTimeoutMs = require('../../config').jobs.leaseTimeoutMs;
+  return executeWithRetry(async () => {
+    // Mark stale running jobs as queued again if heartbeat expired
+    await db.query(`UPDATE jobs SET status='queued', heartbeat_at=NULL, started_at=NULL WHERE status='running' AND (heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '${Math.max(1, Math.floor(leaseTimeoutMs/1000))} seconds')`);
+    const r = await db.query(
+      `UPDATE jobs SET status='running', started_at = COALESCE(started_at, NOW()), heartbeat_at = NOW(), updated_at = NOW()
+       WHERE id = (
+         SELECT id FROM jobs WHERE status='queued' AND canceled = FALSE ORDER BY created_at ASC LIMIT 1
+       )
+       RETURNING *;`
+    );
+    return r.rows[0] || null;
+  }, 'claimNextJob', null);
+}
+
+async function heartbeatJob(jobId) {
+  return executeWithRetry(async () => {
+    await db.query(`UPDATE jobs SET heartbeat_at = NOW(), updated_at = NOW() WHERE id = $1;`, [jobId]);
+  }, 'heartbeatJob', null);
+}
+
+module.exports.claimNextJob = claimNextJob;
+module.exports.heartbeatJob = heartbeatJob;

@@ -8,7 +8,8 @@ const config = {
     name: "openrouter_agents",
     version: pkg.version,
     // Add a key for basic server authentication (optional)
-    apiKey: process.env.SERVER_API_KEY || null 
+    apiKey: process.env.SERVER_API_KEY || null,
+    requireHttps: process.env.REQUIRE_HTTPS === 'true'
   },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -94,7 +95,9 @@ const config = {
       bm25: Number(process.env.INDEXER_WEIGHT_BM25) || 0.7,
       vector: Number(process.env.INDEXER_WEIGHT_VECTOR) || 0.3
     },
-    stopwords: (process.env.INDEXER_STOPWORDS || '').split(',').map(s => s.trim()).filter(Boolean)
+    stopwords: (process.env.INDEXER_STOPWORDS || '').split(',').map(s => s.trim()).filter(Boolean),
+    rerankEnabled: process.env.INDEXER_RERANK_ENABLED === 'true',
+    rerankModel: process.env.INDEXER_RERANK_MODEL || null
   },
   // Configuration for where to save full research reports
   reportOutputPath: process.env.REPORT_OUTPUT_PATH || './research_outputs/'
@@ -108,6 +111,11 @@ config.mcp = {
   }
 };
 
+// MCP transport preferences
+config.mcp.transport = {
+  streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED === 'false' ? false : true
+};
+
 // Prompt strategy configuration
 config.prompts = {
   compact: process.env.PROMPTS_COMPACT === 'false' ? false : true, // default compact prompts on
@@ -118,6 +126,13 @@ config.prompts = {
 // Simple tool aliasing (short params) for minimal token overhead
 config.simpleTools = {
   enabled: process.env.SIMPLE_TOOLS === 'false' ? false : true
+};
+
+// Async job processing
+config.jobs = {
+  concurrency: parseInt(process.env.JOBS_CONCURRENCY, 10) || 2,
+  heartbeatMs: parseInt(process.env.JOB_HEARTBEAT_MS, 10) || 5000,
+  leaseTimeoutMs: parseInt(process.env.JOB_LEASE_TIMEOUT_MS, 10) || 60000
 };
 
 module.exports = config;

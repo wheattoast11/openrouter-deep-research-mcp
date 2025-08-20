@@ -76,13 +76,73 @@ node src/server/mcpServer.js --stdio
 SERVER_API_KEY=$SERVER_API_KEY node src/server/mcpServer.js
 ```
 
+### One-liner demo scripts
+Dev (HTTP/SSE):
+```bash
+SERVER_API_KEY=devkey INDEXER_ENABLED=true node src/server/mcpServer.js
+```
+
+STDIO (Cursor/VS Code):
+```bash
+OPENROUTER_API_KEY=your_key INDEXER_ENABLED=true node src/server/mcpServer.js --stdio
+```
+
+### MCP client JSON configuration (no manual start required)
+You can register this server directly in MCP clients that support JSON server manifests.
+
+Minimal examples:
+
+1) STDIO transport (recommended for IDEs)
+```json
+{
+  "servers": {
+    "openrouter-agents": {
+      "command": "npx",
+      "args": ["openrouter-agents", "--stdio"],
+      "env": {
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+        "SERVER_API_KEY": "${SERVER_API_KEY}",
+        "PGLITE_DATA_DIR": "./researchAgentDB",
+        "INDEXER_ENABLED": "true"
+      }
+    }
+  }
+}
+```
+
+2) HTTP/SSE transport (daemon mode)
+```json
+{
+  "servers": {
+    "openrouter-agents": {
+      "url": "http://127.0.0.1:3002",
+      "sse": "/sse",
+      "messages": "/messages",
+      "headers": {
+        "Authorization": "Bearer ${SERVER_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+With the package installed globally (or via npx), MCP clients can spawn the server automatically. See your client’s docs for where to place this JSON (e.g., `~/.config/client/mcp.json`).
+
 ## Tools (high‑value)
-- Research: `conduct_research`, `research_follow_up`
+- Research: `submit_research` (async), `conduct_research` (sync/stream), `research_follow_up`
+- Jobs: `get_job_status`, `cancel_job`
+- Retrieval: `search` (hybrid BM25+vector with optional LLM rerank)
+- SQL: `query` (SELECT‑only, optional `explain`)
 - Knowledge base: `get_past_research`, `list_research_history`, `get_report_content`
 - DB ops: `backup_db` (tar.gz), `export_reports`, `import_reports`, `db_health`, `reindex_vectors`
 - Models: `list_models`
 - Web: `search_web`, `fetch_url`
-- Indexer (new): `index_texts`, `index_url`, `search_index`, `index_status`
+- Indexer: `index_texts`, `index_url`, `search_index`, `index_status`
+
+### Tool usage patterns (for LLMs)
+Use `tool_patterns` resource to view JSON recipes describing effective chaining, e.g.:
+- Search → Fetch → Research
+- Async research: submit, stream via SSE `/jobs/:id/events`, then get report content
 
 Notes
 - Data lives locally under `PGLITE_DATA_DIR` (default `./researchAgentDB`). Backups are tarballs in `./backups`.
@@ -143,10 +203,27 @@ How it differs from typical “agent chains”:
 - Start (HTTP/SSE): `npm start`
 - Generate examples: `npm run gen:examples`
 - List models: MCP `list_models { refresh:false }`
-- Research (compact): `conduct_research { q:"<query>", cost:"low", aud:"intermediate", fmt:"report", src:true }`
+- Submit research (async): `submit_research { q:"<query>", cost:"low", aud:"intermediate", fmt:"report", src:true }`
+- Track job: `get_job_status { job_id:"..." }`, cancel: `cancel_job { job_id:"..." }`
+- Unified search: `search { q:"<query>", k:10, scope:"both" }`
+- SQL (read‑only): `query { sql:"SELECT ... WHERE id = $1", params:[1], explain:true }`
 - Get past research: `get_past_research { query:"<query>", limit:5 }`
 - Index URL (if enabled): `index_url { url:"https://..." }`
-- Search index (if enabled): `search_index { query:"<q>", limit:10 }`
+- Micro UI (ghost): visit `http://localhost:3002/ui` to stream job events (SSE).
+
+## Package publishing
+- Name: `openrouter-agents`
+- Version: 1.2.0
+- Bin: `openrouter-agents`
+- Author: Tej Desai <admin@terminals.tech>
+- Homepage: https://terminals.tech
+
+Install and run without cloning:
+```bash
+npx openrouter-agents --stdio
+# or daemon
+SERVER_API_KEY=your_key npx openrouter-agents
+```
 
 ## Validation – MSeeP (Multi‑Source Evidence & Evaluation Protocol)
 - **Citations enforced**: explicit URLs, confidence tags; unknowns marked `[Unverified]`.

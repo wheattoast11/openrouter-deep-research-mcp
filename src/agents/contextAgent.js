@@ -210,6 +210,10 @@ Please perform a critical synthesis of these findings, considering the original 
         if (chunk.done) {
           break; // Stream finished
         }
+        if (chunk.usage) {
+          console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Stream usage:`, JSON.stringify(chunk.usage));
+          yield { usage: chunk.usage };
+        }
         if (chunk.error) {
           streamError = chunk.error;
           console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Error received in stream:`, streamError);

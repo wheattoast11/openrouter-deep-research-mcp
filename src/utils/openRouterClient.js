@@ -70,6 +70,7 @@ class OpenRouterClient {
       }
 
       const decoder = new TextDecoder();
+      let finalUsage = null;
 
       let isDone = false;
       const parser = createParser(event => {
@@ -91,6 +92,10 @@ class OpenRouterClient {
             // yield content tokens
             // Note: Generators cannot yield inside callbacks; set a queue instead
             this._enqueue?.({ content: delta.content });
+          } else if (parsed.usage) {
+            // capture usage if provided mid/final stream
+            finalUsage = parsed.usage;
+            this._enqueue?.({ usage: finalUsage });
           } else if (parsed.error) {
             this._enqueue?.({ error: parsed.error });
           }
@@ -123,6 +128,8 @@ class OpenRouterClient {
         } catch (streamErr) {
           push({ error: { message: `Stream failed: ${streamErr.message}` } });
         } finally {
+          // emit final usage if not already emitted
+          if (finalUsage) push({ usage: finalUsage });
           push({ done: true });
         }
       })();
