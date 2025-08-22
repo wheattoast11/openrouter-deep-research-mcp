@@ -38,12 +38,12 @@ SERVER_PORT=3002
 ENSEMBLE_SIZE=2
 PARALLELISM=4
 
-# Models (override as needed)
+# Models (override as needed) - Updated with state-of-the-art cost-effective models
 PLANNING_MODEL=openai/gpt-5-chat
 PLANNING_CANDIDATES=openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4
-HIGH_COST_MODELS=openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4
-LOW_COST_MODELS=openai/gpt-5-mini,google/gemini-2.5-flash,google/gemini-2.5-flash-lite
-VERY_LOW_COST_MODELS=openai/gpt-5-nano
+HIGH_COST_MODELS=x-ai/grok-4,openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4,morph/morph-v3-large
+LOW_COST_MODELS=deepseek/deepseek-chat-v3.1,z-ai/glm-4.5v,qwen/qwen3-coder,openai/gpt-5-mini,google/gemini-2.5-flash
+VERY_LOW_COST_MODELS=openai/gpt-5-nano,deepseek/deepseek-chat-v3.1
 
 # Storage
 PGLITE_DATA_DIR=./researchAgentDB

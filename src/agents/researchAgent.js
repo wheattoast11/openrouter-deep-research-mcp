@@ -30,7 +30,7 @@ class ResearchAgent {
     try {
       const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
         temperature: 0.1, // Low temp for consistent classification
-        max_tokens: 32 // Ensure above provider minimum
+        max_tokens: 64 // Ensure well above OpenRouter minimum of 16
       });
       let domain = response.choices[0].message.content.trim().toLowerCase();
       // Basic cleanup if model adds punctuation etc.
@@ -58,7 +58,7 @@ class ResearchAgent {
         const systemPrompt = `Assess the complexity of the following research query. Is it likely answerable with a concise factual statement or does it require deep analysis? Respond with ONLY one complexity level: ${COMPLEXITY_LEVELS.join(', ')}.`;
         const messages = [ { role: 'system', content: systemPrompt }, { role: 'user', content: query } ];
         try {
-           const response = await openRouterClient.chatCompletion(this.classificationModel, messages, { temperature: 0.1, max_tokens: 32 });
+           const response = await openRouterClient.chatCompletion(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
            let complexity = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
            if (COMPLEXITY_LEVELS.includes(complexity)) {
               console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Classified query complexity for "${query.substring(0, 50)}..." as: ${complexity}`);
@@ -89,7 +89,7 @@ class ResearchAgent {
           const preferred = modelCatalog.getPreferred2025Models();
           const domainRegex = new RegExp(domain, 'i');
           const filtered = (preferred.length > 0 ? preferred : catalog)
-            .filter(m => domainRegex.test(m.label) || domainRegex.test(m.id) || true);
+            .filter(m => domainRegex.test(m.label) || domainRegex.test(m.id));
           if (filtered.length > 0) {
             const idx = Math.abs(agentIndex) % filtered.length;
             selectedModel = filtered[idx].id;
@@ -201,13 +201,13 @@ class ResearchAgent {
     console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Ensemble models: ${modelsToRun.join(', ')}`);
 
     const ensemblePromises = modelsToRun.map(model => 
-      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId)
+      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent)
     );
     return Promise.all(ensemblePromises);
   }
   
-  // Updated to include structuredData, inputEmbeddings, and requestId parameters
-  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req') { 
+  // Updated to include structuredData, inputEmbeddings, requestId, and onEvent parameters
+  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null) { 
      // Dynamic capability check via model catalog
      let modelSupportsVision = false;
      try {
@@ -217,11 +217,12 @@ class ResearchAgent {
      } catch (_) {}
      // Fallback known list
      if (!modelSupportsVision) {
-       const KNOWN_VISION_MODELS = [
-         "openai/gpt-4o", "openai/gpt-4o-mini",
-         "google/gemini-2.0-pro-001", "google/gemini-2.0-flash-001",
-         "anthropic/claude-3.7-sonnet"
-       ];
+             const KNOWN_VISION_MODELS = [
+        "openai/gpt-4o", "openai/gpt-4o-mini",
+        "google/gemini-2.5-pro", "google/gemini-2.5-flash",
+        "z-ai/glm-4.5v",
+        "anthropic/claude-3.7-sonnet"
+      ];
        modelSupportsVision = KNOWN_VISION_MODELS.includes(model);
      }
      

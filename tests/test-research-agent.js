@@ -1,6 +1,6 @@
 // test-research-agent.js
 require('dotenv').config();
-const { conductResearch } = require('./src/server/tools');
+const { conductResearch } = require('../src/server/tools');
 
 // Enable more detailed debug logging
 process.env.DEBUG = 'true';

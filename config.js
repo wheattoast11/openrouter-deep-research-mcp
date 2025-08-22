@@ -32,9 +32,11 @@ const config = {
         // CSV fallback -> wrap ids as objects without explicit domains
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.HIGH_COST_MODELS) : [
+        { name: "x-ai/grok-4", domains: ["reasoning", "technical", "general", "creative"] },
         { name: "openai/gpt-5-chat", domains: ["reasoning", "technical", "general"] },
         { name: "google/gemini-2.5-pro", domains: ["reasoning", "technical", "general"] },
-        { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] }
+        { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] },
+        { name: "morph/morph-v3-large", domains: ["coding", "editing", "technical"] }
       ],
     lowCost: process.env.LOW_COST_MODELS ? 
       (function parseLowCost(val){
@@ -44,6 +46,9 @@ const config = {
         } catch(_) {}
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.LOW_COST_MODELS) : [
+        { name: "deepseek/deepseek-chat-v3.1", domains: ["general", "reasoning", "technical", "coding"] },
+        { name: "z-ai/glm-4.5v", domains: ["general", "multimodal", "vision", "reasoning"] },
+        { name: "qwen/qwen3-coder", domains: ["coding", "technical", "reasoning"] },
         { name: "openai/gpt-5-mini", domains: ["general", "reasoning", "search"] },
         { name: "google/gemini-2.5-flash", domains: ["general", "creative", "technical"] },
         { name: "google/gemini-2.5-flash-lite", domains: ["general", "creative"] }
@@ -133,6 +138,35 @@ config.jobs = {
   concurrency: parseInt(process.env.JOBS_CONCURRENCY, 10) || 2,
   heartbeatMs: parseInt(process.env.JOB_HEARTBEAT_MS, 10) || 5000,
   leaseTimeoutMs: parseInt(process.env.JOB_LEASE_TIMEOUT_MS, 10) || 60000
+};
+
+// Advanced caching and cost optimization
+config.caching = {
+  // Semantic result caching
+  results: {
+    enabled: process.env.RESULT_CACHING_ENABLED !== 'false',
+    ttlSeconds: parseInt(process.env.RESULT_CACHE_TTL, 10) || 7200, // 2 hours
+    maxEntries: parseInt(process.env.RESULT_CACHE_MAX_ENTRIES, 10) || 1000,
+    similarityThreshold: parseFloat(process.env.CACHE_SIMILARITY_THRESHOLD) || 0.85
+  },
+  // Model response caching
+  models: {
+    enabled: process.env.MODEL_CACHING_ENABLED !== 'false',
+    ttlSeconds: parseInt(process.env.MODEL_CACHE_TTL, 10) || 3600, // 1 hour
+    maxEntries: parseInt(process.env.MODEL_CACHE_MAX_ENTRIES, 10) || 500
+  },
+  // Cost optimization strategies
+  optimization: {
+    preferredLowCostModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder', 'z-ai/glm-4.5v'],
+    visionModels: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash', 'qwen/qwen2.5-vl-72b-instruct'],
+    codingModels: ['qwen/qwen3-coder', 'morph/morph-v3-large', 'deepseek/deepseek-chat-v3.1'],
+    complexReasoningModels: ['x-ai/grok-4', 'deepseek/deepseek-r1', 'anthropic/claude-sonnet-4'],
+    costThresholds: {
+      simple: 0.0000005, // Max cost per token for simple queries
+      moderate: 0.000002, // Max cost per token for moderate queries  
+      complex: 0.000015   // Max cost per token for complex queries
+    }
+  }
 };
 
 module.exports = config;

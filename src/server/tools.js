@@ -14,6 +14,9 @@ const tar = require('tar');
 const fetch = require('node-fetch');
 const openRouterClient = require('../utils/openRouterClient');
 const structuredDataParser = require('../utils/structuredDataParser');
+const advancedCache = require('../utils/advancedCache');
+const robustWebScraper = require('../utils/robustWebScraper');
+const robustScraperInstance = new robustWebScraper();
 
 // Compact param normalization for conduct_research
 function normalizeResearchParams(params) {
@@ -263,6 +266,27 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       }
     }
   };
+
+  // NEW: Try semantic cache first
+  try {
+    const similarCache = await advancedCache.findSimilarResult(query, {
+      costPreference,
+      audienceLevel,
+      outputFormat,
+      includeSources,
+      images: Array.isArray(images) ? images.length : 0,
+      textDocuments: Array.isArray(textDocuments) ? textDocuments.length : 0,
+      structuredData: Array.isArray(structuredData) ? structuredData.length : 0
+    });
+    if (similarCache && similarCache.result) {
+      console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Returning semantic-cached result for query "${safeSubstring(query, 0, 50)}..." (cacheType=${similarCache.cacheType}, sim=${typeof similarCache.similarity === 'number' ? similarCache.similarity.toFixed(3) : 'n/a'})`);
+      if (progressToken) {
+        sendProgress({ content: similarCache.result });
+        return "Research complete. Results streamed (from cache).";
+      }
+      return similarCache.result;
+    }
+  } catch (_) {}
 
   const cacheKey = getCacheKey(params);
   const cachedResult = getFromCache(cacheKey);
@@ -603,6 +627,10 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
     // Store accumulated content in cache and DB (only if synthesis was successful)
     if (!streamError) {
       try {
+        // Store in semantic cache first; fallback to local cache
+        try {
+          await advancedCache.storeResult(query, { costPreference, audienceLevel, outputFormat, includeSources }, finalReportContent, savedReportId);
+        } catch (_) {}
         setInCache(cacheKey, finalReportContent);
 
         // Compute usage totals
@@ -1188,28 +1216,34 @@ async function reindexVectorsTool(params, mcpExchange = null, requestId = 'unkno
 
 async function searchWeb(params, mcpExchange = null, requestId = 'unknown-req') {
   const { query, maxResults } = params;
-  const endpoint = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`;
-  const res = await fetch(endpoint, { method: 'GET', headers: { 'Accept': 'application/json' } });
-  if (!res.ok) {
-    return JSON.stringify({ error: `HTTP ${res.status}`, query }, null, 2);
-  }
-  const data = await res.json();
-  const items = [];
-  if (data.AbstractText) {
-    items.push({ title: data.Heading || 'Abstract', text: data.AbstractText, url: data.AbstractURL || null, source: 'ddg' });
-  }
-  const related = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
-  for (const rt of related) {
-    if (items.length >= maxResults) break;
-    if (rt.Text && rt.FirstURL) items.push({ title: rt.Text.slice(0, 120), text: rt.Text, url: rt.FirstURL, source: 'ddg' });
-    if (Array.isArray(rt.Topics)) {
-      for (const t of rt.Topics) {
-        if (items.length >= maxResults) break;
-        if (t.Text && t.FirstURL) items.push({ title: t.Text.slice(0, 120), text: t.Text, url: t.FirstURL, source: 'ddg' });
+  try {
+    const results = await robustScraperInstance.searchWeb(query, maxResults);
+    return JSON.stringify({ query, results }, null, 2);
+  } catch (e) {
+    // Fallback to simple DDG API
+    const endpoint = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`;
+    const res = await fetch(endpoint, { method: 'GET', headers: { 'Accept': 'application/json' } });
+    if (!res.ok) {
+      return JSON.stringify({ error: `HTTP ${res.status}`, query }, null, 2);
+    }
+    const data = await res.json();
+    const items = [];
+    if (data.AbstractText) {
+      items.push({ title: data.Heading || 'Abstract', text: data.AbstractText, url: data.AbstractURL || null, source: 'ddg' });
+    }
+    const related = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
+    for (const rt of related) {
+      if (items.length >= maxResults) break;
+      if (rt.Text && rt.FirstURL) items.push({ title: rt.Text.slice(0, 120), text: rt.Text, url: rt.FirstURL, source: 'ddg' });
+      if (Array.isArray(rt.Topics)) {
+        for (const t of rt.Topics) {
+          if (items.length >= maxResults) break;
+          if (t.Text && t.FirstURL) items.push({ title: t.Text.slice(0, 120), text: t.Text, url: t.FirstURL, source: 'ddg' });
+        }
       }
     }
+    return JSON.stringify({ query, results: items.slice(0, maxResults) }, null, 2);
   }
-  return JSON.stringify({ query, results: items.slice(0, maxResults) }, null, 2);
 }
 
 function stripHtml(html) {
@@ -1230,34 +1264,45 @@ function stripHtml(html) {
 
 async function fetchUrl(params, mcpExchange = null, requestId = 'unknown-req') {
   const { url, maxBytes } = params;
-  const res = await fetch(url, { method: 'GET', redirect: 'follow' });
-  const contentType = res.headers.get('content-type') || '';
-  const status = res.status;
-  if (!res.ok) {
-    return JSON.stringify({ url, status, error: `HTTP ${status}` }, null, 2);
-  }
-  const buf = await res.arrayBuffer();
-  const limited = Buffer.from(buf).subarray(0, Math.min(maxBytes, buf.byteLength));
-  const body = limited.toString('utf8');
-  if (/text\/html/i.test(contentType)) {
-    const { title, text } = stripHtml(body);
+  try {
+    const resObj = await robustScraperInstance.fetchUrl(url, { maxBytes });
     // Auto-index fetched text when enabled
     try {
       const cfg = require('../../config');
-      if (cfg.indexer?.enabled && cfg.indexer.autoIndexFetchedContent && text) {
-        await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title: title || url, content: text.slice(0, cfg.indexer.maxDocLength || 8000) });
+      if (cfg.indexer?.enabled && cfg.indexer.autoIndexFetchedContent && resObj.success && resObj.content) {
+        await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title: resObj.title || url, content: resObj.content.slice(0, cfg.indexer.maxDocLength || 8000) });
       }
     } catch (_) {}
-    return JSON.stringify({ url, status, contentType, title, textSnippet: text.slice(0, 2000), fullTextLength: text.length }, null, 2);
-  }
-  // Auto-index non-HTML text payloads where practical
-  try {
-    const cfg = require('../../config');
-    if (cfg.indexer?.enabled && cfg.indexer.autoIndexFetchedContent && /text\//i.test(contentType)) {
-      await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title: url, content: body.slice(0, cfg.indexer.maxDocLength || 8000) });
+    return JSON.stringify({ url, status: resObj.success ? 200 : 500, contentType: 'text/html', title: resObj.title, textSnippet: (resObj.content || '').slice(0, 2000), fullTextLength: (resObj.content || '').length, success: resObj.success, error: resObj.error || null }, null, 2);
+  } catch (e) {
+    // Fallback to simple fetch
+    const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+    const contentType = res.headers.get('content-type') || '';
+    const status = res.status;
+    if (!res.ok) {
+      return JSON.stringify({ url, status, error: `HTTP ${status}` }, null, 2);
     }
-  } catch (_) {}
-  return JSON.stringify({ url, status, contentType, textSnippet: body.slice(0, 2000), length: body.length }, null, 2);
+    const buf = await res.arrayBuffer();
+    const limited = Buffer.from(buf).subarray(0, Math.min(maxBytes, buf.byteLength));
+    const body = limited.toString('utf8');
+    if (/text\/html/i.test(contentType)) {
+      const { title, text } = stripHtml(body);
+      try {
+        const cfg = require('../../config');
+        if (cfg.indexer?.enabled && cfg.indexer.autoIndexFetchedContent && text) {
+          await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title: title || url, content: text.slice(0, cfg.indexer.maxDocLength || 8000) });
+        }
+      } catch (_) {}
+      return JSON.stringify({ url, status, contentType, title, textSnippet: text.slice(0, 2000), fullTextLength: text.length }, null, 2);
+    }
+    try {
+      const cfg = require('../../config');
+      if (cfg.indexer?.enabled && cfg.indexer.autoIndexFetchedContent && /text\//i.test(contentType)) {
+        await dbClient.indexDocument({ sourceType: 'doc', sourceId: url, title: url, content: body.slice(0, cfg.indexer.maxDocLength || 8000) });
+      }
+    } catch (_) {}
+    return JSON.stringify({ url, status, contentType, textSnippet: body.slice(0, 2000), length: body.length }, null, 2);
+  }
 }
 
 

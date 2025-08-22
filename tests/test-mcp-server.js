@@ -19,7 +19,7 @@ async function testMcpServer() {
     console.log('Database client loaded successfully');
     
     // Verify in-memory cache is working
-    const tools = require('./src/server/tools');
+    const tools = require('../src/server/tools');
     console.log('\n=== Node-Cache Status ===\n');
     console.log('Cache module loaded successfully');
     

@@ -1,119 +1,157 @@
-Alright — here’s the **critical synthesis** for your **ORIGINAL RESEARCH QUERY**  
-("Design for routing to vision-capable models… model detection via dynamic catalog… graceful degradation if not supported")  
-using the SUCCESS results from all five sub‑queries and the provided OpenRouter docs.
+Here is the **critical synthesis** of all sub-queries for the ORIGINAL RESEARCH QUERY: *"Design for routing to vision-capable models for image-conditioned research; include model detection via dynamic catalog and graceful degradation if not supported."*  
 
 ---
 
-## 1. SUB‑QUERY STATUS & ENSEMBLE COMPARISON
+## 🔎 Sub-Query Statuses Overview
+- **Sub-Query 1**: SUCCESS  
+- **Sub-Query 2**: SUCCESS  
+- **Sub-Query 3**: SUCCESS  
+- **Sub-Query 4**: SUCCESS (but limited info; mostly inferred best practices)  
+- **Sub-Query 5**: SUCCESS  
+- **Sub-Query 6**: SUCCESS  
+- **Sub-Query 7**: SUCCESS (partial contradiction on exact JSON schema details)  
+- **Sub-Query 8**: SUCCESS  
+- **Sub-Query 9**: SUCCESS (but fallback is mostly application-side, not declarative in docs)
 
-| Sub‑Query | Topic | Status | Consensus Points | Contradictions / Unique Info |
-|-----------|-------|--------|------------------|--------------------------------|
-| **1** | API methods/parameters to detect vision‑capable models | SUCCESS | `GET /models` returns per‑model metadata; vision capability indicated in fields such as `modalities` / `input_modalities` (values incl. `"image"`) or boolean `multimodal`. No explicit pre-filter API param. Filtering must be client‑side. | One model claimed docs didn’t detail `modalities`; another confirmed such fields exist in API and can be used post‑fetch. |
-| **2** | Graceful degradation / fallback routing | SUCCESS | No special vision‑aware fallback built‑in. Use **Model Routing** / **Provider Routing** features, detect failure, retry with alternative (e.g., text‑only) model. All fallback control logic is client‑side. | One model stressed API‑based "availability checks" via responses; another kept recommendations more architectural. |
-| **3** | Programmatic access to "Input Modalities" filter | SUCCESS | UI has this filter; no public query param documented. `input_modalities` can appear in API response; best practice is to GET full list and filter in code. | Slight naming divergence (`modalities`, `input_modalities`) and note of inconsistent field presence. |
-| **4** | Built‑in fallback configurable to prefer/deprioritize vision models | SUCCESS | "Automatically handling fallbacks" exists, but no API params to prefer/deprioritize by capability. Fallbacks are decided internally without capability conditions; developers must implement external routing if capability rules matter. | None — total agreement. |
-| **5** | Structured metadata for graceful degradation | SUCCESS | Generally no **guaranteed**, standardized `input_modalities`/`capabilities` field. Some models present fields/tags; presence inconsistent, so automation is brittle. Reliance often on name heuristics or trial calls. | One model asserted such structured fields are absent; another said they appear sometimes but inconsistently. Both agree lack of standardization. |
-
----
-
-## 2. CROSS‑SUB‑QUERY CONSENSUS
-
-From **Sub‑Queries 1, 3, 5**:
-- Detection of vision capability is **possible** but only *post‑retrieval* of the models list.
-- Relevant markers: `"input_modalities": ["text","image"]`, `"modalities"` array, boolean `multimodal`, `"tags": ["vision", ...]`.  
-  However, **inconsistent** across models — not formally guaranteed in schema ([Unverified] without full docs API schema).
-- No documented API `filter` parameter for capability — the website’s "Input Modalities" filter is **UI‑only**.
-
-From **Sub‑Queries 2 & 4**:
-- Built‑in fallback system exists, but **not configurable** to prioritize or exclude vision models.
-- Vision‑aware graceful degradation must be coded in the client:
-  - Detect whether model supports `"image"` via metadata (if present) or known model list.
-  - On unsupported model or failure, reroute to a text‑only model via Model/Provider Routing.
-- Presets and provider routing can formalize the preference chain.
-- Error handling (`4xx/5xx` codes or model‑specific errors) is used to trigger fallback.
+No FAILED sub-queries — all areas have at least partial answers.
 
 ---
 
-## 3. DISCREPANCIES / LIMITATIONS
+## 🧩 Critical Comparison Across Sub-Queries
 
-- **Meta field naming:** Some answers referred to `modalities`, others `input_modalities`; both could exist or be provider‑specific. Documentation snippet did not show exact naming — must confirm via real API call.
-- **Presence of structured metadata:** One interpretation suggested fields like `input_modalities` are in some responses; another said structured fields are generally absent, with hints only in `tags` or names. This suggests **partial population** and lack of documented API guarantees.
-- **No API pre‑filter:** Confirmed in all — filtering happens client‑side.
-- **Fallback configurability:** Universally no vision‑based routing parameter; only manual chaining of models.
-
----
-
-## 4. SYNTHESIZED DESIGN GUIDANCE (Integrating SUCCESS Sub‑Queries)
-
-### 4.1. Dynamic Detection of Vision‑Capable Models
-1. **Fetch full model list** using OpenRouter API (`GET /models` or `GET /v1/models`).  
-   [_Docs: OpenRouter Quickstart Guide — https://openrouter.ai/docs_]
-2. **Inspect metadata** for vision capability:
-   - Check for `input_modalities` or `modalities` array containing `"image"`.
-   - Fall back to checking `multimodal: true` or tags/descriptions (`"vision"`, `"multimodal"`).
-   - Maintain an **allow‑list** of known vision‑capable IDs (e.g., `openai/gpt-4-vision-preview`) to handle metadata gaps.
-   - Example (unverified field names — must confirm with live response):
-     ```json
-     {
-       "id": "openai/gpt-4-vision-preview",
-       "input_modalities": ["text", "image"],
-       "multimodal": true
-     }
-     ```
-3. **Programmatically filter client‑side**, as no API param matches the UI "Input Modalities" filter.
-
-### 4.2. Graceful Degradation Workflow
-- **Primary path:** Use a vision‑capable model for image‑conditioned tasks.
-- **Failure/Unsupported Detection:** Before sending an image:
-  - Check capabilities metadata (if exists) OR
-  - Attempt small test call; catch `415 Unsupported` or provider‑specific error.
-- **Fallback logic:**  
-  - If no vision support, switch to a text‑only model with compatible context length.
-  - Use **Model Routing** or **Provider Routing** in OpenRouter to prioritize primary model but define backup.
-  - Example pseudocode:
-    ```python
-    model_chain = ["openai/gpt-4-vision-preview", "openai/gpt-4-turbo"]
-    for model in model_chain:
-        if supports_images(model) or model == last_fallback:
-            try:
-                return call_model(model, payload)
-            except ModelError:
-                continue
-    ```
-
-### 4.3. Capability‑Aware Routing Constraints
-- OpenRouter’s **automatic fallback** cannot be filtered by capability.
-- For capability‑aware routing, handle fallback logic before sending request to OpenRouter or via a higher layer in your integration.
+### Sub-Query 1 — Catalog Listing of Vision Models
+- **Consensus**: The OpenRouter **Models Catalog** (https://openrouter.ai/models) lists modality metadata.  
+- **Contradiction**:  
+  - One model claimed "no dedicated filter or labeling for vision" (z-ai/glm-4.5v).  
+  - Another model confirmed **“Vision” filter and tags (e.g., GPT-4V, Qwen-VL)** exist.  
+- **Synthesis**: OpenRouter *does* list modalities (text, image, etc.), and filtering for vision is possible. The discrepancy may come from differences in UI vs. API metadata.  
+- **Confidence**: High that OpenRouter exposes modality information.
 
 ---
 
-## 5. CITATIONS
-
-- [OpenRouter Quickstart Guide | Developer Documentation | OpenRouter | Documentation — https://openrouter.ai/docs](https://openrouter.ai/docs)  
-- [OpenRouter — Models Browser & Filters — https://openrouter.ai/models](https://openrouter.ai/models)
-
----
-
-## 6. OVERALL CONFIDENCE
-
-| Claim | Confidence | Basis |
-|-------|------------|-------|
-| API supports retrieving metadata that *can* indicate vision support (e.g., `"image"` in modalities) | **High** | Multiple sources agree; unofficial JSON examples seen in practice; not formally guaranteed. |
-| No documented API parameter to pre‑filter for vision | **High** | Consensus across all sub‑queries; only UI supports such filter. |
-| Metadata presence inconsistent and undocumented — must handle missing fields | **High** | Confirmed in 1, 3, and 5. |
-| Built‑in fallback cannot be configured to prefer/avoid vision models | **High** | Agreement in 2 & 4; no API parameter exists. |
-| Graceful degradation must be implemented client‑side | **High** | Universal consensus. |
+### Sub-Query 2 — Dynamic Catalog API
+- **Consensus**: OpenRouter exposes a `/models` endpoint and metadata includes `modalities` (and possibly `supports_vision`).  
+- **Contradiction**: One answer inferred fields; another confirmed `modalities` field explicitly.  
+- **Synthesis**: `/models` should be called dynamically. Client must filter on `modalities=["image"]` or boolean flags (`supports_vision`). Filtering by modality is **client-side**, not server-side.  
+- **Confidence**: High that `/models` returns modalities info; Medium on exact field names (since direct schema isn’t in provided snippets).
 
 ---
 
-**Final Expert Assessment:**  
-For **routing to vision‑capable models with graceful degradation** in OpenRouter, your design must:
-- Dynamically pull model metadata and inspect for `"image"` capability.
-- Maintain your own fallback chain in client code — built‑in fallback is *not* vision‑aware.
-- Expect incomplete metadata and prepare a known‑model allow‑list.
-- No API pre‑filter exists; treat the web UI filter as informational only.
+### Sub-Query 3 — Routing and Fallback
+- **Consensus**: OpenRouter provides **Model Routing** and **Provider Routing**, supporting fallback if a model/provider is unavailable.  
+- **Discrepancy**: Does fallback extend to *modalities* specifically?  
+  - One view: No explicit modality fallback in docs.  
+  - Another: Fallback chains and presets are possible.  
+- **Synthesis**: Fallback is robust for availability (provider/model outages). But **modality-based fallback (vision → text)** is not explicitly documented — must be implemented application-side.  
+- **Confidence**: High on availability fallback, Low on modality fallback.
 
 ---
 
-If you want, I can now draw a **flow diagram** showing the recommended *vision‑model detection → routing → fallback* pipeline based on these findings.  
-Would you like me to produce that diagram?
+### Sub-Query 4 — Best Practices for Routing Logic
+- **Consensus**: Use the `model` parameter to explicitly target multimodal models, and provider-routing/presets for optimization.  
+- **Gap**: Docs don’t provide explicit best practices for vision handling.  
+- **Synthesis**: Developers should:  
+  - Use `modalities` metadata for detection,  
+  - Prefer known vision models, and  
+  - Configure fallbacks using presets or app logic.  
+- **Confidence**: Medium — mostly inferred best practices, weak in official doc evidence.
+
+---
+
+### Sub-Query 5 — Major Model Families with Vision
+- **Consensus**:  
+  - **OpenAI**: GPT-4V, GPT-4o (vision)  
+  - **Anthropic**: Claude 3 series (Opus, Sonnet, Haiku)  
+  - **Google**: Gemini 1.0/1.5 Pro Vision  
+- Confirmed by official provider docs.  
+- **Confidence**: High.
+
+---
+
+### Sub-Query 6 — Structured Routing Flow for Research Applications
+- **Consensus**:  
+  - Dynamically detect vision models via `/models`.  
+  - Apply provider prioritization using metadata (e.g., `provider`).  
+  - Gracefully fallback to text-only models if vision is unsupported.  
+- **Details**: Both answers agree on using app-level logic for fallbacks since OpenRouter does not enforce modality-aware fallback.  
+- **Confidence**: High.
+
+---
+
+### Sub-Query 7 — JSON Schema for `/models`
+- **Contradiction**:  
+  - One source: No confirmed schema, speculative fields (`modalities`, `supports_image`).  
+  - Another source: Explicitly states `modalities` and `supports_vision` exist in some models.  
+- **Synthesis**: *Likely schema includes at least*:  
+  - `modalities: ["text","image",...]`  
+  - `supports_vision: true/false` (but may not always be present).  
+- **Confidence**: Medium-High — schema presence inferred from observed model responses, but not explicitly documented in provided materials.
+
+---
+
+### Sub-Query 8 — Provider Official Capability Docs
+- **OpenAI**: GPT-4o, GPT-4 Turbo Vision ([docs](https://platform.openai.com/docs/models/gpt-4o), [vision guide](https://platform.openai.com/docs/guides/vision))  
+- **Anthropic**: Claude 3.5 Sonnet Vision ([docs](https://docs.anthropic.com/claude/docs/models-overview#claude-35-sonnet))  
+- **Google**: Gemini Vision ([docs](https://ai.google.dev/docs/models/gemini); [multimodal prompts](https://ai.google.dev/docs/multimodal_prompts))  
+- **Consensus**: All providers **explicitly document image input support.**  
+- **Confidence**: High.
+
+---
+
+### Sub-Query 9 — Customizing Fallback Behavior
+- **Consensus**: OpenRouter supports flexible **routing**, but lacks declarative fallback for modality.  
+- **Details**:  
+  - Users can implement “aliases” or “presets” to simulate fallback chains.  
+  - Modality-aware fallback **must be implemented client-side**.  
+- **Confidence**: High for provider/model fallback; Low for modality-specific fallback.
+
+---
+
+## 📌 Synthesized Research Answer (Integrated)
+
+For designing **routing to vision-capable models in a research application with OpenRouter**:
+
+1. **Dynamic Catalog Detection**  
+   - Use OpenRouter’s `/models` endpoint ([docs](https://openrouter.ai/docs), [models catalog](https://openrouter.ai/models)) to programmatically retrieve models and their metadata.  
+   - Check **`modalities`** (look for `"image"`) and **`supports_vision`** flags (if present).  
+   - Vision-capable models currently documented:  
+     - OpenAI **GPT-4o / GPT-4V** ([OpenAI Docs](https://platform.openai.com/docs/models/gpt-4o); [Vision Guide](https://platform.openai.com/docs/guides/vision))  
+     - Anthropic **Claude 3.x / Claude 3.5 Sonnet** ([Anthropic Docs](https://docs.anthropic.com/claude/docs/models-overview#claude-35-sonnet))  
+     - Google **Gemini Pro Vision, Gemini 1.5 Pro** ([Google AI Docs](https://ai.google.dev/docs/models/gemini))
+
+2. **Routing & Prioritization**
+   - Implement **provider prioritization** using the `provider` field in metadata.  
+   - Example policy: Prefer OpenAI → Anthropic → Google → fallback open-source (Mistral/LLaVA/Qwen-VL).  
+   - Use OpenRouter features like **Model Routing** and **Provider Routing** ([docs](https://openrouter.ai/docs)).
+
+3. **Graceful Fallback**  
+   - OpenRouter natively handles **fallback for provider/model outages**, but **not modality-specific fallbacks**.  
+   - For vision → text fallback, implement application-layer logic:  
+     - If input includes images, attempt a vision-capable model.  
+     - On failure (model missing or rejecting input), degrade gracefully by retrying with the best available text-only model.  
+
+4. **Recommended Practices**  
+   - Use prescriptive **model aliases** or **presets** to configure fallback sequences.  
+   - Validate image inputs (size, MIME type) before routing.  
+   - Cache model lists from `/models` periodically.  
+   - Use **structured outputs** and **prompt caching** for consistency.  
+   - Always confirm capabilities against **official provider capability docs** (see URLs above).
+
+---
+
+## ✅ Final Confidence Assessment
+- **Vision model detection via `/models`:** High  
+- **Provider prioritization:** High  
+- **Graceful fallback (availability):** High  
+- **Graceful fallback (modality):** Medium (client-side only)  
+- **JSON schema exactness:** Medium (observed but not fully doc-verified)  
+- **Major model family vision support (OpenAI / Anthropic / Google):** High  
+
+---
+
+📌 **In sum:**  
+OpenRouter exposes the necessary metadata (via `/models`) to detect vision-capable models (e.g., GPT-4o, Claude 3.5, Gemini), allows provider prioritization using its routing system, but requires **application-side logic** to degrade gracefully when vision modalities are unsupported. Official provider docs confirm multimodal capabilities, so a robust research workflow should combine OpenRouter’s routing with client-side checks and controlled fallbacks.  
+
+---
+
+Would you like me to **draft a reference implementation in Python** showing a full routing pipeline (vision detection, provider prioritization, and fallback switching)?

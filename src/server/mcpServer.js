@@ -64,89 +64,324 @@ const {
 const dbClient = require('../utils/dbClient'); // Import dbClient
 const cors = require('cors');
 
-// Create MCP server
+// Create MCP server with proper capabilities declaration per latest MCP spec
 const server = new McpServer({
   name: config.server.name,
-  version: config.server.version
+  version: config.server.version,
+  capabilities: {
+    tools: {},
+    prompts: {
+      listChanged: true // Notify clients when prompt list changes
+    },
+    resources: {
+      subscribe: true, // Support resource subscriptions
+      listChanged: true // Notify clients when resource list changes
+    }
+  }
 });
 
-// Optional: register prompts and resources when enabled
-if (config.mcp?.features?.prompts && typeof server.prompt === 'function') {
-  server.prompt('planning_prompt', {
-    description: 'Generate a research plan XML for a query; outputs <agent_n> tags only.',
-    arguments: { query: { type: 'string' } }
-  }, async ({ query }) => {
-    const p = require('../agents/planningAgent');
-    const result = await p.planResearch(query, {}, null, 'prompt');
-    return { messages: [{ role: 'assistant', content: result }] };
-  });
+// Register prompts using latest MCP spec with proper protocol handlers
+if (config.mcp?.features?.prompts) {
+  const prompts = new Map([
+    ['planning_prompt', {
+      name: 'planning_prompt',
+      description: 'Generate sophisticated multi-agent research plan using advanced XML tagging and domain-aware query decomposition',
+      arguments: [
+        { name: 'query', description: 'Research query to decompose into specialized sub-queries', required: true },
+        { name: 'domain', description: 'Primary domain: general, technical, reasoning, search, creative', required: false },
+        { name: 'complexity', description: 'Query complexity: simple, moderate, complex', required: false },
+        { name: 'maxAgents', description: 'Maximum number of research agents (1-10)', required: false }
+      ]
+    }],
+    ['synthesis_prompt', {
+      name: 'synthesis_prompt', 
+      description: 'Synthesize ensemble research results with rigorous citation framework and confidence scoring',
+      arguments: [
+        { name: 'query', description: 'Original research query for synthesis context', required: true },
+        { name: 'results', description: 'JSON string of research results to synthesize', required: true },
+        { name: 'outputFormat', description: 'Output format: report, briefing, bullet_points', required: false },
+        { name: 'audienceLevel', description: 'Target audience: beginner, intermediate, expert', required: false }
+      ]
+    }],
+    ['research_workflow_prompt', {
+      name: 'research_workflow_prompt',
+      description: 'Complete research workflow: planning → parallel execution → synthesis with quality controls',
+      arguments: [
+        { name: 'topic', description: 'Research topic or question', required: true },
+        { name: 'costBudget', description: 'Cost preference: low, high', required: false },
+        { name: 'async', description: 'Use async job processing: true, false', required: false }
+      ]
+    }]
+  ]);
 
-  server.prompt('synthesis_prompt', {
-    description: 'Synthesize ensemble results into a report with explicit URL citations.',
-    arguments: { query: { type: 'string' }, results: { type: 'string' } }
-  }, async ({ query, results }) => {
+  server.setPromptRequestHandlers({
+    list: async () => ({ prompts: Array.from(prompts.values()) }),
+    get: async (request) => {
+      const prompt = prompts.get(request.params.name);
+      if (!prompt) throw new Error(`Prompt not found: ${request.params.name}`);
+      
+      const { query, domain, complexity, maxAgents, results, outputFormat, audienceLevel, topic, costBudget, async } = request.params.arguments || {};
+      
+      switch (request.params.name) {
+        case 'planning_prompt':
+    const p = require('../agents/planningAgent');
+          const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
+          return { 
+            description: prompt.description,
+            messages: [{ role: 'assistant', content: planResult }] 
+          };
+          
+        case 'synthesis_prompt':
     const c = require('../agents/contextAgent');
-    let full = '';
-    for await (const ch of c.contextualizeResultsStream(query, JSON.parse(results), [], { includeSources: true }, 'prompt')) {
-      if (ch.content) full += ch.content;
+          let synthesisResult = '';
+          for await (const ch of c.contextualizeResultsStream(query, JSON.parse(results), [], { 
+            includeSources: true, 
+            outputFormat: outputFormat || 'report',
+            audienceLevel: audienceLevel || 'intermediate'
+          }, 'prompt')) {
+            if (ch.content) synthesisResult += ch.content;
+          }
+          return { 
+            description: prompt.description,
+            messages: [{ role: 'assistant', content: synthesisResult }] 
+          };
+          
+        case 'research_workflow_prompt':
+          const workflowGuide = `
+# Research Workflow for: ${topic}
+
+## 1. Planning Phase
+\`\`\`mcp
+planning_prompt { "query": "${topic}", "domain": "auto-detect", "complexity": "auto-assess" }
+\`\`\`
+
+## 2. Research Execution
+${async === 'true' ? `
+\`\`\`mcp
+submit_research { "query": "${topic}", "costPreference": "${costBudget || 'low'}" }
+get_job_status { "job_id": "[returned_job_id]" }
+\`\`\`
+` : `
+\`\`\`mcp
+conduct_research { "query": "${topic}", "costPreference": "${costBudget || 'low'}" }
+\`\`\`
+`}
+
+## 3. Quality Assurance
+\`\`\`mcp
+get_past_research { "query": "${topic}", "limit": 5 }
+search { "q": "${topic}", "scope": "reports" }
+\`\`\`
+
+## 4. Follow-up Analysis
+\`\`\`mcp
+research_follow_up { "originalQuery": "${topic}", "followUpQuestion": "[your_specific_question]" }
+\`\`\`
+          `;
+          return {
+            description: prompt.description,
+            messages: [{ role: 'assistant', content: workflowGuide }]
+          };
+          
+        default:
+          throw new Error(`Unknown prompt: ${request.params.name}`);
+      }
     }
-    return { messages: [{ role: 'assistant', content: full }] };
   });
 }
 
-if (config.mcp?.features?.resources && typeof server.resource === 'function') {
-  server.resource('mcp_spec_links', {
-    description: 'Canonical MCP specification links and core resources',
+// Register resources using latest MCP spec with proper protocol handlers and URI templates
+if (config.mcp?.features?.resources) {
+  const resources = new Map([
+    ['mcp://specs/core', {
+      uri: 'mcp://specs/core',
+      name: 'MCP Core Specification',
+      description: 'Canonical Model Context Protocol specification links and references',
     mimeType: 'application/json'
-  }, async () => ({
-    data: JSON.stringify({
-      spec: 'https://github.com/modelcontextprotocol/specification',
-      jsonrpc: 'https://www.jsonrpc.org/specification',
-      org: 'https://github.com/modelcontextprotocol'
-    })
-  }));
+    }],
+    ['mcp://patterns/workflows', {
+      uri: 'mcp://patterns/workflows', 
+      name: 'Research Workflow Patterns',
+      description: 'Sophisticated tool chaining patterns for multi-agent research orchestration',
+    mimeType: 'application/json'
+    }],
+    ['mcp://examples/multimodal', {
+      uri: 'mcp://examples/multimodal',
+      name: 'Multimodal Research Examples',
+      description: 'Advanced examples for vision-capable research with dynamic model routing',
+    mimeType: 'application/json'
+    }],
+    ['mcp://use-cases/domains', {
+      uri: 'mcp://use-cases/domains',
+      name: 'Domain-Specific Use Cases',
+      description: 'Comprehensive use cases across technical, creative, and analytical domains',
+      mimeType: 'application/json'
+    }],
+    ['mcp://optimization/caching', {
+      uri: 'mcp://optimization/caching',
+      name: 'Caching & Cost Optimization',
+      description: 'Advanced caching strategies and cost-effective model selection patterns',
+      mimeType: 'application/json'
+    }]
+  ]);
 
-  // Provide concise tool chaining patterns to aid LLMs
-  server.resource('tool_patterns', {
-    description: 'Concise recipes showing how to combine search/query/research tools effectively',
-    mimeType: 'application/json'
-  }, async () => ({
-    data: JSON.stringify({
-      patterns: [
-        { name: 'Search then fetch', steps: ['search { q }', 'fetch_url { url }', 'conduct_research { q, docs:[snippet] }'] },
-        { name: 'Search KB then query DB', steps: ['search { q, scope:"reports" }', 'query { sql, params }', 'get_report_content { reportId }'] },
-        { name: 'Async research', steps: ['submit_research { q }', 'get_job_status { job_id } (poll or SSE)', 'get_report_content { reportId }'] }
-      ]
-    })
-  }));
-
-  // Multimodal examples per 2025 spec: images + text
-  server.resource('multimodal_examples', {
-    description: 'Examples for composing multi-modal requests (images + text) and tool chaining',
-    mimeType: 'application/json'
-  }, async () => ({
-    data: JSON.stringify({
-      examples: [
-        {
-          name: 'Image-assisted research',
-          conduct_research: {
-            query: 'Analyze the chart in the image and summarize trends with sources',
-            images: [{ url: 'https://example.com/chart.png', detail: 'high' }],
-            includeSources: true,
-            outputFormat: 'briefing'
-          }
+  // Helper function to generate domain-specific use cases
+  const generateDomainUseCases = async () => {
+    return {
+      technical_research: {
+        domain: "Technical Analysis",
+        problem: "Understanding complex system architectures and implementation patterns",
+        workflow: {
+          step1: { tool: "search_web", params: { query: "microservices architecture patterns 2025" } },
+          step2: { tool: "fetch_url", params: { url: "authoritative_source_url" } },
+          step3: { tool: "conduct_research", params: { query: "Compare microservices vs monolithic architectures", textDocuments: ["fetched_content"] } },
+          step4: { tool: "research_follow_up", params: { originalQuery: "architecture comparison", followUpQuestion: "What are the security implications?" } }
         },
-        {
-          name: 'Search + image context',
-          steps: [
-            'search { q:"market share 2024 smartphone" }',
-            'fetch_url { url:"<top credible source>" }',
-            'conduct_research { q:"Summarize findings", imgs:[...], docs:[snippet] }'
-          ]
-        }
-      ]
-    })
-  }));
+        expected_outcome: "Comprehensive technical analysis with authoritative citations"
+      },
+      business_intelligence: {
+        domain: "Market Research & Analysis", 
+        problem: "Gathering competitive intelligence and market trends",
+        workflow: {
+          step1: { tool: "search_web", params: { query: "AI market trends Q3 2025" } },
+          step2: { tool: "submit_research", params: { query: "AI market competitive landscape analysis", costPreference: "low" } },
+          step3: { tool: "get_job_status", params: { job_id: "monitor_async_job" } },
+          step4: { tool: "get_past_research", params: { query: "AI market", limit: 3 } }
+        },
+        expected_outcome: "Market intelligence report with trend analysis and competitive positioning"
+      },
+      creative_synthesis: {
+        domain: "Creative Content & Strategy",
+        problem: "Developing innovative solutions and creative strategies",  
+        workflow: {
+          step1: { tool: "conduct_research", params: { query: "innovative UX design patterns 2025", costPreference: "high" } },
+          step2: { tool: "search", params: { q: "UX design", scope: "reports" } },
+          step3: { tool: "research_follow_up", params: { originalQuery: "UX patterns", followUpQuestion: "How do these apply to AI interfaces?" } }
+        },
+        expected_outcome: "Creative strategy recommendations with design inspiration"
+      }
+    };
+  };
+
+  server.setResourceRequestHandlers({
+    list: async () => ({ resources: Array.from(resources.values()) }),
+    read: async (request) => {
+      const uri = request.params.uri;
+      const resource = resources.get(uri);
+      if (!resource) throw new Error(`Resource not found: ${uri}`);
+      
+      let content;
+      switch (uri) {
+        case 'mcp://specs/core':
+          content = {
+            spec: 'https://spec.modelcontextprotocol.io/specification/2025-03-26/',
+            jsonrpc: 'https://www.jsonrpc.org/specification',
+            org: 'https://github.com/modelcontextprotocol',
+            docs: 'https://modelcontextprotocol.io/',
+            sdk: 'https://github.com/modelcontextprotocol/sdk',
+            implementations: {
+              openrouter_agents: 'https://github.com/wheattoast11/openrouter-deep-research',
+              anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
+            }
+          };
+          break;
+          
+        case 'mcp://patterns/workflows':
+          content = {
+            basic_patterns: [
+              {
+                name: 'Search → Fetch → Research',
+                steps: ['search_web { query }', 'fetch_url { url }', 'conduct_research { query, textDocuments:[content] }'],
+                use_case: 'Web research with source verification'
+              },
+              {
+                name: 'Knowledge Base Query → Research',
+                steps: ['search { q, scope:"reports" }', 'get_past_research { query }', 'conduct_research { query }'],
+                use_case: 'Building on previous research'
+              },
+              {
+                name: 'Async Research Pipeline',
+                steps: ['submit_research { query }', 'get_job_status { job_id }', 'get_report_content { reportId }'],
+                use_case: 'Long-running comprehensive research'
+              }
+            ],
+            advanced_patterns: [
+              {
+                name: 'Multimodal Research Chain',
+                steps: ['conduct_research { query, images:[...] }', 'research_follow_up { originalQuery, followUpQuestion }'],
+                use_case: 'Vision-assisted analysis with iterative refinement'
+              },
+              {
+                name: 'Cost-Optimized Research',
+                steps: ['list_models', 'conduct_research { query, costPreference:"low" }', 'rate_research_report'],
+                use_case: 'Budget-conscious research with quality feedback'
+              }
+            ]
+          };
+          break;
+          
+        case 'mcp://examples/multimodal':
+          content = {
+            vision_research: {
+              conduct_research: {
+                query: 'Analyze the technical architecture diagram and explain the data flow patterns',
+                images: [{ url: 'data:image/png;base64,...', detail: 'high' }],
+                costPreference: 'low',
+                audienceLevel: 'expert'
+              }
+            },
+            document_analysis: {
+              conduct_research: {
+                query: 'Synthesize key findings from the research papers',
+                textDocuments: [{ name: 'paper1.pdf', content: '...' }],
+                structuredData: [{ name: 'results.csv', type: 'csv', content: 'metric,value\\n...' }]
+              }
+            }
+          };
+          break;
+          
+        case 'mcp://use-cases/domains':
+          content = await generateDomainUseCases();
+          break;
+          
+        case 'mcp://optimization/caching':
+          content = {
+            strategies: {
+              result_caching: {
+                description: 'Cache research results with semantic similarity matching',
+                ttl_seconds: 3600,
+                implementation: 'In-memory NodeCache + PGLite semantic search'
+              },
+              model_routing: {
+                description: 'Route queries to cost-effective models based on complexity',
+                models: {
+                  simple: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder'],
+                  complex: ['x-ai/grok-4', 'morph/morph-v3-large'],
+                  vision: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash']
+                }
+              },
+              batch_processing: {
+                description: 'Process multiple queries in parallel with bounded concurrency',
+                parallelism: 4,
+                cost_savings: '60-80% through efficient resource utilization'
+              }
+            }
+          };
+          break;
+          
+        default:
+          throw new Error(`Unknown resource: ${uri}`);
+      }
+      
+      return {
+        contents: [{
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  });
 }
 
 // Register tools

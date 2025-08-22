@@ -43,7 +43,7 @@ class PlanningAgent {
     try {
       const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
         temperature: 0.1,
-        max_tokens: 10
+        max_tokens: 64 // Ensure well above OpenRouter minimum of 16
       });
       let domain = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
       if (DOMAINS.includes(domain)) {

@@ -9,7 +9,7 @@ const {
   listModels,
   getServerStatus,
   executeSql
-} = require('./src/server/tools');
+} = require('../src/server/tools');
 
 async function runTests() {
   console.log("===== Testing All MCP Tools =====\n");
@@ -141,14 +141,14 @@ async function runNewTools() {
 
   console.log("----- Testing db_health -----");
   try {
-    const tools = require('./src/server/tools');
+    const tools = require('../src/server/tools');
     const out = await tools.dbHealth({});
     console.log("db_health:", out);
   } catch (e) { console.error("db_health error", e.message); }
 
   console.log("----- Testing export_reports / import_reports / reindex_vectors -----");
   try {
-    const tools = require('./src/server/tools');
+    const tools = require('../src/server/tools');
     const exported = await tools.exportReports({ format: 'json', limit: 2 });
     console.log("export_reports sample size:", exported.length);
     const reindex = await tools.reindexVectorsTool({});
@@ -160,7 +160,7 @@ async function runNewTools() {
 
   console.log("----- Testing backup_db -----");
   try {
-    const tools = require('./src/server/tools');
+    const tools = require('../src/server/tools');
     const backup = await tools.backupDb({ destinationDir: './backups' });
     console.log("backup_db:", backup);
   } catch (e) { console.error("backup_db error", e.message); }

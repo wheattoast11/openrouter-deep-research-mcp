@@ -1,7 +1,7 @@
 // qa-test-suite.js
 require('dotenv').config();
-const { conductResearch } = require('./src/server/tools');
-const dbClient = require('./src/utils/dbClient');
+const { conductResearch } = require('../src/server/tools');
+const dbClient = require('../src/utils/dbClient');
 
 async function runTests() {
   console.log('\n======= OPENROUTER AGENTS QA TEST SUITE =======\n');

@@ -13,7 +13,7 @@ const {
   getPastResearch,
   rateResearchReport,
   listResearchHistory
-} = require('./src/server/tools');
+} = require('../src/server/tools');
 
 /**
  * Simple mock for MCP exchange to capture progress updates

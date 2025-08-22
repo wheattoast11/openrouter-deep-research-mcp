@@ -1,6 +1,6 @@
 // test-follow-up.js - A simple script to test the research_follow_up function
 
-const { researchFollowUp } = require('./src/server/tools');
+const { researchFollowUp } = require('../src/server/tools');
 
 async function testFollowUp() {
   console.log("Testing research_follow_up with basic parameters...");
