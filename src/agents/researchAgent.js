@@ -152,10 +152,37 @@ class ResearchAgent {
   }
 
   // Updated to accept images, textDocuments, structuredData, inputEmbeddings, and requestId parameters
-  async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null) {
+  async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null, extra = {}) {
     const domain = await this.classifyQueryDomain(query, { requestId });
     const complexity = await this.assessQueryComplexity(query, { requestId });
-    const primaryModel = await this.getModel(costPreference, agentId, domain, complexity, requestId);
+    const mode = extra?.mode || 'standard';
+    // Hyper mode prefers fastest locally-available providers from config/catalog (no hardcoded Morph models)
+    let primaryModel;
+    if (mode === 'hyper') {
+      try {
+        const preferred = [
+          'inception/mercury',
+          'google/gemini-2.5-flash',
+          'z-ai/glm-4.5-air',
+          'z-ai/glm-4.5v',
+          'deepseek/deepseek-chat-v3.1',
+          'openai/gpt-oss-120b'
+        ];
+        // From dynamic catalog if available; else fall back to configured lists
+        let catalog = [];
+        try { catalog = await modelCatalog.getCatalog(); } catch(_) {}
+        const allConfigured = [
+          ...(config.models.lowCost || []).map(m=>m.name),
+          ...(config.models.highCost || []).map(m=>m.name)
+        ];
+        const pick = preferred.find(id => catalog.some(c=>c.id===id) || allConfigured.includes(id));
+        primaryModel = pick || (config.models.lowCost?.[0]?.name || config.models.planning);
+      } catch (_) {
+        primaryModel = config.models.lowCost?.[0]?.name || config.models.planning;
+      }
+    } else {
+      primaryModel = await this.getModel(costPreference, agentId, domain, complexity, requestId);
+    }
 
     // Multimodal fallback detection
     let catalogEntry = null;
@@ -172,6 +199,15 @@ class ResearchAgent {
     ensemble.add(primaryModel);
 
     const addAlt = (id) => { if (id && !ensemble.has(id)) ensemble.add(id); };
+
+    if (mode === 'hyper') {
+      const hyperAlts = [
+        'qwen/qwen3-235b-a22b-2507',
+        'google/gemini-2.5-flash',
+        'z-ai/glm-4.5-air'
+      ];
+      for (const id of hyperAlts) addAlt(id);
+    }
 
     // Prefer 2025 models if available for diversity
     try {
@@ -352,9 +388,11 @@ class ResearchAgent {
   }
 
   // Added images, textDocuments, structuredData, inputEmbeddings, and requestId parameters here
-  async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null) { 
+  async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null, extra = {}) { 
     console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Starting parallel ensemble research for ${queries.length} queries with costPreference=${costPreference}. Parallelism=${parallelism}.`);
     const startTime = Date.now();
+
+    const mode = extra?.mode || 'standard';
 
     // Bounded concurrency queue
     const results = [];
@@ -364,8 +402,8 @@ class ResearchAgent {
         const current = idx++;
         const q = queries[current];
         try {
-          if (onEvent) await onEvent('agent_started', { agent_id: q.id, query: q.query, cost: costPreference });
-          const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent);
+          if (onEvent) await onEvent('agent_started', { agent_id: q.id, query: q.query, cost: costPreference, mode });
+          const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent, { mode });
           results[current] = value; // array of ensemble results
           const ok = Array.isArray(value) ? value.every(v => !v.error) : !value.error;
           if (onEvent) await onEvent('agent_completed', { agent_id: q.id, ok });

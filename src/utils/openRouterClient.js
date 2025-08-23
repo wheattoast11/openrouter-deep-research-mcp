@@ -26,10 +26,15 @@ class OpenRouterClient {
 
   async chatCompletion(model, messages, options = {}) {
     try {
+      const minMax = Number(config.models?.minMaxTokens || 0);
+      const merged = { ...options };
+      if (minMax > 0) {
+        merged.max_tokens = Math.max(Number(merged.max_tokens || 0), minMax);
+      }
       const response = await this.client.post('/chat/completions', {
         model,
         messages,
-        ...options
+        ...merged
       });
       
       return response.data;
@@ -42,11 +47,16 @@ class OpenRouterClient {
   // New method for streaming chat completions (robust SSE parsing)
   async *streamChatCompletion(model, messages, options = {}) {
     const url = `${this.baseUrl}/chat/completions`;
+    const minMax = Number(config.models?.minMaxTokens || 0);
+    const merged = { ...options };
+    if (minMax > 0) {
+      merged.max_tokens = Math.max(Number(merged.max_tokens || 0), minMax);
+    }
     const body = JSON.stringify({
       model,
       messages,
       stream: true,
-      ...options
+      ...merged
     });
 
     console.error(`[${new Date().toISOString()}] OpenRouterClient: Starting stream request to ${model}`);

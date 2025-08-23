@@ -17,7 +17,7 @@ const config = {
   },
   models: {
     // Allow overriding planning model; provide a generally-available safe default
-    planning: process.env.PLANNING_MODEL || "openai/gpt-5-chat", // Default planning/synthesis model
+    planning: process.env.PLANNING_MODEL || "google/gemini-2.5-pro", // Default planning/synthesis model
     planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4")
       .split(',').map(s=>s.trim()).filter(Boolean),
     useDynamicCatalog: process.env.USE_DYNAMIC_CATALOG === 'true',
@@ -36,7 +36,8 @@ const config = {
         { name: "openai/gpt-5-chat", domains: ["reasoning", "technical", "general"] },
         { name: "google/gemini-2.5-pro", domains: ["reasoning", "technical", "general"] },
         { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] },
-        { name: "morph/morph-v3-large", domains: ["coding", "editing", "technical"] }
+        { name: "qwen/qwen3-coder", domains: ["coding", "editing", "technical"] },
+        { name: "qwen/qwen3-235b-a22b-2507", domains: ["general", "reasoning", "technical", "coding"] }
       ],
     lowCost: process.env.LOW_COST_MODELS ? 
       (function parseLowCost(val){
@@ -48,10 +49,11 @@ const config = {
       })(process.env.LOW_COST_MODELS) : [
         { name: "deepseek/deepseek-chat-v3.1", domains: ["general", "reasoning", "technical", "coding"] },
         { name: "z-ai/glm-4.5v", domains: ["general", "multimodal", "vision", "reasoning"] },
-        { name: "qwen/qwen3-coder", domains: ["coding", "technical", "reasoning"] },
-        { name: "openai/gpt-5-mini", domains: ["general", "reasoning", "search"] },
-        { name: "google/gemini-2.5-flash", domains: ["general", "creative", "technical"] },
-        { name: "google/gemini-2.5-flash-lite", domains: ["general", "creative"] }
+        { name: "z-ai/glm-4.5-air", domains: ["coding", "technical", "reasoning"] },
+        { name: "openai/gpt-oss-120b", domains: ["general", "reasoning", "search"] },
+        { name: "inception/mercury", domains: ["general", "creative", "technical"] },
+        { name: "baidu/ernie-4.5-vl-424b-a47b", domains: ["general", "creative"] },
+        { name: "google/gemini-2.5-flash", domains: ["coding", "editing", "technical"] }
       ],
     // Define a tier for potentially simpler tasks (adjust models as needed)
     veryLowCost: process.env.VERY_LOW_COST_MODELS ?
@@ -71,7 +73,9 @@ const config = {
      // Max research iterations (initial + refinements)
      maxResearchIterations: parseInt(process.env.MAX_RESEARCH_ITERATIONS, 10) || 2, // Default to 1 initial + 1 refinement
      // Parallelism for concurrent sub-queries
-     parallelism: parseInt(process.env.PARALLELISM, 10) || 4
+     parallelism: parseInt(process.env.PARALLELISM, 10) || 4,
+     // Enforce a minimum max_tokens to avoid truncation across all calls
+     minMaxTokens: parseInt(process.env.MIN_MAX_TOKENS, 10) || 2048
   },
   // Database configuration for knowledge base using PGLite
   database: {
@@ -116,6 +120,11 @@ config.mcp = {
   }
 };
 
+// Experimental modes
+config.modes = {
+  hyper: process.env.HYPER_MODE === 'true'
+};
+
 // MCP transport preferences
 config.mcp.transport = {
   streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED === 'false' ? false : true
@@ -158,9 +167,9 @@ config.caching = {
   // Cost optimization strategies
   optimization: {
     preferredLowCostModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder', 'z-ai/glm-4.5v'],
-    visionModels: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash', 'qwen/qwen2.5-vl-72b-instruct'],
-    codingModels: ['qwen/qwen3-coder', 'morph/morph-v3-large', 'deepseek/deepseek-chat-v3.1'],
-    complexReasoningModels: ['x-ai/grok-4', 'deepseek/deepseek-r1', 'anthropic/claude-sonnet-4'],
+    visionModels: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash', 'openai/gpt-5-nano'],
+    codingModels: ['qwen/qwen3-coder', 'z-ai/glm-4.5-air', 'deepseek/deepseek-chat-v3.1'],
+    complexReasoningModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-235b-a22b-2507', 'nousresearch/deephermes-3-mistral-24b-preview'],
     costThresholds: {
       simple: 0.0000005, // Max cost per token for simple queries
       moderate: 0.000002, // Max cost per token for moderate queries  

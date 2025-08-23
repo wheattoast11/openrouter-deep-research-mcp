@@ -190,6 +190,9 @@ const conductResearchSchema = z.object({
     type: z.enum(['csv', 'json']).describe("Type of structured data ('csv' or 'json')."),
     content: z.string().describe("String content of the structured data (e.g., CSV text or JSON string).")
   })).optional().describe("Optional array of structured data inputs relevant to the query."),
+  // NEW: environment/client context and mode
+  clientContext: z.any().optional().describe("Optional client-provided context about environment (app, os, user, session)."),
+  mode: z.enum(['standard','hyper']).optional().default('standard'),
   _mcpExchange: z.any().optional().describe("Internal MCP exchange context for progress reporting"),
   _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
@@ -198,8 +201,14 @@ const conductResearchSchema = z.object({
 const submitResearchSchema = conductResearchSchema.extend({
   notify: z.string().url().optional().describe("Optional webhook to notify on completion")
 }).describe("Submit a long-running research job asynchronously. Returns a job_id immediately. Use get_job_status/cancel_job to manage. Input synonyms supported (q,cost,aud,fmt,src,imgs,docs,data).");
-const getJobStatusSchema = z.object({ job_id: z.string(), since_event_id: z.number().int().optional() }).describe("Get job status and new events since an optional event id.");
+const getJobStatusSchema = z.object({ job_id: z.string(), since_event_id: z.number().int().optional(), format: z.enum(['summary','full','events']).optional().default('summary'), max_events: z.number().int().positive().optional().default(50) }).describe("Get job status with a compact summary by default. Use format: 'full' to include full status + events or 'events' to return only events.");
 const cancelJobSchema = z.object({ job_id: z.string() }).describe("Cancel a queued or running job (best-effort).");
+
+// Unified research schema (async by default)
+const researchSchema = conductResearchSchema.extend({
+  async: z.boolean().optional().default(true),
+  notify: z.string().url().optional()
+}).describe("Unified research tool. async=true (default) enqueues and returns {job_id}. async=false streams results synchronously like conduct_research.");
 
 // Simplified tools
 const searchSchema = z.object({
@@ -217,7 +226,10 @@ const querySchema = z.object({
 // Schema for the new get_report_content tool
 const getReportContentSchema = z.object({
   reportId: z.string().describe("The ID of the report to retrieve content for (obtained from conduct_research result)."),
-  _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
+  mode: z.enum(['full','truncate','summary','smart']).optional().default('full'),
+  maxChars: z.number().int().positive().optional().default(2000),
+  query: z.string().optional(),
+  _requestId: z.string().optional().describe("Internal request ID for logging")
 });
 
 // Schema for the new get_server_status tool
@@ -247,6 +259,8 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   const images = params.images;
   const textDocuments = params.textDocuments;
   const structuredData = params.structuredData;
+  const clientContext = params.clientContext || null;
+  const mode = params.mode || 'standard';
   const progressToken = mcpExchange?.progressToken;
 
   // Helper function to safely truncate a string
@@ -349,6 +363,8 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
 
     try { // Master try block for the whole process
 
+      // If clientContext provided, persist a context snapshot event for traceability
+      try { if (clientContext) await onEvent('client_context', { clientContext }); } catch (_) {}
       // --- Generate Embeddings for Input Data (Optional) ---
       try {
         if (textDocuments && textDocuments.length > 0) {
@@ -514,7 +530,8 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
            structuredData,
            inputEmbeddings, // Pass input embeddings
            requestId, // Pass requestId
-           onEvent
+           onEvent,
+           { clientContext, mode }
         ); 
         const researchDuration = Date.now() - researchStartTime;
         console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: ${stagePrefixResearch} - Parallel research completed in ${researchDuration}ms.`);
@@ -588,7 +605,8 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
           structuredData,
           inputEmbeddings // Pass input embeddings
         },
-        requestId // Pass requestId to context agent
+        requestId, // Pass requestId to context agent
+        clientContext
       );
 
       for await (const chunk of contextStream) {
@@ -737,7 +755,14 @@ async function submitResearch(params, mcpExchange = null, requestId = 'unknown-r
 
 async function getJobStatusTool(params) {
   const stat = await dbClient.getJobStatus(params.job_id);
-  const events = await dbClient.getJobEvents(params.job_id, params.since_event_id || 0, 500);
+  const events = await dbClient.getJobEvents(params.job_id, params.since_event_id || 0, Math.max(1, params.max_events || 50));
+  const format = params.format || 'summary';
+  if (format === 'summary') {
+    return JSON.stringify({ summary: summarizeJobStatus(stat, events, params.max_events), lastEvents: events.slice(-Math.min(events.length, 5)) }, null, 2);
+  }
+  if (format === 'events') {
+    return JSON.stringify({ job: { id: stat?.id, status: stat?.status }, events }, null, 2);
+  }
   return JSON.stringify({ job: stat, events }, null, 2);
 }
 
@@ -808,6 +833,32 @@ const listResearchHistorySchema = z.object({
 function safeSubstring(str, start, end) {
   if (!str) return '';
   return str.substring(start, end);
+}
+
+function parseReportIdFromMessage(message) {
+  try {
+    const m = String(message || '').match(/Report ID:\s*(\d+)/i);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+
+function summarizeJobStatus(job, events, maxEvents = 50) {
+  const lastEvent = Array.isArray(events) && events.length > 0 ? events[events.length - 1] : null;
+  const recent = Array.isArray(events) ? events.slice(Math.max(0, events.length - maxEvents)) : [];
+  const percent = (job?.progress && typeof job.progress.percent === 'number') ? job.progress.percent : null;
+  const message = job?.result?.message || lastEvent?.payload?.message || null;
+  const reportId = parseReportIdFromMessage(message);
+  return {
+    jobId: job?.id || null,
+    status: job?.status || 'unknown',
+    canceled: !!job?.canceled,
+    progressPercent: percent,
+    timestamps: { updatedAt: job?.updated_at || null, startedAt: job?.started_at || null, finishedAt: job?.finished_at || null },
+    lastEvent: lastEvent ? { id: lastEvent.id, type: lastEvent.event_type, ts: lastEvent.ts } : null,
+    resultHint: message ? (message.length > 200 ? message.slice(0, 200) + '…' : message) : null,
+    artifacts: { reportId },
+    nextPollHint: { since_event_id: lastEvent?.id || 0 }
+  };
 }
 
 // Implementation of research_follow_up tool - updated to accept requestId
@@ -1055,25 +1106,56 @@ const fetchUrlSchema = z.object({
 
 // Implementation for get_report_content tool - updated to accept requestId
 async function getReportContent(params, mcpExchange = null, requestId = 'unknown-req') { 
-  const { reportId } = params;
+  const { reportId, mode = 'full', maxChars = 2000, query } = params;
   try {
     console.error(`[${new Date().toISOString()}] [${requestId}] getReportContent: Attempting to retrieve report ID: ${reportId}`);
-    
-    // Call the dbClient function
     const report = await dbClient.getReportById(reportId);
-    
-    if (report && report.final_report) {
-      console.error(`[${new Date().toISOString()}] [${requestId}] getReportContent: Successfully retrieved report ID: ${reportId}`);
-      // Return only the final report content for simplicity, or the full object if needed
-      return report.final_report; 
-      // Alternatively, return JSON.stringify(report, null, 2); for the full object
-    } else if (report) {
-      console.warn(`[${new Date().toISOString()}] [${requestId}] getReportContent: Report ID ${reportId} found, but it has no final_report content.`);
-      throw new Error(`[${requestId}] Report ID ${reportId} found but contains no content.`);
-    } else {
+    if (!report) {
       console.warn(`[${new Date().toISOString()}] [${requestId}] getReportContent: Report ID ${reportId} not found.`);
       throw new Error(`[${requestId}] Report ID ${reportId} not found.`);
     }
+    const content = report.final_report || '';
+    if (mode === 'full') {
+      return content;
+    }
+    if (mode === 'truncate') {
+      return JSON.stringify({ reportId, mode, totalLength: content.length, contentSnippet: content.slice(0, maxChars) + (content.length > maxChars ? '…' : '') }, null, 2);
+    }
+    // helper for cosine similarity
+    const cosineSim = (a, b) => {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
+      let dot = 0, na = 0, nb = 0;
+      for (let i = 0; i < a.length; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+      return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-9);
+    };
+    // Build semantic summary when possible
+    let semantic = null;
+    if (query) {
+      try {
+        const qv = await dbClient.generateEmbedding(query);
+        if (qv) {
+          const sentences = String(content).split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 2000); // cap sentences
+          // Embed in small batches to reduce cost; use first N chars per sentence
+          const scored = [];
+          for (const s of sentences) {
+            const ev = await dbClient.generateEmbedding(s.slice(0, 256));
+            if (ev) scored.push({ text: s, score: cosineSim(qv, ev) });
+          }
+          scored.sort((a,b) => b.score - a.score);
+          const top = scored.slice(0, 8);
+          semantic = { query, topSentences: top.map(t => t.text), scores: top.map(t => Number(t.score.toFixed(3))) };
+        }
+      } catch (_) {}
+    }
+    // summary mode: include both snippet and semantic top sentences
+    const payload = {
+      reportId,
+      mode: mode === 'smart' ? 'summary' : mode,
+      totalLength: content.length,
+      contentSnippet: content.slice(0, maxChars) + (content.length > maxChars ? '…' : ''),
+      semantic
+    };
+    return JSON.stringify(payload, null, 2);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${requestId}] getReportContent: Error retrieving report ID ${reportId}:`, error);
     throw new Error(`[${requestId}] Error retrieving report content: ${error.message}`);
@@ -1085,10 +1167,15 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
   const toolName = "get_server_status";
   console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Retrieving server status...`);
   try {
-    // Gather status information from dbClient
     const embedderReady = dbClient.isEmbedderReady();
     const dbInitialized = dbClient.isDbInitialized();
     const dbPathInfo = dbClient.getDbPathInfo();
+
+    let jobs = { queued: 0, running: 0, succeeded: 0, failed: 0, canceled: 0 };
+    try {
+      const rows = await dbClient.executeQuery("SELECT status, COUNT(*) AS count FROM jobs GROUP BY 1 ORDER BY 1");
+      for (const r of rows) { jobs[r.status] = Number(r.count); }
+    } catch (_) {}
 
     const status = {
       serverName: config.server.name,
@@ -1096,12 +1183,13 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
       timestamp: new Date().toISOString(),
       database: {
         initialized: dbInitialized,
-        storageType: dbPathInfo, // e.g., "File (C:\...)", "IndexedDB (...)", "In-Memory (Fallback)"
+        storageType: dbPathInfo,
         vectorDimension: config.database.vectorDimension,
         maxRetries: config.database.maxRetryAttempts,
         retryDelayBaseMs: config.database.retryDelayBaseMs,
         relaxedDurability: config.database.relaxedDurability
       },
+      jobs,
       embedder: {
         ready: embedderReady,
         model: embedderReady ? 'Xenova/all-MiniLM-L6-v2' : 'Not Loaded'
@@ -1112,9 +1200,8 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
         currentKeys: cache.keys().length,
         stats: cache.getStats()
       },
-      config: { // Include some key config values (be careful not to expose secrets)
+      config: {
         serverPort: config.server.port,
-        // Avoid exposing API keys here
         maxResearchIterations: config.models.maxResearchIterations
       }
     };
@@ -1305,6 +1392,165 @@ async function fetchUrl(params, mcpExchange = null, requestId = 'unknown-req') {
   }
 }
 
+// Unified research tool
+async function researchTool(params, exchange, requestId = `req-${Date.now()}`) {
+  const isAsync = params?.async !== false; // default async
+  if (isAsync) {
+    return submitResearch(params, exchange, requestId);
+  }
+  return conductResearch(params, exchange, requestId);
+}
+
+// New: tool discovery schemas
+const listToolsSchema = z.object({
+  query: z.string().optional().describe("Optional text to filter tool names/descriptions."),
+  limit: z.number().int().positive().optional().default(50),
+  semantic: z.boolean().optional().default(true),
+  _requestId: z.string().optional()
+}).describe("List available MCP tools with metadata. Optionally filter by query and use semantic ranking.");
+
+const searchToolsSchema = z.object({
+  query: z.string().min(1),
+  limit: z.number().int().positive().optional().default(10),
+  _requestId: z.string().optional()
+}).describe("Semantic search over available tools. Returns ranked matches.");
+
+// New: Tool catalog utilities
+const TOOL_CATALOG = [
+  { name: 'conduct_research', description: 'Plan, execute and synthesize multi-agent research with streaming results.' },
+  { name: 'submit_research', description: 'Submit a long-running research job asynchronously.' },
+  { name: 'get_job_status', description: 'Get status and events for an async job.' },
+  { name: 'cancel_job', description: 'Cancel a queued or running job.' },
+  { name: 'search', description: 'Hybrid retrieval across reports/docs (BM25+vector, optional rerank).' },
+  { name: 'query', description: 'Execute read-only SQL SELECT with optional natural-language explanation.' },
+  { name: 'research_follow_up', description: 'Run focused follow-up analysis building on a prior query.' },
+  { name: 'get_past_research', description: 'Find semantically similar past research reports.' },
+  { name: 'rate_research_report', description: 'Record feedback (rating/comment) for a report.' },
+  { name: 'list_research_history', description: 'List recent research reports with optional filter.' },
+  { name: 'get_report_content', description: 'Retrieve final report content by ID.' },
+  { name: 'get_server_status', description: 'Structured server health/config snapshot.' },
+  { name: 'list_models', description: 'List available LLMs from dynamic catalog.' },
+  { name: 'export_reports', description: 'Export reports as JSON/NDJSON.' },
+  { name: 'import_reports', description: 'Import reports from JSON/NDJSON.' },
+  { name: 'backup_db', description: 'Create tar.gz backup of file-backed DB.' },
+  { name: 'db_health', description: 'Quick embedder/DB readiness and storage info.' },
+  { name: 'reindex_vectors', description: 'Rebuild vector indexes after embedder/model changes.' },
+  { name: 'search_web', description: 'Web search via robust scraper with DDG fallback.' },
+  { name: 'fetch_url', description: 'Fetch a URL with robust scraping and optional auto-index.' },
+  { name: 'index_texts', description: 'Index plain text documents into local index (if enabled).' },
+  { name: 'index_url', description: 'Fetch and index URL content into local index (if enabled).' },
+  { name: 'search_index', description: 'Search local BM25+vector index (if enabled).' },
+  { name: 'index_status', description: 'Report local index configuration and status (if enabled).' },
+  { name: 'date_time', description: 'Current time utility for agents.' },
+  { name: 'calc', description: 'Safe arithmetic calculator for agents.' }
+];
+
+function summarizeParamsForTool(name) {
+  // Minimal param summaries for client display (avoid leaking full zod schemas)
+  switch (name) {
+    case 'conduct_research': return ['query', 'costPreference?', 'audienceLevel?', 'outputFormat?', 'includeSources?', 'images?', 'textDocuments?', 'structuredData?'];
+    case 'submit_research': return ['query', 'notify?'];
+    case 'search': return ['q', 'k?', 'scope?'];
+    case 'query': return ['sql', 'params?', 'explain?'];
+    case 'get_past_research': return ['query', 'limit?', 'minSimilarity?'];
+    case 'research_follow_up': return ['originalQuery', 'followUpQuestion', 'costPreference?'];
+    case 'get_report_content': return ['reportId'];
+    case 'execute_sql': return ['sql', 'params?'];
+    case 'list_models': return ['refresh?'];
+    case 'export_reports': return ['format?', 'limit?', 'queryFilter?'];
+    case 'import_reports': return ['format?', 'content'];
+    case 'backup_db': return ['destinationDir?'];
+    case 'search_web': return ['query', 'maxResults?'];
+    case 'fetch_url': return ['url', 'maxBytes?'];
+    case 'index_texts': return ['documents[]', 'sourceType?'];
+    case 'index_url': return ['url', 'maxBytes?'];
+    case 'search_index': return ['query', 'limit?'];
+    default: return [];
+  }
+}
+
+function dot(a, b) {
+  let s = 0; const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) s += (Number(a[i]) || 0) * (Number(b[i]) || 0);
+  return s;
+}
+
+async function buildToolEmbedding(text) {
+  try {
+    const emb = await dbClient.generateEmbedding(String(text).slice(0, 1000));
+    return emb || [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function listToolsTool(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { query, limit, semantic } = params || {};
+  const all = TOOL_CATALOG.filter(t => {
+    if (!query || !query.trim()) return true;
+    const q = query.toLowerCase();
+    return t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q);
+  });
+
+  if (!semantic || !query || !query.trim()) {
+    const items = all.slice(0, limit).map(t => ({
+      name: t.name,
+      description: t.description,
+      params: summarizeParamsForTool(t.name)
+    }));
+    return JSON.stringify({ tools: items }, null, 2);
+  }
+
+  // Semantic rank
+  const qEmb = await buildToolEmbedding(query);
+  const ranked = [];
+  for (const t of all) {
+    const text = `${t.name}: ${t.description}`;
+    const emb = await buildToolEmbedding(text);
+    const score = (qEmb.length && emb.length) ? dot(qEmb, emb) : 0;
+    ranked.push({
+      name: t.name,
+      description: t.description,
+      params: summarizeParamsForTool(t.name),
+      score
+    });
+  }
+  ranked.sort((a, b) => b.score - a.score);
+  return JSON.stringify({ tools: ranked.slice(0, limit) }, null, 2);
+}
+
+async function searchToolsTool(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { query, limit } = params;
+  return listToolsTool({ query, limit, semantic: true }, mcpExchange, requestId);
+}
+
+// Date/time and calculator tools
+const dateTimeSchema = z.object({ format: z.string().optional().default('iso') }).describe("Get current date/time. format: 'iso'|'rfc'|'epoch'.");
+async function dateTimeTool(params) {
+  const now = new Date();
+  switch ((params?.format || 'iso').toLowerCase()) {
+    case 'rfc': return JSON.stringify({ now: now.toUTCString() });
+    case 'epoch': return JSON.stringify({ now: Math.floor(now.getTime()/1000) });
+    default: return JSON.stringify({ now: now.toISOString() });
+  }
+}
+
+const calcSchema = z.object({ expr: z.string(), precision: z.number().int().min(0).max(12).optional().default(6) }).describe("Evaluate a simple arithmetic expression (+,-,*,/,^,(), decimals). Safe parser.");
+async function calcTool(params) {
+  const src = String(params.expr || '').trim();
+  if (!/^[0-9+\-*/().^\s]+$/.test(src)) return JSON.stringify({ error: 'Invalid characters' });
+  try {
+    // Replace ^ with ** for exponent
+    const js = src.replace(/\^/g, '**');
+    // eslint-disable-next-line no-new-func
+    const fn = new Function(`return (${js});`);
+    const val = fn();
+    if (typeof val !== 'number' || !isFinite(val)) return JSON.stringify({ error: 'Computation failed' });
+    return JSON.stringify({ expr: src, result: Number(val.toFixed(params.precision || 6)) });
+  } catch (e) {
+    return JSON.stringify({ error: e.message });
+  }
+}
 
 module.exports = {
   // Schemas
@@ -1333,6 +1579,11 @@ module.exports = {
   indexStatusSchema,
   searchSchema,
   querySchema,
+  researchSchema,
+  listToolsSchema,
+  searchToolsSchema,
+  dateTimeSchema,
+  calcSchema,
   
   // Functions
   conductResearch,
@@ -1359,5 +1610,10 @@ module.exports = {
   index_texts,
   index_url,
   search_index,
-  index_status
+  index_status,
+  researchTool,
+  listToolsTool,
+  searchToolsTool,
+  dateTimeTool,
+  calcTool
 };

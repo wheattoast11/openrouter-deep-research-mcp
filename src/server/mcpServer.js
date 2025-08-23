@@ -31,6 +31,11 @@ const {
   indexUrlSchema,
   searchIndexSchema,
   indexStatusSchema,
+  listToolsSchema,
+  searchToolsSchema,
+  researchSchema,
+  dateTimeSchema,
+  calcSchema,
   
   // Functions
   conductResearch,
@@ -59,9 +64,15 @@ const {
   index_texts,
   index_url,
   search_index,
-  index_status
+  index_status,
+  listToolsTool,
+  searchToolsTool,
+  researchTool,
+  dateTimeTool,
+  calcTool
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
+const nodeFetch = require('node-fetch');
 const cors = require('cors');
 
 // Create MCP server with proper capabilities declaration per latest MCP spec
@@ -128,7 +139,7 @@ if (config.mcp?.features?.prompts) {
           const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
           return { 
             description: prompt.description,
-            messages: [{ role: 'assistant', content: planResult }] 
+            messages: [{ role: 'assistant', content: [{ type: 'text', text: planResult }] }]
           };
           
         case 'synthesis_prompt':
@@ -143,7 +154,7 @@ if (config.mcp?.features?.prompts) {
           }
           return { 
             description: prompt.description,
-            messages: [{ role: 'assistant', content: synthesisResult }] 
+            messages: [{ role: 'assistant', content: [{ type: 'text', text: synthesisResult }] }]
           };
           
         case 'research_workflow_prompt':
@@ -180,7 +191,7 @@ research_follow_up { "originalQuery": "${topic}", "followUpQuestion": "[your_spe
           `;
           return {
             description: prompt.description,
-            messages: [{ role: 'assistant', content: workflowGuide }]
+            messages: [{ role: 'assistant', content: [{ type: 'text', text: workflowGuide }] }]
           };
           
         default:
@@ -198,6 +209,12 @@ if (config.mcp?.features?.resources) {
       name: 'MCP Core Specification',
       description: 'Canonical Model Context Protocol specification links and references',
     mimeType: 'application/json'
+    }],
+    ['mcp://tools/catalog', {
+      uri: 'mcp://tools/catalog',
+      name: 'Available Tools Catalog',
+      description: 'Live MCP tools catalog with lightweight params for client UIs',
+      mimeType: 'application/json'
     }],
     ['mcp://patterns/workflows', {
       uri: 'mcp://patterns/workflows', 
@@ -284,6 +301,14 @@ if (config.mcp?.features?.resources) {
               anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
             }
           };
+          break;
+        case 'mcp://tools/catalog':
+          try {
+            const text = await require('./tools').listToolsTool({ limit: 200, semantic: false });
+            content = JSON.parse(text);
+          } catch (_) {
+            content = { tools: [] };
+          }
           break;
           
         case 'mcp://patterns/workflows':
@@ -385,6 +410,38 @@ if (config.mcp?.features?.resources) {
 }
 
 // Register tools
+// Tool discovery (client-side selection helpers)
+server.tool(
+  "list_tools",
+  { ...listToolsSchema.shape, _title: z.string().optional().default('List MCP tools'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  async (params, exchange) => {
+    const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
+    const toolName = "list_tools";
+    try {
+      const text = await listToolsTool(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error list_tools: ${e.message}` }], isError: true };
+    }
+  }
+);
+server.tool(
+  "search_tools",
+  { ...searchToolsSchema.shape, _title: z.string().optional().default('Search MCP tools'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  async (params, exchange) => {
+    const startTime = Date.now();
+    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
+    const toolName = "search_tools";
+    try {
+      const text = await searchToolsTool(params, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error search_tools: ${e.message}` }], isError: true };
+    }
+  }
+);
+
    // Async submit_research
    server.tool(
      "submit_research",
@@ -436,11 +493,20 @@ if (config.mcp?.features?.resources) {
        catch (e) { return { content: [{ type: 'text', text: `Error query: ${e.message}` }], isError: true }; }
      }
    );
-   // The second argument to the tool handler is the exchange context from the SDK
+   // Unified research (async by default, sync if async:false)
    server.tool(
-     "conduct_research",
-     { ...conductResearchSchema.shape, _title: z.string().optional().default('Conduct research (streamed)'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
-     async (params, exchange) => { 
+     "research",
+     { ...researchSchema.shape, _title: z.string().optional().default('Research (async default)'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
+     async (params, exchange) => {
+       try { const text = await researchTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+       catch (e) { return { content: [{ type: 'text', text: `Error research: ${e.message}` }], isError: true }; }
+     }
+   );
+  // The second argument to the tool handler is the exchange context from the SDK
+  server.tool(
+    "conduct_research",
+    { ...conductResearchSchema.shape, _title: z.string().optional().default('Conduct research (streamed)'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
+    async (params, exchange) => { 
         const startTime = Date.now();
         const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`; // Simple request ID
         console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Starting research for query "${params.query.substring(0, 50)}..."`); 
@@ -690,43 +756,6 @@ server.tool(
   }
 );
 
-// Register tool to execute SQL queries
-server.tool(
-  "execute_sql",
-  { ...executeSqlSchema.shape, _title: z.string().optional().default('Execute SELECT SQL'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "execute_sql";
-    // Avoid logging full SQL in production if sensitive
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Attempting to execute SQL (Params: ${params.params?.length ?? 0})`);
-
-    try {
-      // Call executeSql from tools.js, passing requestId
-      const result = await executeSql(params, exchange, requestId);
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: SQL execution completed in ${duration}ms.`);
-
-      return {
-        content: [{
-          type: 'text',
-          text: result // This is the JSON string of results
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error executing SQL: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
 // Register tool to list available models (dynamic catalog)
 server.tool(
   "list_models",
@@ -909,6 +938,22 @@ if (require('../../config').indexer?.enabled) {
     }
   );
 }
+server.tool(
+  "date_time",
+  { ...dateTimeSchema.shape, _title: z.string().optional().default('Current date/time'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  async (params, exchange) => {
+    try { const text = await require('./tools').dateTimeTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error date_time: ${e.message}` }], isError: true }; }
+  }
+);
+server.tool(
+  "calc",
+  { ...calcSchema.shape, _title: z.string().optional().default('Calculator'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  async (params, exchange) => {
+    try { const text = await require('./tools').calcTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error calc: ${e.message}` }], isError: true }; }
+  }
+);
  
  // Set up transports based on environment
  const setupTransports = async () => {
@@ -1104,18 +1149,43 @@ if (require('../../config').indexer?.enabled) {
             usageTotals.total_tokens += Number(t.total_tokens||0);
           }
         } catch(_) {}
-       res.json({
-         time: new Date().toISOString(),
-         database: { initialized: dbInitialized, storageType: dbPathInfo },
-         embedder: { ready: embedderReady },
-         jobs: rows,
-         recent,
-          usageTotals,
-       });
-     } catch (e) {
-       res.status(500).json({ error: e.message });
-     }
-   });
+
+        if ((req.headers['accept'] || '').includes('text/plain')) {
+          res.setHeader('Content-Type','text/plain; version=0.0.4');
+          const lines = [];
+          lines.push(`# HELP jobs_total Number of jobs by status`);
+          lines.push(`# TYPE jobs_total gauge`);
+          for (const r of rows) lines.push(`jobs_total{status="${r.status}"} ${Number(r.n||0)}`);
+          lines.push(`# HELP embedder_ready Whether embedder is initialized`);
+          lines.push(`# TYPE embedder_ready gauge`);
+          lines.push(`embedder_ready ${embedderReady?1:0}`);
+          lines.push(`# HELP db_initialized Whether DB is initialized`);
+          lines.push(`# TYPE db_initialized gauge`);
+          lines.push(`db_initialized ${dbInitialized?1:0}`);
+          lines.push(`# HELP tokens_prompt Total prompt tokens from recent reports`);
+          lines.push(`# TYPE tokens_prompt counter`);
+          lines.push(`tokens_prompt ${usageTotals.prompt_tokens}`);
+          lines.push(`# HELP tokens_completion Total completion tokens from recent reports`);
+          lines.push(`# TYPE tokens_completion counter`);
+          lines.push(`tokens_completion ${usageTotals.completion_tokens}`);
+          lines.push(`# HELP tokens_total Total tokens from recent reports`);
+          lines.push(`# TYPE tokens_total counter`);
+          lines.push(`tokens_total ${usageTotals.total_tokens}`);
+          return res.end(lines.join('\n') + '\n');
+        }
+
+        res.json({
+          time: new Date().toISOString(),
+          database: { initialized: dbInitialized, storageType: dbPathInfo },
+          embedder: { ready: embedderReady },
+          jobs: rows,
+          recent,
+           usageTotals,
+        });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
 
    // About endpoint for directory metadata
    app.get('/about', (req, res) => {
@@ -1194,6 +1264,20 @@ if (require('../../config').indexer?.enabled) {
      </body></html>`);
    });
 
+   // Client demo: tool catalog UI (client-side), server performs semantic ranking
+   app.get('/client/tools', async (req, res) => {
+     try {
+       const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+       const limit = req.query.limit ? Math.max(1, Math.min(200, Number(req.query.limit))) : undefined;
+       const semantic = req.query.semantic === 'false' ? false : true;
+       const text = await require('./tools').listToolsTool({ query: q, limit: limit || 50, semantic });
+       res.setHeader('Content-Type', 'application/json');
+       res.end(text);
+     } catch (e) {
+       res.status(500).json({ error: e.message });
+     }
+   });
+
   // Endpoint for messages with per-connection routing and authentication
   // Supports both legacy (no connectionId) and new path/query param routing
   app.post(['/messages', '/messages/:connectionId'], authenticate, express.json(), (req, res) => {
@@ -1254,13 +1338,44 @@ if (require('../../config').indexer?.enabled) {
              const resultText = await require('./tools').conductResearch(params, exchange, jobId);
              await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
              await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
+            // Optional webhook notification
+            try {
+              if (params?.notify) {
+                await nodeFetch(params.notify, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ job_id: jobId, status: 'succeeded', message: resultText })
+                }).catch(()=>{});
+              }
+            } catch (_) {}
            } else {
              await dbClient.setJobStatus(jobId, 'failed', { result: { error: 'Unknown job type' }, finished: true });
              await dbClient.appendJobEvent(jobId, 'error', { message: 'Unknown job type' });
+            // Notify if requested
+            try {
+              const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+              if (params?.notify) {
+                await nodeFetch(params.notify, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ job_id: jobId, status: 'failed', error: 'Unknown job type' })
+                }).catch(()=>{});
+              }
+            } catch (_) {}
            }
          } catch (e) {
            await dbClient.setJobStatus(jobId, 'failed', { result: { error: e.message }, finished: true });
            await dbClient.appendJobEvent(jobId, 'error', { message: e.message });
+          try {
+            const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+            if (params?.notify) {
+              await nodeFetch(params.notify, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job_id: jobId, status: 'failed', error: e.message })
+              }).catch(()=>{});
+            }
+          } catch (_) {}
          } finally {
            clearInterval(hb);
          }

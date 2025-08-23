@@ -304,6 +304,18 @@ async function initDB() {
     await db.query(`CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);`);
     process.stderr.write(`[${new Date().toISOString()}] Job tables created or verified\n`);
 
+    // Usage counters to track interactions with docs/reports
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS usage_counters (
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        uses INTEGER NOT NULL DEFAULT 0,
+        last_used_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (entity_type, entity_id)
+      );
+    `);
+    process.stderr.write(`[${new Date().toISOString()}] usage_counters table created or verified\n`);
+
     // Create indexes for better performance
     await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_original_query ON reports (original_query);`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports (created_at DESC);`);
@@ -431,14 +443,16 @@ async function searchHybrid(queryText, limit = 10) {
          FROM joined
          GROUP BY doc_id
        )
-       SELECT d.id, d.source_type, d.source_id, d.title, d.content, s.bm25
+       SELECT d.id, d.source_type, d.source_id, d.title, d.content, s.bm25,
+              COALESCE(u.uses,0) AS uses
        FROM scoring s JOIN index_documents d ON d.id = s.doc_id
+       LEFT JOIN usage_counters u ON u.entity_type = 'doc' AND u.entity_id = d.source_id
        ORDER BY s.bm25 DESC
        LIMIT ${limit}
       `,
       terms
     );
-    return res.rows.map(r => ({ ...r, bm25: Number(r.bm25 || 0) }));
+    return res.rows.map(r => ({ ...r, bm25: Number(r.bm25 || 0), uses: Number(r.uses || 0) }));
   }, 'searchBM25Docs', []);
 
   // Vector similarities
@@ -469,13 +483,16 @@ async function searchHybrid(queryText, limit = 10) {
   if (qVec) {
     reportVecRows = await executeWithRetry(async () => {
       const r = await db.query(
-        `SELECT id, original_query, final_report, 1 - (query_embedding <=> $1::vector) AS sim
-         FROM reports WHERE query_embedding IS NOT NULL
+        `SELECT r.id, r.original_query, r.final_report, 1 - (r.query_embedding <=> $1::vector) AS sim,
+                COALESCE(u.uses,0) AS uses
+         FROM reports r
+         LEFT JOIN usage_counters u ON u.entity_type = 'report' AND u.entity_id = r.id::text
+         WHERE r.query_embedding IS NOT NULL
          ORDER BY sim DESC
          LIMIT $2;`,
         [qVec, Math.max(50, limit)]
       );
-      return r.rows.map(row => ({ id: row.id, sim: Number(row.sim), original_query: row.original_query, final_report: row.final_report }));
+      return r.rows.map(row => ({ id: row.id, sim: Number(row.sim), original_query: row.original_query, final_report: row.final_report, uses: Number(row.uses || 0) }));
     }, 'vectorReportsLookup', []);
   }
 
@@ -498,7 +515,8 @@ async function searchHybrid(queryText, limit = 10) {
       snippet: (d.content || '').slice(0, 300),
       bm25: d.bm25 || 0,
       vectorScore: v,
-      hybridScore: hybrid
+      hybridScore: hybrid,
+      usageCount: d.uses || 0
     };
   });
 
@@ -511,7 +529,8 @@ async function searchHybrid(queryText, limit = 10) {
     snippet: (r.final_report || '').slice(0, 300),
     bm25: 0,
     vectorScore: r.sim,
-    hybridScore: (weights.vector || 0) * r.sim
+    hybridScore: (weights.vector || 0) * r.sim,
+    usageCount: r.uses || 0
   }));
 
   const combined = [...docResults, ...reportResults]
@@ -913,7 +932,10 @@ module.exports = {
   getJob,
   getJobEvents,
   getJobStatus,
-  cancelJob
+  cancelJob,
+  // Usage API
+  incrementUsage,
+  incrementUsageMany
 };
 
 // Function to retrieve a single report by its ID
@@ -1006,6 +1028,27 @@ async function reindexVectors() {
     'reindexVectors',
     false
   );
+}
+
+// --- Usage counters helpers ---
+async function incrementUsage(entityType, entityId, inc = 1) {
+  return executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO usage_counters (entity_type, entity_id, uses, last_used_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (entity_type, entity_id)
+       DO UPDATE SET uses = usage_counters.uses + EXCLUDED.uses, last_used_at = NOW();`,
+      [entityType, String(entityId), Number(inc) || 1]
+    );
+    return true;
+  }, 'incrementUsage', false);
+}
+
+async function incrementUsageMany(items = []) {
+  for (const it of items) {
+    try { await incrementUsage(it.type, it.id); } catch (_) {}
+  }
+  return true;
 }
 
 // --- Async Job Helpers ---

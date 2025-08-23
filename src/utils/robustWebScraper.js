@@ -34,7 +34,9 @@ class RobustWebScraper {
   // Enhanced web search with multiple fallback strategies
   async searchWeb(query, maxResults = 5, options = {}) {
     const strategies = [
+      () => this.searchSearx(query, maxResults),
       () => this.searchDuckDuckGo(query, maxResults),
+      () => this.searchDuckDuckGoHtml(query, maxResults),
       () => this.searchBing(query, maxResults),
       () => this.searchGoogle(query, maxResults)
     ];
@@ -54,6 +56,58 @@ class RobustWebScraper {
 
     console.error(`[${new Date().toISOString()}] RobustWebScraper: All search strategies failed for query "${query.substring(0, 50)}..."`);
     return [];
+  }
+
+  async searchSearx(query, maxResults = 5) {
+    const base = process.env.SEARXNG_URL; // e.g., https://searxng.example.org
+    if (!base) return [];
+    try {
+      const url = `${base.replace(/\/$/, '')}/search`;
+      const response = await axios.get(url, {
+        params: { q: query, format: 'json', language: 'en', safesearch: 1, categories: 'general' },
+        timeout: 10000,
+        headers: { 'User-Agent': this.getRandomUserAgent() }
+      });
+      const items = Array.isArray(response.data.results) ? response.data.results : [];
+      return items.slice(0, maxResults).map((r) => ({
+        title: r.title || 'SearxNG Result',
+        text: r.content || r.snippet || '',
+        url: r.url,
+        source: 'searxng'
+      }));
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] RobustWebScraper: SearxNG search failed:`, e.message);
+      return [];
+    }
+  }
+
+  // DuckDuckGo HTML fallback parser
+  async searchDuckDuckGoHtml(query, maxResults = 5) {
+    try {
+      const response = await axios.get('https://duckduckgo.com/html/', {
+        params: { q: query },
+        headers: { 'User-Agent': this.getRandomUserAgent(), ...this.defaultHeaders },
+        timeout: 10000
+      });
+      const dom = new JSDOM(response.data);
+      const doc = dom.window.document;
+      const links = Array.from(doc.querySelectorAll('.result__a'));
+      const snippets = Array.from(doc.querySelectorAll('.result__snippet'));
+      const out = [];
+      for (let i = 0; i < Math.min(maxResults, links.length); i++) {
+        const a = links[i];
+        out.push({
+          title: a.textContent?.trim() || 'DuckDuckGo Result',
+          text: snippets[i]?.textContent?.trim() || '',
+          url: a.href,
+          source: 'ddg_html'
+        });
+      }
+      return out;
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] RobustWebScraper: DuckDuckGo HTML parse failed:`, e.message);
+      return [];
+    }
   }
 
   // DuckDuckGo search implementation

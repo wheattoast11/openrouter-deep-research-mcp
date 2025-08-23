@@ -61,7 +61,7 @@ class PlanningAgent {
 
   // Added previousResults, images, documents, structuredData, pastReports, inputEmbeddings, and requestId parameters
   async planResearch(query, options = {}, previousResults = null, requestId = 'unknown-req') { 
-    const { images, documents, structuredData, pastReports, inputEmbeddings, onEvent } = options; // Extract context
+    const { images, documents, structuredData, pastReports, inputEmbeddings, onEvent, clientContext } = options; // Extract context
     let systemPrompt;
     let classifiedDomain = 'general'; // Default domain
 
@@ -69,7 +69,7 @@ class PlanningAgent {
        // Classify the domain only for the initial planning step, passing requestId correctly
        classifiedDomain = await this.classifyQueryDomain(query, { requestId: requestId }); 
        // Pass past reports, documents, structured data, and input embeddings to the prompt generation method
-       systemPrompt = this.getInitialPlanningPrompt(classifiedDomain, query, pastReports, documents, structuredData, inputEmbeddings);
+       systemPrompt = this.getInitialPlanningPrompt(classifiedDomain, query, pastReports, documents, structuredData, inputEmbeddings, clientContext);
        // Add image consideration note if applicable
        if (images && images.length > 0) {
           systemPrompt += "\n\nConsider the provided image(s) when formulating research questions.";
@@ -175,7 +175,7 @@ Refinement Guidelines:
   }
 
   // Method to get the appropriate initial planning prompt based on domain, past reports, documents, structured data, and input embeddings
-  getInitialPlanningPrompt(domain, query, pastReports = [], documents = [], structuredData = [], inputEmbeddings = {}) {
+  getInitialPlanningPrompt(domain, query, pastReports = [], documents = [], structuredData = [], inputEmbeddings = {}, clientContext = null) {
     let knowledgeBaseContext = '';
     if (pastReports && pastReports.length > 0) {
       knowledgeBaseContext = `
@@ -183,6 +183,12 @@ Relevant Information from Past Research (note the date - use this to avoid redun
 ---
 ${pastReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateString()} (Similarity: ${r.similarityScore.toFixed(2)})\nPast Query: ${r.query}\nSummary Snippet:\n${r.summary}`).join('\n\n')}
 ---
+`;
+    }
+
+    let clientContextText = '';
+    if (clientContext) {
+      clientContextText = `\nCLIENT CONTEXT (environment/hints):\n${JSON.stringify(clientContext).slice(0, 1200)}\nUse this to tailor sub-queries (e.g., OS/browser/latency/permissions).
 `;
     }
 
@@ -205,6 +211,7 @@ ${pastReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateString()
     let basePrompt = `
  You are a research planning agent specialized in breaking down complex queries into well-structured components. The primary domain of this query is classified as: ${domain}.
  ${knowledgeBaseContext}
+ ${clientContextText}
  ${documentContextInstruction}
  
  First, verify the query's assumptions (dates, entities, definitions). If assumptions are suspect, include a sub-query to validate them before deeper analysis.
