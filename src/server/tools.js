@@ -759,7 +759,16 @@ async function submitResearch(params, mcpExchange = null, requestId = 'unknown-r
   const normalized = normalizeResearchParams(params);
   const jobId = await dbClient.createJob('research', normalized);
   await dbClient.appendJobEvent(jobId, 'submitted', { requestId, query: normalized.query });
-  return JSON.stringify({ job_id: jobId });
+  try {
+    const { server } = require('../../config');
+    const base = server.publicUrl || '';
+    const sse_url = `${base.replace(/\/$/,'')}/jobs/${jobId}/events`;
+    const ui_url = `${base.replace(/\/$/,'')}/ui?job=${encodeURIComponent(jobId)}`;
+    await dbClient.appendJobEvent(jobId, 'ui_hint', { sse_url, ui_url });
+    return JSON.stringify({ job_id: jobId, sse_url, ui_url });
+  } catch (_) {
+    return JSON.stringify({ job_id: jobId });
+  }
 }
 
 async function getJobStatusTool(params) {
@@ -1444,6 +1453,8 @@ const searchToolsSchema = z.object({
 
 // New: Tool catalog utilities
 const TOOL_CATALOG = [
+  { name: 'agent', description: 'Single entrypoint agent. Routes to research, follow_up, or retrieve/query with parameters.' },
+  { name: 'ping', description: 'Health check. Returns pong, optionally with server info.' },
   { name: 'research', description: 'Submit research query. async:true (default) returns job_id, async:false streams results. Requires query parameter.' },
   { name: 'conduct_research', description: 'Synchronous research; returns final text. Accepts freeform query or {query}.' },
   { name: 'job_status', description: 'Check async job progress. Requires job_id parameter. Returns terse status summary by default.' },
@@ -1465,6 +1476,8 @@ const TOOL_CATALOG = [
 function summarizeParamsForTool(name) {
   // Minimal param summaries for client display (avoid leaking full zod schemas)
   switch (name) {
+    case 'agent': return ['action? (auto|research|follow_up|retrieve|query)', 'query?', 'async?', 'originalQuery?', 'followUpQuestion?', 'mode?', 'sql?', 'params?', 'k?', 'scope?', 'explain?'];
+    case 'ping': return ['info?'];
     case 'research': return ['query', 'async?', 'costPreference?', 'audienceLevel?', 'outputFormat?', 'includeSources?'];
     case 'job_status': return ['job_id', 'format?', 'since_event_id?', 'max_events?'];
     case 'cancel_job': return ['job_id'];
@@ -1514,7 +1527,7 @@ async function buildToolEmbedding(text) {
 
 async function listToolsTool(params, mcpExchange = null, requestId = 'unknown-req') {
   const { query, limit, semantic } = params || {};
-  const all = TOOL_CATALOG.filter(t => {
+  const all = TOOL_CATALOG.filter(t => toolExposedByMode(t.name)).filter(t => {
     if (!query || !query.trim()) return true;
     const q = query.toLowerCase();
     return t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q);
@@ -1618,6 +1631,74 @@ async function retrieveTool(params, mcpExchange = null, requestId = `req-${Date.
   return searchTool({ q, k: params.k || 10, scope: params.scope || 'both', rerank: !!params.rerank }, mcpExchange, requestId);
 }
 
+// Agent meta-tool schema and router
+const agentSchema = z.object({
+  action: z.enum(['auto','research','follow_up','retrieve','query']).optional().default('auto'),
+  // Common
+  async: z.boolean().optional().default(true),
+  notify: z.string().url().optional(),
+  // Research
+  query: z.string().optional(),
+  costPreference: conductResearchSchema.shape.costPreference.optional(),
+  audienceLevel: conductResearchSchema.shape.audienceLevel.optional(),
+  outputFormat: conductResearchSchema.shape.outputFormat.optional(),
+  includeSources: conductResearchSchema.shape.includeSources.optional(),
+  images: conductResearchSchema.shape.images.optional(),
+  textDocuments: conductResearchSchema.shape.textDocuments.optional(),
+  structuredData: conductResearchSchema.shape.structuredData.optional(),
+  // Follow up
+  originalQuery: z.string().optional(),
+  followUpQuestion: z.string().optional(),
+  // Retrieve / Query
+  mode: z.enum(['index','sql']).optional(),
+  k: z.number().int().positive().optional(),
+  scope: z.enum(['both','reports','docs']).optional(),
+  rerank: z.boolean().optional(),
+  sql: z.string().optional(),
+  params: z.array(z.any()).optional(),
+  explain: z.boolean().optional(),
+  _requestId: z.string().optional()
+}).describe("Single entrypoint agent tool. Routes to research, follow_up, or retrieve/query based on params. Set action to control explicitly or use action='auto'.");
+
+async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now()}`) {
+  const action = (params?.action || 'auto').toLowerCase();
+  if (action === 'research') return researchTool(params, mcpExchange, requestId);
+  if (action === 'follow_up') return researchFollowUp(params, mcpExchange, requestId);
+  if (action === 'retrieve') return retrieveTool({ mode: 'index', query: params.query, k: params.k, scope: params.scope, rerank: params.rerank }, mcpExchange, requestId);
+  if (action === 'query') return retrieveTool({ mode: 'sql', sql: params.sql, params: params.params || [], explain: !!params.explain }, mcpExchange, requestId);
+  if (params?.originalQuery && params?.followUpQuestion) {
+    return researchFollowUp({ originalQuery: params.originalQuery, followUpQuestion: params.followUpQuestion, costPreference: params.costPreference }, mcpExchange, requestId);
+  }
+  if (params?.sql) {
+    return retrieveTool({ mode: 'sql', sql: params.sql, params: params.params || [], explain: !!params.explain }, mcpExchange, requestId);
+  }
+  if (params?.mode === 'index' || (params?.k || params?.scope || params?.rerank)) {
+    if (!params?.query) throw new Error('agent: query is required for retrieve mode');
+    return retrieveTool({ mode: 'index', query: params.query, k: params.k || 10, scope: params.scope || 'both', rerank: !!params.rerank }, mcpExchange, requestId);
+  }
+  return researchTool(params, mcpExchange, requestId);
+}
+
+// Ping tool for health check and latency
+const pingSchema = z.object({
+  info: z.boolean().optional().default(false)
+}).describe("Lightweight health check. Returns pong with server time; info=true adds DB/embedder/job counts.");
+
+async function pingTool(params) {
+  const base = { pong: true, time: new Date().toISOString() };
+  if (!params?.info) return JSON.stringify(base);
+  try {
+    const embedderReady = dbClient.isEmbedderReady();
+    const dbInitialized = dbClient.isDbInitialized();
+    const dbPathInfo = dbClient.getDbPathInfo();
+    let jobs = [];
+    try { jobs = await dbClient.executeQuery(`SELECT status, COUNT(*) AS n FROM jobs GROUP BY status`, []); } catch (_) {}
+    return JSON.stringify({ ...base, database: { initialized: dbInitialized, storageType: dbPathInfo }, embedder: { ready: embedderReady }, jobs }, null, 2);
+  } catch (_) {
+    return JSON.stringify(base);
+  }
+}
+
 module.exports = {
   // Schemas
   conductResearchSchema,
@@ -1683,5 +1764,10 @@ module.exports = {
   searchToolsTool,
   dateTimeTool,
   calcTool,
-  retrieveTool
+  retrieveTool,
+  // Agent & ping
+  agentSchema,
+  agentTool,
+  pingSchema,
+  pingTool
 };

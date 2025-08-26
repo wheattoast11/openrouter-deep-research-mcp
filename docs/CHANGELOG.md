@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.2 — 2025-08-26
+- New MODE env: `AGENT` | `MANUAL` | `ALL` (default). Always-on tools: `ping`, `get_server_status`, `job_status`, `get_job_status`, `cancel_job`.
+  - AGENT: exposes always-on + `agent`
+  - MANUAL: exposes always-on + individual tools (`research`, `retrieve`, `query`, etc.)
+  - ALL: exposes everything
+- New `agent` tool: single entrypoint that routes to research, follow_up, retrieve, and query.
+- New `ping` tool: lightweight liveness and optional info.
+- Async submit response now includes `ui_url` and `sse_url`; emits `ui_hint` job event for clients to auto-open micro-UI.
+- Capability flags updated: prompts `listChanged`, resources `subscribe`/`listChanged`.
+- Tool catalog and list/search filtered by MODE.
+- Package version bump to 1.3.2; README updated with MODE quick-start.
+- General cleanup: ensured docs align with current code; removed stale references.
+
 ## v1.2.0 — 2025-08-19
 
 - Async jobs: `submit_research` (returns job_id), `get_job_status`, `cancel_job`; in‑process worker with leasing and SSE events

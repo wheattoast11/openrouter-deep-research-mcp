@@ -9,7 +9,8 @@ const config = {
     version: pkg.version,
     // Add a key for basic server authentication (optional)
     apiKey: process.env.SERVER_API_KEY || null,
-    requireHttps: process.env.REQUIRE_HTTPS === 'true'
+    requireHttps: process.env.REQUIRE_HTTPS === 'true',
+    publicUrl: process.env.PUBLIC_URL || `${process.env.REQUIRE_HTTPS === 'true' ? 'https' : 'http'}://localhost:${process.env.SERVER_PORT || process.env.PORT || 3002}`
   },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -119,6 +120,7 @@ config.mcp = {
     resources: process.env.MCP_ENABLE_RESOURCES === 'false' ? false : true
   }
 };
+config.mcp.mode = (process.env.MODE || 'ALL').toUpperCase();
 
 // Experimental modes
 config.modes = {

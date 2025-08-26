@@ -80,10 +80,29 @@ const server = new McpServer({
   version: config.server.version,
   capabilities: {
     tools: {},
-    prompts: {}, // Simplified format for MCP 2025-06-18 spec
-    resources: {}
+    prompts: { listChanged: true },
+    resources: { subscribe: true, listChanged: true }
   }
 });
+
+// MODE-based tool exposure
+const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
+const ALWAYS_ON = new Set(['ping','get_server_status','job_status','get_job_status','cancel_job']);
+const AGENT_ONLY = new Set(['agent']);
+const MANUAL_SET = new Set([
+  'research','conduct_research','submit_research','research_follow_up',
+  'retrieve','search','query',
+  'get_report','get_report_content','history','list_research_history'
+]);
+function shouldExpose(name) {
+  if (ALWAYS_ON.has(name)) return true;
+  if (MODE === 'AGENT') return AGENT_ONLY.has(name);
+  if (MODE === 'MANUAL') return MANUAL_SET.has(name);
+  return true; // ALL
+}
+function register(name, schema, handler) {
+  if (shouldExpose(name)) server.tool(name, schema, handler);
+}
 
 // Permissive parameter normalizer to accept loose single-string inputs (e.g., random_string)
 function extractRawParam(input) {
@@ -566,7 +585,7 @@ if (config.mcp?.features?.resources) {
 }
 
 // Register tools (minimal unified set)
-server.tool(
+register(
   "research",
   researchSchema,
   async (params, exchange) => {
@@ -574,7 +593,23 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error research: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
+  "agent",
+  require('./tools').agentSchema,
+  async (params, exchange) => {
+    try { const norm = normalizeParamsForTool('agent', params); const text = await require('./tools').agentTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error agent: ${e.message}` }], isError: true }; }
+  }
+);
+register(
+  "ping",
+  require('./tools').pingSchema,
+  async (params) => {
+    try { const text = await require('./tools').pingTool(params); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error ping: ${e.message}` }], isError: true }; }
+  }
+);
+register(
   "job_status",
   getJobStatusSchema,
   async (params) => {
@@ -582,7 +617,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error job_status: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "cancel_job",
   cancelJobSchema,
   async (params) => {
@@ -590,7 +625,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error cancel_job: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "retrieve",
   retrieveSchema,
   async (params, exchange) => {
@@ -598,7 +633,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error retrieve: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "get_report",
   getReportContentSchema,
   async (params, exchange) => {
@@ -608,7 +643,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error get_report: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "history",
   listResearchHistorySchema,
   async (params, exchange) => {
@@ -616,7 +651,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error history: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "date_time",
   dateTimeSchema,
   async (params, exchange) => {
@@ -624,7 +659,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error date_time: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "calc",
   calcSchema,
   async (params, exchange) => {
@@ -632,7 +667,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error calc: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "list_tools",
   listToolsSchema,
   async (params, exchange) => {
@@ -640,7 +675,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error list_tools: ${e.message}` }], isError: true }; }
   }
 );
-server.tool(
+register(
   "search_tools",
   searchToolsSchema,
   async (params, exchange) => {
@@ -648,9 +683,7 @@ server.tool(
     catch (e) { return { content: [{ type: 'text', text: `Error search_tools: ${e.message}` }], isError: true }; }
   }
 );
-
-// NEW: Register get_server_status tool
-server.tool(
+register(
   "get_server_status",
   getServerStatusSchema,
   async (params, exchange) => {
@@ -660,14 +693,14 @@ server.tool(
 );
 
 // Back-compat aliases → unified tools
-server.tool("submit_research", submitResearchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('submit_research', p); const t = await researchTool({ ...norm, async: true }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error submit_research: ${e.message}`}], isError:true }; }});
-server.tool("get_job_status", getJobStatusSchema, async (p) => { try { const norm = normalizeParamsForTool('get_job_status', p); const t = await getJobStatusTool(norm); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_job_status: ${e.message}`}], isError:true }; }});
-server.tool("search", searchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('search', p); const t = await retrieveTool({ mode: 'index', query: norm.q || norm.query, k: norm.k, scope: norm.scope, rerank: norm.rerank }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error search: ${e.message}`}], isError:true }; }});
-server.tool("query", querySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('query', p); const t = await retrieveTool({ mode: 'sql', sql: norm.sql, params: norm.params, explain: norm.explain }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error query: ${e.message}`}], isError:true }; }});
-server.tool("conduct_research", researchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('conduct_research', p); const t = await researchTool({ ...norm, async: false }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error conduct_research: ${e.message}`}], isError:true }; }});
-server.tool("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
-server.tool("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
-server.tool("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
+register("submit_research", submitResearchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('submit_research', p); const t = await researchTool({ ...norm, async: true }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error submit_research: ${e.message}`}], isError:true }; }});
+register("get_job_status", getJobStatusSchema, async (p) => { try { const norm = normalizeParamsForTool('get_job_status', p); const t = await getJobStatusTool(norm); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_job_status: ${e.message}`}], isError:true }; }});
+register("search", searchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('search', p); const t = await retrieveTool({ mode: 'index', query: norm.q || norm.query, k: norm.k, scope: norm.scope, rerank: norm.rerank }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error search: ${e.message}`}], isError:true }; }});
+register("query", querySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('query', p); const t = await retrieveTool({ mode: 'sql', sql: norm.sql, params: norm.params, explain: norm.explain }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error query: ${e.message}`}], isError:true }; }});
+register("conduct_research", researchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('conduct_research', p); const t = await researchTool({ ...norm, async: false }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error conduct_research: ${e.message}`}], isError:true }; }});
+register("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
+register("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
+register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
  
  // Set up transports based on environment
  const setupTransports = async () => {

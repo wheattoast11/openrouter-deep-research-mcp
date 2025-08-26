@@ -1,3 +1,12 @@
+# Upgrade Notes
+
+## 2025-08-26
+- New MODE env (AGENT | MANUAL | ALL). Default is ALL (agent + individual tools + always-on ops).
+  - If you prefer a minimal surface, set `MODE=AGENT` to expose only `agent` plus ops tools (`ping`, status, jobs).
+  - `MODE=MANUAL` exposes individual tools without `agent`.
+- Async `submit_research` now returns `ui_url` and `sse_url`, and emits a `ui_hint` event.
+- No breaking changes to existing tool params.
+
 # Upgrade Notes (v1.2.0)
 
 ## Highlights
