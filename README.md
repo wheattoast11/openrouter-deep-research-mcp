@@ -34,6 +34,12 @@ OPENROUTER_API_KEY=your_openrouter_key
 SERVER_API_KEY=your_http_transport_key
 SERVER_PORT=3002
 
+# Modes (pick one; default ALL)
+# AGENT  = agent-only + always-on ops (ping/status/jobs)
+# MANUAL = individual tools + always-on ops
+# ALL    = agent + individual tools + always-on ops
+MODE=ALL
+
 # Orchestration
 ENSEMBLE_SIZE=2
 PARALLELISM=4
@@ -144,7 +150,9 @@ Minimal examples:
 With the package installed globally (or via npx), MCP clients can spawn the server automatically. See your client’s docs for where to place this JSON (e.g., `~/.config/client/mcp.json`).
 
 ## Tools (high‑value)
-- Research: `submit_research` (async), `conduct_research` (sync/stream), `research_follow_up`
+- Always‑on (all modes): `ping`, `get_server_status`, `job_status`, `get_job_status`, `cancel_job`
+- AGENT: `agent` (single entrypoint for research / follow_up / retrieve / query)
+- MANUAL/ALL toolset: `submit_research` (async), `conduct_research` (sync/stream), `research_follow_up`, `search` (hybrid), `retrieve` (index/sql), `query` (SELECT), `get_report_content`, `list_research_history`
 - Jobs: `get_job_status`, `cancel_job`
 - Retrieval: `search` (hybrid BM25+vector with optional LLM rerank), `retrieve` (index/sql wrapper)
 - SQL: `query` (SELECT‑only, optional `explain`)
@@ -229,7 +237,7 @@ How it differs from typical “agent chains”:
 
 ## Package publishing
 - Name: `@terminals-tech/openrouter-agents`
-- Version: 1.3.0
+- Version: 1.3.2
 - Bin: `openrouter-agents`
 - Author: Tej Desai <admin@terminals.tech>
 - Homepage: https://terminals.tech
@@ -244,7 +252,7 @@ SERVER_API_KEY=your_key npx @terminals-tech/openrouter-agents
 ### Publish (scoped)
 ```bash
 npm login
-npm version 1.3.0 -m "chore(release): %s"
+npm version 1.3.2 -m "chore(release): %s"
 git push --follow-tags
 npm publish --access public --provenance
 ```
