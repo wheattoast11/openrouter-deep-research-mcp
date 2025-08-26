@@ -181,9 +181,11 @@ async function initDB() {
   // If we've already attempted initialization but failed, don't retry too frequently
   if (dbInitAttempted) {
     const timeSinceLastAttempt = Date.now() - dbInitAttempted;
-    if (timeSinceLastAttempt < 60000) { // Don't retry more than once per minute
-      console.error(`[${new Date().toISOString()}] Skipping DB initialization, last attempt was ${Math.round(timeSinceLastAttempt/1000)}s ago`);
-      return false;
+    // If a recent attempt was made, wait briefly instead of outright skipping
+    if (timeSinceLastAttempt < 500) {
+      const waitMs = 500 - timeSinceLastAttempt;
+      console.error(`[${new Date().toISOString()}] Waiting ${waitMs}ms before retrying DB initialization (last attempt ${Math.round(timeSinceLastAttempt)}ms ago)`);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
     }
   }
 

@@ -91,7 +91,7 @@ const config = {
   },
   // Local indexing/search configuration (opt-in by default)
   indexer: {
-    enabled: process.env.INDEXER_ENABLED === 'true',
+    enabled: process.env.INDEXER_ENABLED === 'false' ? false : true,
     autoIndexReports: process.env.INDEXER_AUTO_INDEX_REPORTS === 'true',
     autoIndexFetchedContent: process.env.INDEXER_AUTO_INDEX_FETCHED === 'true',
     embedDocs: process.env.INDEXER_EMBED_DOCS !== 'false',

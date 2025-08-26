@@ -670,10 +670,19 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         finalReport: finalReportContent,
         researchMetadata: researchMetadata,
         images: images,
-        textDocuments: textDocuments ? textDocuments.map(d => ({ name: d.name, length: d.content.length })) : null, // Store text doc metadata
-        structuredData: structuredData ? structuredData.map(d => ({ name: d.name, type: d.type, length: d.content.length })) : null, // Store structured data metadata
-          basedOnPastReportIds: relevantPastReports.map(r => r.reportId)
+        textDocuments: textDocuments,
+        structuredData: structuredData,
+        basedOnPastReportIds: relevantPastReports.map(r => r.reportId)
         });
+        console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Report saved with ID: ${savedReportId}`);
+        // Index the saved report for hybrid search when enabled
+        try {
+          const cfg = require('../../config');
+          if (cfg.indexer?.enabled) {
+            const title = String(query || `Report ${savedReportId}`).slice(0, 120);
+            await dbClient.indexDocument({ sourceType: 'report', sourceId: String(savedReportId), title, content: finalReportContent || '' });
+          }
+        } catch (_) {}
         if (onEvent && savedReportId) await onEvent('report_saved', { report_id: savedReportId });
 
         // Auto-index saved report content when enabled
@@ -757,9 +766,18 @@ async function getJobStatusTool(params) {
   const stat = await dbClient.getJobStatus(params.job_id);
   const events = await dbClient.getJobEvents(params.job_id, params.since_event_id || 0, Math.max(1, params.max_events || 50));
   const format = params.format || 'summary';
+  
   if (format === 'summary') {
-    return JSON.stringify({ summary: summarizeJobStatus(stat, events, params.max_events), lastEvents: events.slice(-Math.min(events.length, 5)) }, null, 2);
+    const summary = summarizeJobStatus(stat, events, params.max_events);
+    // Return concise text summary instead of verbose JSON
+    if (!stat) {
+      return `Job ${params.job_id || 'unknown'}: Not found or invalid job ID`;
+    }
+    const progress = summary.progressPercent ? ` (${summary.progressPercent}%)` : '';
+    const result = summary.artifacts?.reportId ? ` Report: ${summary.artifacts.reportId}` : '';
+    return `Job ${stat.id}: ${stat.status}${progress}${result}. Updated: ${summary.timestamps?.updatedAt || 'unknown'}`;
   }
+  
   if (format === 'events') {
     return JSON.stringify({ job: { id: stat?.id, status: stat?.status }, events }, null, 2);
   }
@@ -1012,20 +1030,29 @@ async function listResearchHistory(params, mcpExchange = null, requestId = 'unkn
       return "No recent research reports found" + (queryFilter ? ` matching filter "${queryFilter}"` : ".");
     }
     
-    // Add summary information at the beginning of the response
-    let resultMessage = `Found ${reports.length} ` + 
-      `report${reports.length !== 1 ? 's' : ''} ` + 
-      (queryFilter ? `matching filter "${queryFilter}"` : "in the research database") +
-      ".\n\n";
+    // Return concise, readable summary instead of verbose JSON
+    const summary = reports.map((report, i) => {
+      // Support both snake_case and camelCase from db rows
+      const createdAt = report.created_at || report.createdAt || null;
+      let dateStr = 'unknown';
+      try {
+        if (createdAt) {
+          const d = new Date(createdAt);
+          if (!isNaN(d.getTime())) {
+            dateStr = d.toISOString().slice(0, 16).replace('T', ' ');
+          }
+        }
+      } catch (_) {}
+      const params = report.parameters || report.researchMetadata || {};
+      const cost = params?.costPreference || 'low';
+      const original = report.originalQuery || report.original_query || '';
+      const query = original.slice(0, 60) + (original.length > 60 ? '...' : '');
+      const id = report._id || report.id;
+      return `${i + 1}. ${id} - "${query}" (${cost}, ${dateStr})`;
+    }).join('\n');
     
-    // Format results for display (convert ObjectId)
-    const formattedReports = reports.map(r => ({
-      ...r,
-      _id: r._id.toString()
-    }));
-    
-    // Combine message with formatted JSON
-    return resultMessage + JSON.stringify(formattedReports, null, 2);
+    const filterText = queryFilter ? ` matching "${queryFilter}"` : '';
+    return `Recent research reports${filterText} (${reports.length}/${limit}):\n${summary}`;
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [${requestId}] listResearchHistory: Error listing reports:`, error);
     throw new Error(`[${requestId}] Error retrieving research history: ${error.message}`);
@@ -1417,37 +1444,33 @@ const searchToolsSchema = z.object({
 
 // New: Tool catalog utilities
 const TOOL_CATALOG = [
-  { name: 'conduct_research', description: 'Plan, execute and synthesize multi-agent research with streaming results.' },
-  { name: 'submit_research', description: 'Submit a long-running research job asynchronously.' },
-  { name: 'get_job_status', description: 'Get status and events for an async job.' },
-  { name: 'cancel_job', description: 'Cancel a queued or running job.' },
-  { name: 'search', description: 'Hybrid retrieval across reports/docs (BM25+vector, optional rerank).' },
-  { name: 'query', description: 'Execute read-only SQL SELECT with optional natural-language explanation.' },
-  { name: 'research_follow_up', description: 'Run focused follow-up analysis building on a prior query.' },
-  { name: 'get_past_research', description: 'Find semantically similar past research reports.' },
-  { name: 'rate_research_report', description: 'Record feedback (rating/comment) for a report.' },
-  { name: 'list_research_history', description: 'List recent research reports with optional filter.' },
-  { name: 'get_report_content', description: 'Retrieve final report content by ID.' },
-  { name: 'get_server_status', description: 'Structured server health/config snapshot.' },
-  { name: 'list_models', description: 'List available LLMs from dynamic catalog.' },
-  { name: 'export_reports', description: 'Export reports as JSON/NDJSON.' },
-  { name: 'import_reports', description: 'Import reports from JSON/NDJSON.' },
-  { name: 'backup_db', description: 'Create tar.gz backup of file-backed DB.' },
-  { name: 'db_health', description: 'Quick embedder/DB readiness and storage info.' },
-  { name: 'reindex_vectors', description: 'Rebuild vector indexes after embedder/model changes.' },
-  { name: 'search_web', description: 'Web search via robust scraper with DDG fallback.' },
-  { name: 'fetch_url', description: 'Fetch a URL with robust scraping and optional auto-index.' },
-  { name: 'index_texts', description: 'Index plain text documents into local index (if enabled).' },
-  { name: 'index_url', description: 'Fetch and index URL content into local index (if enabled).' },
-  { name: 'search_index', description: 'Search local BM25+vector index (if enabled).' },
-  { name: 'index_status', description: 'Report local index configuration and status (if enabled).' },
-  { name: 'date_time', description: 'Current time utility for agents.' },
-  { name: 'calc', description: 'Safe arithmetic calculator for agents.' }
+  { name: 'research', description: 'Submit research query. async:true (default) returns job_id, async:false streams results. Requires query parameter.' },
+  { name: 'conduct_research', description: 'Synchronous research; returns final text. Accepts freeform query or {query}.' },
+  { name: 'job_status', description: 'Check async job progress. Requires job_id parameter. Returns terse status summary by default.' },
+  { name: 'get_job_status', description: 'Alias for job_status.' },
+  { name: 'cancel_job', description: 'Cancel running job. Requires job_id parameter.' },
+  { name: 'retrieve', description: 'Search KB or run SQL. Freeform query = index; SQL text or mode:sql runs SELECT.' },
+  { name: 'search', description: 'Alias for retrieve (index mode) with keys: q,k,scope.' },
+  { name: 'query', description: 'Alias for retrieve (sql mode): {sql, params?, explain?}.' },
+  { name: 'get_report', description: 'Get research report by ID. mode:"summary" for brief, mode:"full" for complete text.' },
+  { name: 'get_report_content', description: 'Alias for get_report.' },
+  { name: 'history', description: 'List recent research reports. Optional limit and queryFilter.' },
+  { name: 'get_server_status', description: 'Server health check - database, embedder, job queue status.' },
+  { name: 'date_time', description: "Current date/time. format: 'iso'|'rfc'|'epoch' (aka 'unix'); accepts freeform iso/rfc/epoch too." },
+  { name: 'calc', description: 'Evaluate math: +,-,*,/,^,(), decimals. Accepts freeform expression or {expr}.' },
+  { name: 'list_tools', description: 'Show all available tools with parameters.' },
+  { name: 'search_tools', description: 'Find tools by semantic search. Requires query parameter.' }
 ];
 
 function summarizeParamsForTool(name) {
   // Minimal param summaries for client display (avoid leaking full zod schemas)
   switch (name) {
+    case 'research': return ['query', 'async?', 'costPreference?', 'audienceLevel?', 'outputFormat?', 'includeSources?'];
+    case 'job_status': return ['job_id', 'format?', 'since_event_id?', 'max_events?'];
+    case 'cancel_job': return ['job_id'];
+    case 'retrieve': return ['mode', 'query?', 'sql?', 'params?', 'k?', 'scope?', 'explain?'];
+    case 'get_report': return ['reportId', 'mode?', 'maxChars?', 'query?'];
+    case 'history': return ['limit?', 'queryFilter?'];
     case 'conduct_research': return ['query', 'costPreference?', 'audienceLevel?', 'outputFormat?', 'includeSources?', 'images?', 'textDocuments?', 'structuredData?'];
     case 'submit_research': return ['query', 'notify?'];
     case 'search': return ['q', 'k?', 'scope?'];
@@ -1465,6 +1488,11 @@ function summarizeParamsForTool(name) {
     case 'index_texts': return ['documents[]', 'sourceType?'];
     case 'index_url': return ['url', 'maxBytes?'];
     case 'search_index': return ['query', 'limit?'];
+    case 'calc': return ['expr', 'precision?'];
+    case 'list_tools': return ['query?', 'limit?', 'semantic?'];
+    case 'search_tools': return ['query', 'limit?'];
+    case 'date_time': return ['format?'];
+    case 'get_server_status': return [];
     default: return [];
   }
 }
@@ -1530,7 +1558,8 @@ async function dateTimeTool(params) {
   const now = new Date();
   switch ((params?.format || 'iso').toLowerCase()) {
     case 'rfc': return JSON.stringify({ now: now.toUTCString() });
-    case 'epoch': return JSON.stringify({ now: Math.floor(now.getTime()/1000) });
+    case 'epoch':
+    case 'unix': return JSON.stringify({ now: Math.floor(now.getTime()/1000) });
     default: return JSON.stringify({ now: now.toISOString() });
   }
 }
@@ -1550,6 +1579,43 @@ async function calcTool(params) {
   } catch (e) {
     return JSON.stringify({ error: e.message });
   }
+}
+
+// Unified retrieve schema (index/sql)
+const retrieveSchema = z.object({
+  mode: z.enum(['index','sql']).default('index'),
+  // index mode params
+  query: z.string().optional(),
+  k: z.number().int().positive().optional().default(10),
+  scope: z.enum(['both','reports','docs']).optional().default('both'),
+  rerank: z.boolean().optional(),
+  // sql mode params
+  sql: z.string().optional(),
+  params: z.array(z.any()).optional().default([]),
+  explain: z.boolean().optional().default(false)
+}).describe("Retrieve from KB or DB. mode='index' uses hybrid BM25+vector (query, k, scope, rerank). mode='sql' executes SELECT (sql, params, explain).");
+
+// Unified hybrid search
+async function searchTool(params) {
+  const rows = await dbClient.searchHybrid(params.q, params.k);
+  const filtered = rows.filter(r => {
+    if (params.scope === 'reports') return r.type === 'report';
+    if (params.scope === 'docs') return r.type === 'doc';
+    return true;
+  });
+  return JSON.stringify(filtered, null, 2);
+}
+
+// Unified retrieve wrapper
+async function retrieveTool(params, mcpExchange = null, requestId = `req-${Date.now()}`) {
+  const wantsSql = (params?.mode === 'sql') || (!!params?.sql && !params?.query);
+  if (wantsSql) {
+    if (!params.sql) throw new Error('retrieve: sql is required when mode="sql"');
+    return queryTool({ sql: params.sql, params: params.params || [], explain: !!params.explain }, mcpExchange, requestId);
+  }
+  const q = (params?.query || '').trim();
+  if (!q) throw new Error('retrieve: query is required when mode="index"');
+  return searchTool({ q, k: params.k || 10, scope: params.scope || 'both', rerank: !!params.rerank }, mcpExchange, requestId);
 }
 
 module.exports = {
@@ -1584,6 +1650,7 @@ module.exports = {
   searchToolsSchema,
   dateTimeSchema,
   calcSchema,
+  retrieveSchema,
   
   // Functions
   conductResearch,
@@ -1615,5 +1682,6 @@ module.exports = {
   listToolsTool,
   searchToolsTool,
   dateTimeTool,
-  calcTool
+  calcTool,
+  retrieveTool
 };

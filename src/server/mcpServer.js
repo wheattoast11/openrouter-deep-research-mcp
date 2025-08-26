@@ -15,7 +15,6 @@ const {
   listResearchHistorySchema,
   getReportContentSchema,
   getServerStatusSchema, // Import schema for status tool
-  executeSqlSchema, // Import schema for SQL tool
   listModelsSchema, // New: schema for listing models
   submitResearchSchema,
   searchSchema,
@@ -36,6 +35,9 @@ const {
   researchSchema,
   dateTimeSchema,
   calcSchema,
+  retrieveSchema, // New: schema for retrieve tool
+  getJobStatusSchema,
+  cancelJobSchema,
   
   // Functions
   conductResearch,
@@ -45,13 +47,8 @@ const {
   listResearchHistory,
   getReportContent,
   getServerStatus, // Import function for status tool
-  executeSql, // Import function for SQL tool
   listModels, // New: function for listing models
-  submitResearch,
-  searchTool,
-  queryTool,
-  getJobStatusSchema,
-  cancelJobSchema,
+  
   getJobStatusTool,
   cancelJobTool,
   exportReports,
@@ -69,27 +66,173 @@ const {
   searchToolsTool,
   researchTool,
   dateTimeTool,
-  calcTool
+  calcTool,
+  retrieveTool, // New: function for retrieve tool
+  
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 const nodeFetch = require('node-fetch');
 const cors = require('cors');
 
-// Create MCP server with proper capabilities declaration per latest MCP spec
+// Create MCP server with proper capabilities declaration per MCP spec 2025-06-18
 const server = new McpServer({
   name: config.server.name,
   version: config.server.version,
   capabilities: {
     tools: {},
-    prompts: {
-      listChanged: true // Notify clients when prompt list changes
-    },
-    resources: {
-      subscribe: true, // Support resource subscriptions
-      listChanged: true // Notify clients when resource list changes
-    }
+    prompts: {}, // Simplified format for MCP 2025-06-18 spec
+    resources: {}
   }
 });
+
+// Permissive parameter normalizer to accept loose single-string inputs (e.g., random_string)
+function extractRawParam(input) {
+  if (typeof input === 'string') return input;
+  if (input && typeof input === 'object') {
+    for (const key of ['random_string', 'raw', 'text', 'payload']) {
+      if (typeof input[key] === 'string' && input[key].trim()) return input[key];
+    }
+  }
+  return null;
+}
+
+function tryParseJson(text) {
+  try {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj === 'object') return obj;
+  } catch (_) {}
+  return null;
+}
+
+function parseKeyVals(raw) {
+  const out = {};
+  const s = String(raw || '').trim();
+  // Handle JSON upfront
+  const j = tryParseJson(s);
+  if (j) return j;
+
+  // Quick patterns
+  const lower = s.toLowerCase();
+  // Extract sql: rest of string after first occurrence
+  if (/(^|[ ,;\n\t])sql\s*[:=]/i.test(s)) {
+    const idx = s.toLowerCase().indexOf('sql');
+    const after = s.slice(idx).replace(/^sql\s*[:=]\s*/i, '');
+    out.sql = after.trim();
+  }
+  // Generic key:value pairs (stop at next key)
+  const regex = /(\w+)\s*[:=]\s*([^,;\n]+)(?=\s*[,;\n]|$)/g;
+  let m;
+  while ((m = regex.exec(s)) !== null) {
+    const k = m[1];
+    const v = m[2].trim();
+    if (out[k] === undefined) out[k] = v;
+  }
+
+  // If nothing parsed, return a hint object
+  if (Object.keys(out).length === 0) return { _raw: s };
+  return out;
+}
+
+function toNumberOr(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  const s = String(value).trim().toLowerCase();
+  if (['true','1','yes','y','on'].includes(s)) return true;
+  if (['false','0','no','n','off'].includes(s)) return false;
+  return fallback;
+}
+
+function normalizeParamsForTool(toolName, params) {
+  // If already a structured object without loose fields, pass through
+  if (params && typeof params === 'object' && !('random_string' in params) && !('raw' in params) && !('text' in params)) {
+    return params;
+  }
+
+  const raw = extractRawParam(params);
+  const parsed = raw !== null ? parseKeyVals(raw) : (params || {});
+  const s = typeof raw === 'string' ? raw.trim() : '';
+
+  switch (toolName) {
+    case 'calc':
+      if (parsed && parsed.expr) return parsed;
+      return { expr: s || String(parsed._raw || '') };
+
+    case 'date_time':
+      if (parsed && parsed.format) return parsed;
+      if (/^(iso|rfc|epoch|unix)$/i.test(s)) return { format: s.toLowerCase() === 'unix' ? 'epoch' : s.toLowerCase() };
+      return {};
+
+    case 'job_status':
+    case 'get_job_status':
+      if (parsed && parsed.job_id) return parsed;
+      return { job_id: s || String(parsed._raw || '') };
+
+    case 'cancel_job':
+      if (parsed && parsed.job_id) return parsed;
+      return { job_id: s || String(parsed._raw || '') };
+
+    case 'get_report':
+    case 'get_report_content':
+      if (parsed && parsed.reportId) return parsed;
+      if (parsed && parsed.id) return { reportId: parsed.id };
+      return { reportId: s || String(parsed._raw || '') };
+
+    case 'history':
+    case 'list_research_history':
+      if (parsed && (parsed.limit || parsed.queryFilter)) {
+        const out = { ...parsed };
+        if (out.limit !== undefined) out.limit = toNumberOr(out.limit, 10);
+        return out;
+      }
+      if (/^\d+$/.test(s)) return { limit: Number(s) };
+      return s ? { queryFilter: s } : {};
+
+    case 'retrieve':
+      {
+        const out = { ...parsed };
+        // Mode detection
+        const isSql = /mode\s*[:=]\s*sql/i.test(s) || /^\s*select\s/i.test(s) || (out.sql && !out.query);
+        if (isSql) {
+          out.mode = 'sql';
+          out.sql = out.sql || (parsed._raw ? parsed._raw : s);
+          // params support via JSON only; leave as-is if present
+        } else {
+          out.mode = out.mode || 'index';
+          out.query = out.query || (parsed._raw ? parsed._raw : s);
+        }
+        if (out.k !== undefined) out.k = toNumberOr(out.k, 10);
+        return out;
+      }
+
+    case 'research':
+    case 'submit_research':
+    case 'conduct_research':
+      if (parsed && (parsed.query || parsed.q)) {
+        const out = { ...parsed };
+        if (out.q && !out.query) out.query = out.q;
+        if (out.cost && !out.costPreference) out.costPreference = out.cost;
+        if (out.async !== undefined) out.async = toBoolean(out.async, true);
+        return out;
+      }
+      return s ? { query: s } : {};
+
+    case 'list_tools':
+    case 'search_tools':
+      if (parsed && parsed.query) return parsed;
+      return s ? { query: s } : {};
+
+    case 'get_server_status':
+      return {}; // no params
+
+    default:
+      // Best-effort passthrough
+      return parsed && Object.keys(parsed).length ? parsed : {};
+  }
+}
 
 // Register prompts using latest MCP spec with proper protocol handlers
 if (config.mcp?.features?.prompts) {
@@ -135,6 +278,12 @@ if (config.mcp?.features?.prompts) {
       
       switch (request.params.name) {
         case 'planning_prompt':
+          if (!query) {
+            return {
+              description: prompt.description,
+              messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Please provide a query parameter to generate a research plan.' }] }]
+            };
+          }
     const p = require('../agents/planningAgent');
           const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
           return { 
@@ -144,8 +293,14 @@ if (config.mcp?.features?.prompts) {
           
         case 'synthesis_prompt':
     const c = require('../agents/contextAgent');
+          let parsedResults = [];
+          try {
+            parsedResults = results ? JSON.parse(results) : [];
+          } catch (e) {
+            parsedResults = [];
+          }
           let synthesisResult = '';
-          for await (const ch of c.contextualizeResultsStream(query, JSON.parse(results), [], { 
+          for await (const ch of c.contextualizeResultsStream(query, parsedResults, [], { 
             includeSources: true, 
             outputFormat: outputFormat || 'report',
             audienceLevel: audienceLevel || 'intermediate'
@@ -158,35 +313,36 @@ if (config.mcp?.features?.prompts) {
           };
           
         case 'research_workflow_prompt':
+          const safeTopic = topic || '[your_topic]';
           const workflowGuide = `
-# Research Workflow for: ${topic}
+# Research Workflow for: ${safeTopic}
 
 ## 1. Planning Phase
 \`\`\`mcp
-planning_prompt { "query": "${topic}", "domain": "auto-detect", "complexity": "auto-assess" }
+planning_prompt { "query": "${safeTopic}", "domain": "auto-detect", "complexity": "auto-assess" }
 \`\`\`
 
 ## 2. Research Execution
 ${async === 'true' ? `
 \`\`\`mcp
-submit_research { "query": "${topic}", "costPreference": "${costBudget || 'low'}" }
+submit_research { "query": "${safeTopic}", "costPreference": "${costBudget || 'low'}" }
 get_job_status { "job_id": "[returned_job_id]" }
 \`\`\`
 ` : `
 \`\`\`mcp
-conduct_research { "query": "${topic}", "costPreference": "${costBudget || 'low'}" }
+conduct_research { "query": "${safeTopic}", "costPreference": "${costBudget || 'low'}" }
 \`\`\`
 `}
 
 ## 3. Quality Assurance
 \`\`\`mcp
-get_past_research { "query": "${topic}", "limit": 5 }
-search { "q": "${topic}", "scope": "reports" }
+get_past_research { "query": "${safeTopic}", "limit": 5 }
+search { "q": "${safeTopic}", "scope": "reports" }
 \`\`\`
 
 ## 4. Follow-up Analysis
 \`\`\`mcp
-research_follow_up { "originalQuery": "${topic}", "followUpQuestion": "[your_specific_question]" }
+research_follow_up { "originalQuery": "${safeTopic}", "followUpQuestion": "[your_specific_question]" }
 \`\`\`
           `;
           return {
@@ -214,7 +370,7 @@ if (config.mcp?.features?.resources) {
       uri: 'mcp://tools/catalog',
       name: 'Available Tools Catalog',
       description: 'Live MCP tools catalog with lightweight params for client UIs',
-      mimeType: 'application/json'
+    mimeType: 'application/json'
     }],
     ['mcp://patterns/workflows', {
       uri: 'mcp://patterns/workflows', 
@@ -409,551 +565,109 @@ if (config.mcp?.features?.resources) {
   });
 }
 
-// Register tools
-// Tool discovery (client-side selection helpers)
+// Register tools (minimal unified set)
 server.tool(
-  "list_tools",
-  { ...listToolsSchema.shape, _title: z.string().optional().default('List MCP tools'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  "research",
+  researchSchema,
+  async (params, exchange) => {
+    try { const norm = normalizeParamsForTool('research', params); const text = await researchTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error research: ${e.message}` }], isError: true }; }
+  }
+);
+server.tool(
+  "job_status",
+  getJobStatusSchema,
+  async (params) => {
+    try { const norm = normalizeParamsForTool('job_status', params); const text = await getJobStatusTool(norm); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error job_status: ${e.message}` }], isError: true }; }
+  }
+);
+server.tool(
+  "cancel_job",
+  cancelJobSchema,
+  async (params) => {
+    try { const norm = normalizeParamsForTool('cancel_job', params); const text = await cancelJobTool(norm); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error cancel_job: ${e.message}` }], isError: true }; }
+  }
+);
+server.tool(
+  "retrieve",
+  retrieveSchema,
+  async (params, exchange) => {
+    try { const norm = normalizeParamsForTool('retrieve', params); const text = await retrieveTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error retrieve: ${e.message}` }], isError: true }; }
+  }
+);
+server.tool(
+  "get_report",
+  getReportContentSchema,
   async (params, exchange) => {
     const startTime = Date.now();
     const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "list_tools";
-    try {
-      const text = await listToolsTool(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error list_tools: ${e.message}` }], isError: true };
-    }
+    try { const norm = normalizeParamsForTool('get_report', params); const result = await getReportContent(norm, exchange, requestId); return { content: [{ type: 'text', text: result }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error get_report: ${e.message}` }], isError: true }; }
   }
 );
 server.tool(
-  "search_tools",
-  { ...searchToolsSchema.shape, _title: z.string().optional().default('Search MCP tools'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  "history",
+  listResearchHistorySchema,
   async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "search_tools";
-    try {
-      const text = await searchToolsTool(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error search_tools: ${e.message}` }], isError: true };
-    }
+    try { const norm = normalizeParamsForTool('history', params); const text = await listResearchHistory(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error history: ${e.message}` }], isError: true }; }
   }
 );
-
-   // Async submit_research
-   server.tool(
-     "submit_research",
-     { ...submitResearchSchema.shape, _title: z.string().optional().default('Submit async research job'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
-     async (params, exchange) => {
-       try {
-         const text = await submitResearch(params, exchange, `req-${Date.now()}`);
-         return { content: [{ type: 'text', text }] };
-       } catch (e) {
-         return { content: [{ type: 'text', text: `Error submit_research: ${e.message}` }], isError: true };
-       }
-     }
-   );
-
-   // Job status/cancel
-   server.tool(
-     "get_job_status",
-     getJobStatusSchema.shape,
-     async (params) => {
-       try { const text = await getJobStatusTool(params); return { content: [{ type: 'text', text }] }; }
-       catch (e) { return { content: [{ type: 'text', text: `Error get_job_status: ${e.message}` }], isError: true }; }
-     }
-   );
-   server.tool(
-     "cancel_job",
-     cancelJobSchema.shape,
-     async (params) => {
-       try { const text = await cancelJobTool(params); return { content: [{ type: 'text', text }] }; }
-       catch (e) { return { content: [{ type: 'text', text: `Error cancel_job: ${e.message}` }], isError: true }; }
-     }
-   );
-
-   // Unified search
-   server.tool(
-     "search",
-     { ...searchSchema.shape, _title: z.string().optional().default('Hybrid search (BM25+vector)'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-     async (params, exchange) => {
-       try { const text = await searchTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-       catch (e) { return { content: [{ type: 'text', text: `Error search: ${e.message}` }], isError: true }; }
-     }
-   );
-
-   // Guarded query
-   server.tool(
-     "query",
-     { ...querySchema.shape, _title: z.string().optional().default('SQL (read-only)'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-     async (params, exchange) => {
-       try { const text = await queryTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-       catch (e) { return { content: [{ type: 'text', text: `Error query: ${e.message}` }], isError: true }; }
-     }
-   );
-   // Unified research (async by default, sync if async:false)
-   server.tool(
-     "research",
-     { ...researchSchema.shape, _title: z.string().optional().default('Research (async default)'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
-     async (params, exchange) => {
-       try { const text = await researchTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-       catch (e) { return { content: [{ type: 'text', text: `Error research: ${e.message}` }], isError: true }; }
-     }
-   );
-  // The second argument to the tool handler is the exchange context from the SDK
-  server.tool(
-    "conduct_research",
-    { ...conductResearchSchema.shape, _title: z.string().optional().default('Conduct research (streamed)'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
-    async (params, exchange) => { 
-        const startTime = Date.now();
-        const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`; // Simple request ID
-        console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Starting research for query "${params.query.substring(0, 50)}..."`); 
-        console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Parameters: costPreference=${params.costPreference}, format=${params.outputFormat}, audience=${params.audienceLevel}`); 
-        try {
-          // Pass the exchange context and requestId to conductResearch
-          const result = await conductResearch(params, exchange, requestId); 
-          const duration = Date.now() - startTime;
-          console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Research stream finished successfully in ${duration}ms.`); 
-          // Return the final confirmation message (which now includes the report ID)
-          return {
-         content: [{
-          type: 'text',
-          text: result // e.g., "Research complete. Results streamed. Report ID: 6..."
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] conduct_research: Error after ${duration}ms. Query: "${params.query.substring(0, 50)}...". Error:`, error);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error conducting research for query "${params.query.substring(0, 50)}...": ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Register follow-up research tool
-server.tool(
-  "research_follow_up",
-  { ...researchFollowUpSchema.shape, _title: z.string().optional().default('Follow-up research'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "research_follow_up";
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Starting follow-up for original query "${params.originalQuery.substring(0, 50)}..."`);
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Follow-up question: "${params.followUpQuestion.substring(0, 50)}..."`);
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Parameters: costPreference=${params.costPreference}`);
-    
-    try {
-      // Call researchFollowUp from tools.js, passing requestId
-      const result = await researchFollowUp(params, exchange, requestId); 
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Follow-up research completed in ${duration}ms.`);
-      
-      return {
-        content: [{
-          type: 'text',
-          text: result
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error conducting follow-up research: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Register tool to retrieve past research reports
-server.tool(
-  "get_past_research",
-  { ...getPastResearchSchema.shape, _title: z.string().optional().default('Find similar past research'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "get_past_research";
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Searching for similar past reports for query "${params.query ? params.query.substring(0, 50) : 'N/A'}..."`);
-    
-    try {
-      // Call getPastResearch from tools.js, passing requestId
-      const result = await getPastResearch(params, exchange, requestId); 
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Search completed in ${duration}ms.`);
-      
-      return {
-        content: [{
-          type: 'text',
-          text: result
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error retrieving past research: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Register tool to rate a past research report
-server.tool(
-  "rate_research_report",
-  { ...rateResearchReportSchema.shape, _title: z.string().optional().default('Rate a research report'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "rate_research_report";
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Processing rating ${params.rating} for report ${params.reportId}`);
-    
-    try {
-      // Call rateResearchReport from tools.js, passing requestId
-      const result = await rateResearchReport(params, exchange, requestId); 
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Rating processed in ${duration}ms.`);
-      
-      return {
-        content: [{
-          type: 'text',
-          text: result
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error recording feedback: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Register tool to list recent research reports
-server.tool(
-  "list_research_history",
-  { ...listResearchHistorySchema.shape, _title: z.string().optional().default('List recent research reports'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "list_research_history";
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Listing recent reports (limit: ${params.limit}, filter: "${params.queryFilter || 'None'}")`);
-    
-    try {
-      // Call listResearchHistory from tools.js, passing requestId
-      const result = await listResearchHistory(params, exchange, requestId); 
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Listing completed in ${duration}ms.`);
-      
-      return {
-        content: [{
-          type: 'text',
-          text: result
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error retrieving research history: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Register tool to retrieve specific report content by ID
-server.tool(
-  "get_report_content",
-  { ...getReportContentSchema.shape, _title: z.string().optional().default('Get report content'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "get_report_content";
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Retrieving content for report ID ${params.reportId}`);
-    
-    try {
-      // Call getReportContent from tools.js, passing requestId
-      const result = await getReportContent(params, exchange, requestId); 
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Retrieval completed in ${duration}ms.`);
-      
-      // Return the report content directly
-      return {
-        content: [{
-          type: 'text',
-          text: result // This is the report content string
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error retrieving report content: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Register tool to get server status
-server.tool(
-  "get_server_status",
-  { ...getServerStatusSchema.shape, _title: z.string().optional().default('Get server status'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "get_server_status";
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Request received.`);
-
-    try {
-      // Call getServerStatus from tools.js, passing requestId
-      const result = await getServerStatus(params, exchange, requestId);
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Status retrieval completed in ${duration}ms.`);
-
-      return {
-        content: [{
-          type: 'text',
-          text: result // This is the status JSON string
-        }]
-      };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return {
-        content: [{
-          type: 'text',
-          text: `Error retrieving server status: ${error.message}`
-        }],
-        isError: true
-      };
-    }
-  }
-);
-
-// Register tool to list available models (dynamic catalog)
-server.tool(
-  "list_models",
-  { ...listModelsSchema.shape, _title: z.string().optional().default('List available models'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    const toolName = "list_models";
-    console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Request received (refresh=${params.refresh === true}).`);
-
-    try {
-      const result = await listModels(params, exchange, requestId);
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Completed in ${duration}ms.`);
-      return { content: [{ type: 'text', text: result }] };
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ${toolName}: Error after ${duration}ms: ${error.message}`);
-      return { content: [{ type: 'text', text: `Error listing models: ${error.message}` }], isError: true };
-    }
-  }
-);
-
-// Register DB QoL tools
-server.tool(
-  "export_reports",
-  { ...exportReportsSchema.shape, _title: z.string().optional().default('Export reports'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const start = Date.now();
-    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-    const toolName = "export_reports";
-    try {
-      const text = await exportReports(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error exporting reports: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-server.tool(
-  "import_reports",
-  { ...importReportsSchema.shape, _title: z.string().optional().default('Import reports'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(true) },
-  async (params, exchange) => {
-    const start = Date.now();
-    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-    const toolName = "import_reports";
-    try {
-      const text = await importReports(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error importing reports: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-server.tool(
-  "backup_db",
-  { ...backupDbSchema.shape, _title: z.string().optional().default('Backup DB (tar.gz)'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const start = Date.now();
-    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-    const toolName = "backup_db";
-    try {
-      const text = await backupDb(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error backing up DB: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-server.tool(
-  "db_health",
-  { ...dbHealthSchema.shape, _title: z.string().optional().default('Database health'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const start = Date.now();
-    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-    const toolName = "db_health";
-    try {
-      const text = await dbHealth(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error getting DB health: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-server.tool(
-  "reindex_vectors",
-  { ...reindexVectorsSchema.shape, _title: z.string().optional().default('Reindex vectors (HNSW)'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(true) },
-  async (params, exchange) => {
-    const start = Date.now();
-    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-    const toolName = "reindex_vectors";
-    try {
-      const text = await reindexVectorsTool(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error reindexing vectors: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-server.tool(
-  "search_web",
-  { ...searchWebSchema.shape, _title: z.string().optional().default('Quick web search'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const start = Date.now();
-    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-    const toolName = "search_web";
-    try {
-      const text = await searchWeb(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error search_web: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-server.tool(
-  "fetch_url",
-  { ...fetchUrlSchema.shape, _title: z.string().optional().default('Fetch URL (text/html)'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-  async (params, exchange) => {
-    const start = Date.now();
-    const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-    const toolName = "fetch_url";
-    try {
-      const text = await fetchUrl(params, exchange, requestId);
-      return { content: [{ type: 'text', text }] };
-    } catch (e) {
-      return { content: [{ type: 'text', text: `Error fetch_url: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-// Optional Indexer tools
-if (require('../../config').indexer?.enabled) {
-  server.tool(
-    "index_texts",
-    { ...indexTextsSchema.shape, _title: z.string().optional().default('Index text documents'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(true) },
-    async (params, exchange) => {
-      const start = Date.now();
-      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-      try { const text = await index_texts(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
-      catch (e) { return { content: [{ type: 'text', text: `Error index_texts: ${e.message}` }], isError: true }; }
-    }
-  );
-
-  server.tool(
-    "index_url",
-    { ...indexUrlSchema.shape, _title: z.string().optional().default('Index URL content'), _readOnlyHint: z.boolean().optional().default(false), _destructiveHint: z.boolean().optional().default(true) },
-    async (params, exchange) => {
-      const start = Date.now();
-      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-      try { const text = await index_url(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
-      catch (e) { return { content: [{ type: 'text', text: `Error index_url: ${e.message}` }], isError: true }; }
-    }
-  );
-
-  server.tool(
-    "search_index",
-    { ...searchIndexSchema.shape, _title: z.string().optional().default('Search local index'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-    async (params, exchange) => {
-      const start = Date.now();
-      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-      try { const text = await search_index(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
-      catch (e) { return { content: [{ type: 'text', text: `Error search_index: ${e.message}` }], isError: true }; }
-    }
-  );
-
-  server.tool(
-    "index_status",
-    { ...indexStatusSchema.shape, _title: z.string().optional().default('Index status'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
-    async (params, exchange) => {
-      const start = Date.now();
-      const requestId = `req-${start}-${Math.random().toString(36).substring(2,7)}`;
-      try { const text = await index_status(params, exchange, requestId); return { content: [{ type: 'text', text }] }; }
-      catch (e) { return { content: [{ type: 'text', text: `Error index_status: ${e.message}` }], isError: true }; }
-    }
-  );
-}
 server.tool(
   "date_time",
-  { ...dateTimeSchema.shape, _title: z.string().optional().default('Current date/time'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  dateTimeSchema,
   async (params, exchange) => {
-    try { const text = await require('./tools').dateTimeTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    try { const norm = normalizeParamsForTool('date_time', params); const text = await dateTimeTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
     catch (e) { return { content: [{ type: 'text', text: `Error date_time: ${e.message}` }], isError: true }; }
   }
 );
 server.tool(
   "calc",
-  { ...calcSchema.shape, _title: z.string().optional().default('Calculator'), _readOnlyHint: z.boolean().optional().default(true), _destructiveHint: z.boolean().optional().default(false) },
+  calcSchema,
   async (params, exchange) => {
-    try { const text = await require('./tools').calcTool(params, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    try { const norm = normalizeParamsForTool('calc', params); const text = await calcTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
     catch (e) { return { content: [{ type: 'text', text: `Error calc: ${e.message}` }], isError: true }; }
   }
 );
+server.tool(
+  "list_tools",
+  listToolsSchema,
+  async (params, exchange) => {
+    try { const norm = normalizeParamsForTool('list_tools', params); const text = await listToolsTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error list_tools: ${e.message}` }], isError: true }; }
+  }
+);
+server.tool(
+  "search_tools",
+  searchToolsSchema,
+  async (params, exchange) => {
+    try { const norm = normalizeParamsForTool('search_tools', params); const text = await searchToolsTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error search_tools: ${e.message}` }], isError: true }; }
+  }
+);
+
+// NEW: Register get_server_status tool
+server.tool(
+  "get_server_status",
+  getServerStatusSchema,
+  async (params, exchange) => {
+    try { const text = await getServerStatus({}, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
+    catch (e) { return { content: [{ type: 'text', text: `Error get_server_status: ${e.message}` }], isError: true }; }
+  }
+);
+
+// Back-compat aliases → unified tools
+server.tool("submit_research", submitResearchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('submit_research', p); const t = await researchTool({ ...norm, async: true }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error submit_research: ${e.message}`}], isError:true }; }});
+server.tool("get_job_status", getJobStatusSchema, async (p) => { try { const norm = normalizeParamsForTool('get_job_status', p); const t = await getJobStatusTool(norm); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_job_status: ${e.message}`}], isError:true }; }});
+server.tool("search", searchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('search', p); const t = await retrieveTool({ mode: 'index', query: norm.q || norm.query, k: norm.k, scope: norm.scope, rerank: norm.rerank }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error search: ${e.message}`}], isError:true }; }});
+server.tool("query", querySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('query', p); const t = await retrieveTool({ mode: 'sql', sql: norm.sql, params: norm.params, explain: norm.explain }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error query: ${e.message}`}], isError:true }; }});
+server.tool("conduct_research", researchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('conduct_research', p); const t = await researchTool({ ...norm, async: false }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error conduct_research: ${e.message}`}], isError:true }; }});
+server.tool("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
+server.tool("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
+server.tool("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
  
  // Set up transports based on environment
  const setupTransports = async () => {
@@ -1174,18 +888,18 @@ server.tool(
           return res.end(lines.join('\n') + '\n');
         }
 
-        res.json({
-          time: new Date().toISOString(),
-          database: { initialized: dbInitialized, storageType: dbPathInfo },
-          embedder: { ready: embedderReady },
-          jobs: rows,
-          recent,
-           usageTotals,
-        });
-      } catch (e) {
-        res.status(500).json({ error: e.message });
-      }
-    });
+       res.json({
+         time: new Date().toISOString(),
+         database: { initialized: dbInitialized, storageType: dbPathInfo },
+         embedder: { ready: embedderReady },
+         jobs: rows,
+         recent,
+          usageTotals,
+       });
+     } catch (e) {
+       res.status(500).json({ error: e.message });
+     }
+   });
 
    // About endpoint for directory metadata
    app.get('/about', (req, res) => {
