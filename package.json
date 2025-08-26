@@ -1,5 +1,5 @@
 {
-  "name": "openrouter-agents",
+  "name": "@terminals-tech/openrouter-agents",
   "version": "1.3.0",
   "description": "OpenRouter MCP server for research agents",
   "main": "src/server/mcpServer.js",
@@ -13,6 +13,9 @@
     "gen:examples": "node scripts/generate-examples.js",
     "gen:docs": "node scripts/gen-docs.js",
     "gen:diagram": "mmdc -i docs/diagram-architecture.mmd -o docs/diagram-architecture.svg"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "author": "Tej Desai <admin@terminals.tech> (https://terminals.tech)",
   "homepage": "https://terminals.tech",
