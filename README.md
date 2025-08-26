@@ -1,7 +1,23 @@
 [![Star on GitHub](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research?style=social)](https://github.com/wheattoast11/openrouter-deep-research)
 # OpenRouter Agents MCP Server
 
-[MAJOR UPDATE – August 12, 2025] An intelligent MCP server that orchestrates GPT‑5 / Gemini / Claude agents to research in parallel, indexing as it goes (PGlite + vectors), then synthesizes consensus with strict, URL‑backed citations.
+[![npm version](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents) [![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-available-24292e?logo=github)](../../packages)
+
+[UPDATE – 2025-08-26] Two modes (set MODE env):
+- AGENT: one simple tool (`agent`) that routes research / follow_up / retrieve / query
+- MANUAL: individual tools for each action
+- ALL (default): both AGENT and MANUAL, plus always-on ops tools
+
+Diagram (simple)
+```
+[Always-On Ops]  ping • get_server_status • job_status • cancel_job
+
+AGENT MODE
+client → agent → (research | follow_up | retrieve | query)
+
+MANUAL MODE
+client → (submit_research | conduct_research | retrieve | query | research_follow_up | get_report_content | list_research_history)
+```
 
 - Killer features
   - Plan → parallelize → synthesize workflow with bounded parallelism
