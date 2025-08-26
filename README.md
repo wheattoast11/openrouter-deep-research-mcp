@@ -10,7 +10,7 @@
   - Lightweight web helpers: quick search and page fetch for context
   - Robust streaming (SSE), per‑connection auth, clean logs
 
-## What’s new (v1.2)
+## What’s new (v1.3)
 - Local hybrid indexer (BM25 + optional vector rerank) with MCP tools: `index_texts`, `index_url`, `search_index`.
 - Auto‑indexing during research: every saved report and fetched page can be indexed on the fly.
 - Prompt/resource registration (MCP): `planning_prompt`, `synthesis_prompt`, and `mcp_spec_links`.
@@ -76,6 +76,21 @@ node src/server/mcpServer.js --stdio
 SERVER_API_KEY=$SERVER_API_KEY node src/server/mcpServer.js
 ```
 
+### Windows PowerShell examples
+- STDIO
+```powershell
+$env:OPENROUTER_API_KEY='your_key'
+$env:INDEXER_ENABLED='true'
+node src/server/mcpServer.js --stdio
+```
+- HTTP/SSE
+```powershell
+$env:OPENROUTER_API_KEY='your_key'
+$env:SERVER_API_KEY='devkey'
+$env:SERVER_PORT='3002'
+node src/server/mcpServer.js
+```
+
 ### One-liner demo scripts
 Dev (HTTP/SSE):
 ```bash
@@ -98,7 +113,7 @@ Minimal examples:
   "servers": {
     "openrouter-agents": {
       "command": "npx",
-      "args": ["openrouter-agents", "--stdio"],
+      "args": ["@terminals-tech/openrouter-agents", "--stdio"],
       "env": {
         "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
         "SERVER_API_KEY": "${SERVER_API_KEY}",
@@ -131,7 +146,7 @@ With the package installed globally (or via npx), MCP clients can spawn the serv
 ## Tools (high‑value)
 - Research: `submit_research` (async), `conduct_research` (sync/stream), `research_follow_up`
 - Jobs: `get_job_status`, `cancel_job`
-- Retrieval: `search` (hybrid BM25+vector with optional LLM rerank)
+- Retrieval: `search` (hybrid BM25+vector with optional LLM rerank), `retrieve` (index/sql wrapper)
 - SQL: `query` (SELECT‑only, optional `explain`)
 - Knowledge base: `get_past_research`, `list_research_history`, `get_report_content`
 - DB ops: `backup_db` (tar.gz), `export_reports`, `import_reports`, `db_health`, `reindex_vectors`
@@ -201,6 +216,7 @@ How it differs from typical “agent chains”:
 ## Command Map (quick reference)
 - Start (stdio): `npm run stdio`
 - Start (HTTP/SSE): `npm start`
+- Run via npx (scoped): `npx @terminals-tech/openrouter-agents --stdio`
 - Generate examples: `npm run gen:examples`
 - List models: MCP `list_models { refresh:false }`
 - Submit research (async): `submit_research { q:"<query>", cost:"low", aud:"intermediate", fmt:"report", src:true }`
@@ -212,17 +228,25 @@ How it differs from typical “agent chains”:
 - Micro UI (ghost): visit `http://localhost:3002/ui` to stream job events (SSE).
 
 ## Package publishing
-- Name: `openrouter-agents`
-- Version: 1.2.0
+- Name: `@terminals-tech/openrouter-agents`
+- Version: 1.3.0
 - Bin: `openrouter-agents`
 - Author: Tej Desai <admin@terminals.tech>
 - Homepage: https://terminals.tech
 
 Install and run without cloning:
 ```bash
-npx openrouter-agents --stdio
+npx @terminals-tech/openrouter-agents --stdio
 # or daemon
-SERVER_API_KEY=your_key npx openrouter-agents
+SERVER_API_KEY=your_key npx @terminals-tech/openrouter-agents
+```
+
+### Publish (scoped)
+```bash
+npm login
+npm version 1.3.0 -m "chore(release): %s"
+git push --follow-tags
+npm publish --access public --provenance
 ```
 
 ## Validation – MSeeP (Multi‑Source Evidence & Evaluation Protocol)
