@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.5.0 — 2025-08-26
+- Version parity: package.json, GitHub Releases, GitHub Packages, and npm aligned to 1.5.0
+- Dual publish workflow: npmjs.org (public) and GitHub Packages (Packages tab visible)
+- MODE clarified in README and install instructions to be added
+- Going forward: patch bumps only (+0.0.1) to keep versions in lockstep across registries
+
 ## v1.3.2 — 2025-08-26
 - New MODE env: `AGENT` | `MANUAL` | `ALL` (default). Always-on tools: `ping`, `get_server_status`, `job_status`, `get_job_status`, `cancel_job`.
   - AGENT: exposes always-on + `agent`
