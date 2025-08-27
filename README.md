@@ -26,12 +26,27 @@ client → (submit_research | conduct_research | retrieve | query | research_fol
   - Lightweight web helpers: quick search and page fetch for context
   - Robust streaming (SSE), per‑connection auth, clean logs
 
-## What’s new (v1.3)
-- Local hybrid indexer (BM25 + optional vector rerank) with MCP tools: `index_texts`, `index_url`, `search_index`.
-- Auto‑indexing during research: every saved report and fetched page can be indexed on the fly.
-- Prompt/resource registration (MCP): `planning_prompt`, `synthesis_prompt`, and `mcp_spec_links`.
-- Compact prompts option: minimize tokens while enforcing explicit URL citations and confidence scoring.
-- Planning model fallbacks and simplified routing per strategy.
+## Install / Run
+- Install (project dependency)
+```bash
+npm install @terminals-tech/openrouter-agents
+```
+
+- Global install (optional)
+```bash
+npm install -g @terminals-tech/openrouter-agents
+```
+
+- Run with npx (no install)
+```bash
+npx @terminals-tech/openrouter-agents --stdio
+# or daemon
+SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
+```
+
+## What’s new (v1.5.0)
+- Version parity across npm, GitHub Releases, and GitHub Packages
+- Dual publish workflow enabled
 
 [Changelog →](docs/CHANGELOG.md)
 
