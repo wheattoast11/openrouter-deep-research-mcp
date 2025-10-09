@@ -10,7 +10,9 @@ const config = {
     // Add a key for basic server authentication (optional)
     apiKey: process.env.SERVER_API_KEY || null,
     requireHttps: process.env.REQUIRE_HTTPS === 'true',
-    publicUrl: process.env.PUBLIC_URL || `${process.env.REQUIRE_HTTPS === 'true' ? 'https' : 'http'}://localhost:${process.env.SERVER_PORT || process.env.PORT || 3002}`
+    publicUrl: process.env.PUBLIC_URL || `${process.env.REQUIRE_HTTPS === 'true' ? 'https' : 'http'}://localhost:${process.env.SERVER_PORT || process.env.PORT || 3002}`,
+    // Bind address for security (localhost only in local dev)
+    bindAddress: process.env.BIND_ADDRESS || '0.0.0.0'
   },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -110,17 +112,129 @@ const config = {
     rerankModel: process.env.INDEXER_RERANK_MODEL || null
   },
   // Configuration for where to save full research reports
-  reportOutputPath: process.env.REPORT_OUTPUT_PATH || './research_outputs/'
+  reportOutputPath: process.env.REPORT_OUTPUT_PATH || './research_outputs/',
+
+  // Feature flags for v2.1 (safe defaults)
+  features: {
+    // Core v2.1 features (enabled by default)
+    zeroOrchestrator: process.env.ZERO_ORCHESTRATOR !== 'false', // Single-agent architecture
+    asyncJobs: process.env.ASYNC_JOBS !== 'false', // Async job processing
+    websocketStreaming: process.env.WS_STREAMING_ENABLED !== 'false', // WebSocket streaming
+
+    // @terminals-tech integrations (enabled by default, fallback if packages fail)
+    terminalsTechEmbeddings: process.env.TERMINALS_TECH_EMBEDDINGS !== 'false', // @terminals-tech/embeddings
+    terminalsTechGraph: process.env.TERMINALS_TECH_GRAPH !== 'false', // @terminals-tech/graph
+    graphEnrichment: process.env.GRAPH_ENRICHMENT_ENABLED !== 'false', // Query expansion via graph
+
+    // Security features (enabled by default)
+    oauthEnabled: process.env.OAUTH_ENABLED !== 'false', // JWT validation
+    rateLimiting: process.env.RATE_LIMITING !== 'false', // Express rate limiting
+    securityHeaders: process.env.SECURITY_HEADERS !== 'false', // Security headers middleware
+
+    // Advanced features (disabled by default for stability)
+    toolCallStreaming: process.env.TOOL_CALL_STREAMING !== 'false', // Tool output streaming
+    resourceSubscriptions: process.env.RESOURCE_SUBSCRIPTIONS !== 'false', // MCP resource subscriptions
+    promptSubscriptions: process.env.PROMPT_SUBSCRIPTIONS !== 'false', // MCP prompt subscriptions
+
+    // Development features (disabled by default)
+    debugMode: process.env.DEBUG_MODE === 'true', // Enhanced logging
+    experimentalFeatures: process.env.EXPERIMENTAL_FEATURES === 'true', // Unstable features
+  },
+
+  // Beta features master switch (v2.1.1-beta)
+  betaFeatures: process.env.BETA_FEATURES === 'true',
+
+  // Streaming + orchestration policies
+  // When BETA_FEATURES=true: PLL and compression default to enabled (opt-out)
+  // When BETA_FEATURES=false: All beta features disabled (stable v2.1 behavior)
+  policies: {
+    pll: {
+      enable: process.env.BETA_FEATURES === 'true'
+        ? (process.env.PLL_ENABLE !== 'false')
+        : (process.env.PLL_ENABLE === 'true'),
+      targetTokenRate: Number(process.env.PLL_TARGET_TOKEN_RATE) || 32,
+      smoothingHalfLifeMs: Number(process.env.PLL_SMOOTHING_HALFLIFE_MS) || 320,
+      maxFanout: Number(process.env.PLL_MAX_FANOUT) || 6,
+      maxConcurrency: Number(process.env.PLL_MAX_CONCURRENCY) || 6,
+      jitterToleranceMs: Number(process.env.PLL_JITTER_TOLERANCE_MS) || 180,
+      circuitBreakerThreshold: Number(process.env.PLL_CIRCUIT_BREAKER_THRESHOLD) || 6,
+      fallbackCooldownMs: Number(process.env.PLL_FALLBACK_COOLDOWN_MS) || 10000,
+      gain: Number(process.env.PLL_GAIN) || 0.5,
+      policyStabilizer: Number(process.env.PLL_POLICY_STABILIZER) || 1.0
+    },
+    compression: {
+      enable: process.env.BETA_FEATURES === 'true'
+        ? (process.env.COMPRESSION_ENABLE !== 'false')
+        : (process.env.COMPRESSION_ENABLE === 'true'),
+      targetTokenBudget: Number(process.env.COMPRESSION_TARGET_TOKENS) || 3200,
+      minRetentionRatio: Number(process.env.COMPRESSION_MIN_RETENTION_RATIO) || 0.35,
+      entropyFloor: Number(process.env.COMPRESSION_ENTROPY_FLOOR) || 0.2
+    },
+    retrieval: {
+      dynamicTopK: process.env.RETRIEVAL_DYNAMIC_TOPK === 'true',
+      minTopK: Number(process.env.RETRIEVAL_MIN_TOPK) || 6,
+      maxTopK: Number(process.env.RETRIEVAL_MAX_TOPK) || 18,
+      instabilityJitterMs: Number(process.env.RETRIEVAL_INSTABILITY_JITTER_MS) || 250
+    },
+    websocket: {
+      pacing: {
+        enable: process.env.WS_PACING_ENABLE === 'true',
+        minFlushIntervalMs: Number(process.env.WS_PACING_MIN_FLUSH_MS) || 15,
+        maxFlushIntervalMs: Number(process.env.WS_PACING_MAX_FLUSH_MS) || 120,
+        maxBufferSize: Number(process.env.WS_PACING_MAX_BUFFER) || 4096
+      }
+    }
+  },
+
+  // Provider fallbacks for robustness
+  fallbacks: {
+    embeddings: {
+      primary: 'terminals-tech',
+      secondary: 'huggingface',
+      tertiary: 'mock'
+    },
+    graph: {
+      primary: 'terminals-tech',
+      secondary: 'none' // Disable if @terminals-tech fails
+    }
+  },
+  // Embeddings provider configuration
+  embeddings: {
+    provider: 'terminals-tech', // 'terminals-tech' | 'gemini' | 'huggingface' | 'openai'
+    model: 'Xenova/all-MiniLM-L6-v2',
+    dimension: 384, // all-MiniLM-L6-v2 = 384
+    apiKey: process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || null,
+    // Fallback and local model options are deprecated in favor of a single provider
+    fallbackToLocal: false,
+    localModel: null,
+    dual: {
+      enabled: false,
+      provider: null,
+      fusion: {
+        primaryWeight: 1.0,
+        altWeight: 0.0
+      }
+    }
+  }
 };
 
 // MCP feature toggles (opt-in by default; can be disabled via env)
 config.mcp = {
   features: {
-    prompts: process.env.MCP_ENABLE_PROMPTS === 'false' ? false : true,
-    resources: process.env.MCP_ENABLE_RESOURCES === 'false' ? false : true
+    prompts: process.env.MCP_ENABLE_PROMPTS !== 'false' && config.features.promptSubscriptions,
+    resources: process.env.MCP_ENABLE_RESOURCES !== 'false' && config.features.resourceSubscriptions
+  },
+  // MCP protocol version (2025-03-26 or 2025-06-18)
+  protocolVersion: process.env.MCP_PROTOCOL_VERSION || '2025-03-26',
+  // Supported protocol versions
+  supportedVersions: ['2024-11-05', '2025-03-26', '2025-06-18'],
+  // A2A connector flags
+  connectors: {
+    x402: process.env.MCP_CONNECTOR_X402_ENABLED === 'true',
+    ap2: process.env.MCP_CONNECTOR_AP2_ENABLED === 'true'
   }
 };
-config.mcp.mode = (process.env.MODE || 'ALL').toUpperCase();
+config.mcp.mode = (process.env.MODE || (config.features.zeroOrchestrator ? 'AGENT' : 'ALL')).toUpperCase(); // v2.1: Default to AGENT mode if zero orchestrator enabled
 
 // Experimental modes
 config.modes = {
@@ -129,7 +243,9 @@ config.modes = {
 
 // MCP transport preferences
 config.mcp.transport = {
-  streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED === 'false' ? false : true
+  streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED === 'false' ? false : true,
+  stdio: process.env.MCP_STDIO_ENABLED !== 'false',
+  websocket: process.env.MCP_WEBSOCKET_ENABLED !== 'false'
 };
 
 // Prompt strategy configuration
@@ -177,6 +293,64 @@ config.caching = {
       moderate: 0.000002, // Max cost per token for moderate queries  
       complex: 0.000015   // Max cost per token for complex queries
     }
+  }
+};
+
+// OAuth 2.1 Resource Server configuration
+config.auth = {
+  // JWKS URL for JWT token validation (RFC 8414)
+  jwksUrl: process.env.AUTH_JWKS_URL || null,
+  // Expected audience claim in JWTs
+  expectedAudience: process.env.AUTH_EXPECTED_AUD || 'mcp-server',
+  // Issuer URL (optional, for discovery metadata)
+  issuer: process.env.AUTH_ISSUER_URL || null,
+  // OAuth 2.0 Protected Resource Metadata discovery
+  discovery: {
+    enabled: process.env.AUTH_DISCOVERY_ENABLED !== 'false',
+    authorizationServers: (process.env.AUTH_SERVERS || '').split(',').map(s => s.trim()).filter(Boolean)
+  },
+  // Scope definitions and mappings
+  scopes: {
+    // Minimal baseline scopes for read-only discovery
+    minimal: (process.env.AUTH_SCOPES_MINIMAL || 'mcp:read,mcp:tools:list,mcp:resources:list,mcp:prompts:list')
+      .split(',').map(s => s.trim()).filter(Boolean),
+    // Map operations to required scopes
+    scopeMap: {
+      'tools/list': ['mcp:tools:list'],
+      'tools/call': ['mcp:tools:call'],
+      'resources/list': ['mcp:resources:list'],
+      'resources/read': ['mcp:resources:read'],
+      'resources/templates/list': ['mcp:resources:list'],
+      'prompts/list': ['mcp:prompts:list'],
+      'prompts/get': ['mcp:prompts:read'],
+      'sampling/createMessage': ['mcp:sampling'],
+      'elicitation/create': ['mcp:elicitation'],
+      // Write operations
+      'logging/setLevel': ['mcp:logging:write'],
+      'completion/complete': ['mcp:completions'],
+      'resources/subscribe': ['mcp:resources:subscribe'],
+      'resources/unsubscribe': ['mcp:resources:subscribe'],
+      'notifications/message': ['mcp:notifications:write']
+    }
+  }
+};
+
+// Security configuration
+config.security = {
+  // Allowed origins for CORS (comma-separated in env)
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:*,https://localhost:*')
+    .split(',').map(s => s.trim()).filter(Boolean),
+  // Rate limiting per IP
+  rateLimit: {
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 60000, // 1 minute
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100, // 100 requests per minute
+    message: 'Too many requests, please try again later.'
+  },
+  // Per-tool rate limits (stricter for expensive operations)
+  toolRateLimits: {
+    'research': { windowMs: 60000, max: 10 },
+    'agent': { windowMs: 60000, max: 20 },
+    'sampling/createMessage': { windowMs: 60000, max: 30 }
   }
 };
 

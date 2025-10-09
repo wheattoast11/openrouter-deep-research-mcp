@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  openrouter-agents:
+    image: terminals/openrouter-agents:2.1.1-beta
+    container_name: openrouter-agents
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - MODE=AGENT
+      - BETA_FEATURES=true
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - SERVER_API_KEY=${SERVER_API_KEY}
+      - PLL_ENABLE=true
+      - COMPRESSION_ENABLE=true
+      - LOG_LEVEL=info
+    volumes:
+      - agent-data:/app/researchAgentDB
+      - research-outputs:/app/research_outputs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/about"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  agent-data:
+  research-outputs:
+

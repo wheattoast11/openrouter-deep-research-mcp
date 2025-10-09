@@ -3,10 +3,16 @@
 
 [![npm version](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents) [![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-available-24292e?logo=github)](../../packages)
 
-[UPDATE – 2025-08-26] Two modes (set MODE env):
-- AGENT: one simple tool (`agent`) that routes research / follow_up / retrieve / query
-- MANUAL: individual tools for each action
-- ALL (default): both AGENT and MANUAL, plus always-on ops tools
+[UPDATE – v2.1.1-beta] PLL-governed streaming + Dockerized release:
+- Phase-locked streaming loop with adaptive concurrency (configurable via `PLL_*` envs)
+- Compression policies for context/KV budget enforcement (`COMPRESSION_*` envs)
+- Improved idempotency env defaults for easier ops tuning
+- Official Node 20 Docker image with production defaults
+
+[UPDATE – v2.1] Single-agent architecture (set MODE env):
+- AGENT (default): one unified `agent` tool that routes all operations + always-on ops tools
+- MANUAL: individual tools for each action + always-on ops tools
+- ALL: both AGENT and MANUAL tools exposed
 
 Diagram (simple)
 ```
@@ -44,9 +50,16 @@ npx @terminals-tech/openrouter-agents --stdio
 SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 ```
 
-## What’s new (v1.5.0)
-- Version parity across npm, GitHub Releases, and GitHub Packages
-- Dual publish workflow enabled
+## What's new (v2.1) - MCP v2.1 Compliance + OAuth 2.1 ✅
+- **MCP v2.1 Streamable HTTP**: Unified `/mcp` endpoint (POST/GET/DELETE) with session management, resumability, and protocol version negotiation
+- **OAuth 2.1 Resource Server**: Strict JWT validation (JWKS), audience binding, Protected Resource Metadata discovery (RFC 9728), WWW-Authenticate challenges, and scope-based authorization
+- **No Token Passthrough**: Audience-validated JWTs only; no raw token forwarding to downstream services
+- **Single-agent architecture**: MODE defaults to AGENT (6 tools total)
+- **Unified agent tool**: Single entry point that routes to research/follow_up/retrieve/query
+- **Local embeddings**: @xenova/transformers v2 (384D, no external API needed)
+- **PGlite + pgvector**: Persistent vector storage with semantic similarity search
+- **A2A Connector Scaffolding**: Feature-flagged x402 (Coinbase) and AP2 (Google) connectors (awaiting specs)
+- **Backward compatible**: Set MODE=ALL to restore full v1.5 behavior
 
 [Changelog →](docs/CHANGELOG.md)
 
@@ -65,11 +78,11 @@ OPENROUTER_API_KEY=your_openrouter_key
 SERVER_API_KEY=your_http_transport_key
 SERVER_PORT=3002
 
-# Modes (pick one; default ALL)
-# AGENT  = agent-only + always-on ops (ping/status/jobs)
+# Modes (pick one; default AGENT in v2.1)
+# AGENT  = agent-only + always-on ops (6 tools total) [DEFAULT]
 # MANUAL = individual tools + always-on ops
-# ALL    = agent + individual tools + always-on ops
-MODE=ALL
+# ALL    = agent + individual tools + always-on ops (21 tools)
+MODE=AGENT
 
 # Orchestration
 ENSEMBLE_SIZE=2
@@ -92,9 +105,42 @@ INDEXER_ENABLED=true
 INDEXER_AUTO_INDEX_REPORTS=true
 INDEXER_AUTO_INDEX_FETCHED=true
 
-# MCP features
+# MCP v2.1 features
+MCP_STREAMABLE_HTTP_ENABLED=true
+MCP_PROTOCOL_VERSION=2025-03-26
 MCP_ENABLE_PROMPTS=true
 MCP_ENABLE_RESOURCES=true
+
+# OAuth 2.1 Resource Server (optional but recommended)
+AUTH_JWKS_URL=https://your-auth-provider.com/.well-known/jwks.json
+AUTH_EXPECTED_AUD=mcp-server
+AUTH_ISSUER_URL=https://your-auth-provider.com
+AUTH_DISCOVERY_ENABLED=true
+AUTH_SCOPES_MINIMAL=mcp:read,mcp:tools:list,mcp:resources:list,mcp:prompts:list
+
+# Security
+ALLOWED_ORIGINS=http://localhost:*,https://localhost:*
+REQUIRE_HTTPS=false
+RATE_LIMIT_MAX_REQUESTS=100
+
+# Phase-locked streaming (optional overrides)
+PLL_ENABLE=true
+PLL_TARGET_TOKEN_RATE=32
+PLL_MAX_FANOUT=6
+PLL_MAX_CONCURRENCY=6
+PLL_JITTER_TOLERANCE_MS=180
+PLL_GAIN=0.5
+
+# Compression policies
+COMPRESSION_ENABLE=true
+COMPRESSION_TARGET_TOKENS=3200
+COMPRESSION_MIN_RETENTION_RATIO=0.35
+COMPRESSION_ENTROPY_FLOOR=0.2
+
+# Idempotency (intuitive defaults)
+IDEMPOTENCY_ENABLED=true
+IDEMPOTENCY_TTL_SECONDS=3600
+IDEMPOTENCY_RETRY_ON_FAILURE=true
 
 # Prompt strategy
 PROMPTS_COMPACT=true
@@ -138,6 +184,146 @@ STDIO (Cursor/VS Code):
 ```bash
 OPENROUTER_API_KEY=your_key INDEXER_ENABLED=true node src/server/mcpServer.js --stdio
 ```
+
+## MCP v2.1 Usage
+
+### Global CLI Installation
+```bash
+npm install -g @terminals-tech/openrouter-agents
+
+# Start MCP server
+openrouter-agents-mcp
+
+# Or use the standard entry point
+openrouter-agents --stdio
+```
+
+### Streamable HTTP Endpoint
+The server now exposes a unified `/mcp` endpoint compliant with MCP spec 2025-03-26:
+
+- **POST /mcp**: Send JSON-RPC requests (initialize, tools/list, tools/call, etc.). Include `MCP-Protocol-Version` and `Authorization` headers as needed. When authentication fails, the server returns `WWW-Authenticate`:
+  - `401` → `Bearer realm="openrouter-agents", error="invalid_token", error_description="token missing or invalid"`
+  - `403` → `Bearer error="insufficient_scope", scope="mcp:tools:call"`
+- **GET /mcp**: Open SSE stream for server-initiated messages. Requires `Mcp-Session-Id` header from the initialize response. The stream emits `notifications/message`, `notifications/progress`, and `notifications/cancelled` events filtered by the session log level (`logging/setLevel`).
+- **DELETE /mcp**: Terminate session (requires `Mcp-Session-Id`).
+
+#### Example: Initialize session
+```bash
+curl -X POST http://localhost:3002/mcp \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-03-26" \
+  -H "Authorization: Bearer your-token-here" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-03-26",
+      "capabilities": {},
+      "clientInfo": { "name": "my-client", "version": "1.0.0" }
+    }
+  }'
+```
+
+The response will include an `Mcp-Session-Id` header. Include this header in all subsequent requests.
+
+### OAuth 2.1 Resource Server
+
+#### Discovery Endpoints
+- `/.well-known/oauth-protected-resource` - Protected Resource Metadata (RFC 9728)
+- `/.well-known/mcp.json` - Legacy MCP server discovery with transport URLs and capabilities
+
+#### Authentication Flow
+1. Configure `AUTH_JWKS_URL`, `AUTH_EXPECTED_AUD`, and optional `AUTH_ISSUER_URL` in `.env` (see `env.example`).
+2. Obtain a JWT from your authorization server with the correct audience + scopes.
+3. Include the JWT in the `Authorization: Bearer <token>` header.
+4. Server validates issuer (if provided), audience, expiration, signature, and scopes.
+
+#### Scope-Based Authorization
+The server enforces scopes for MCP methods:
+
+| Method | Required scopes |
+| --- | --- |
+| `tools/list` | `mcp:tools:list` |
+| `tools/call` | `mcp:tools:call` |
+| `resources/list`, `resources/templates/list` | `mcp:resources:list` |
+| `resources/read` | `mcp:resources:read` |
+| `prompts/list` | `mcp:prompts:list` |
+| `prompts/get` | `mcp:prompts:read` |
+| `logging/setLevel` | `mcp:logging:write` |
+| `completion/complete` | `mcp:completions` |
+| `resources/subscribe`, `resources/unsubscribe` | `mcp:resources:subscribe` |
+| `notifications/message` | `mcp:notifications:write` |
+
+If scopes are missing, the response is `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="mcp:completions"` listing what is required. For missing/invalid tokens, the response is `401` with `WWW-Authenticate: Bearer realm="openrouter-agents", error="invalid_token"`.
+
+#### List + Pagination + Completion
+- Every list endpoint supports opaque cursors. `cursor` accepts a Base64URL token returned in `nextCursor`. Treat it as opaque and pass it back untouched. `limit` defaults to 50 (max 100).
+- Tools: `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list` share the same format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "resources/list",
+  "params": { "limit": 20, "cursor": "MA==" }
+}
+
+// Response
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "resources": [...],
+    "nextCursor": "MjA="
+  }
+}
+```
+
+- Completion utility: `completion/complete` surfaces context-aware suggestions for prompt/resource arguments and general helper values. Example:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "completion/complete",
+  "params": {
+    "kind": "promptArgument",
+    "dataset": "default",
+    "attribute": "outputFormat",
+    "input": "re",
+    "limit": 5
+  }
+}
+
+// Response
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "completion": {
+      "values": ["report", "briefing"],
+      "total": 3,
+      "hasMore": true,
+      "nextCursor": "Mg=="
+    }
+  }
+}
+```
+
+Use `logging/setLevel` to control which `notifications/message` events are emitted: levels `error`, `warn`, `info`, `debug`, `trace`.
+
+### A2A Connectors (Feature-Flagged)
+Enable experimental agent-to-agent connectors:
+```bash
+# Enable x402 (Coinbase) connector
+MCP_CONNECTOR_X402_ENABLED=true
+
+# Enable AP2 (Google) connector
+MCP_CONNECTOR_AP2_ENABLED=true
+```
+
+**Note**: These are scaffolds awaiting specification. They will throw "not yet implemented" errors when invoked.
 
 ### MCP client JSON configuration (no manual start required)
 You can register this server directly in MCP clients that support JSON server manifests.
