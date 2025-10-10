@@ -1,0 +1,98 @@
+%% Knowledge Graph Schema Diagram
+%% Generate PNG: npx @mermaid-js/mermaid-cli -i docs/knowledge-graph-schema-diagram.mmd -o docs/kg-schema.png
+
+erDiagram
+    ENTITY_TYPES ||--o{ ENTITY_TYPES : "parent_type"
+    ENTITY_TYPES ||--o{ ENTITIES : "defines"
+    ENTITY_TYPES ||--o{ RELATIONSHIP_TYPES : "source_constraint"
+    ENTITY_TYPES ||--o{ RELATIONSHIP_TYPES : "target_constraint"
+    RELATIONSHIP_TYPES ||--o{ RELATIONSHIPS : "defines"
+    ENTITIES ||--o{ RELATIONSHIPS : "source"
+    ENTITIES ||--o{ RELATIONSHIPS : "target"
+    ENTITIES ||--o{ ENTITY_DEGREE_SUMMARY : "aggregates"
+    RELATIONSHIPS ||--o{ RELATIONSHIP_TYPE_STATS : "aggregates"
+
+    ENTITY_TYPES {
+        serial id PK
+        text type_name UK "Unique type identifier"
+        integer parent_type_id FK "Hierarchical parent"
+        text description
+        jsonb properties_schema "JSON Schema validation"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RELATIONSHIP_TYPES {
+        serial id PK
+        text type_name UK "Unique relationship name"
+        text inverse_type_name "Bidirectional mapping"
+        text source_entity_type FK "Source type constraint"
+        text target_entity_type FK "Target type constraint"
+        text description
+        jsonb properties_schema "Edge property schema"
+        boolean is_symmetric "e.g., knows, similar_to"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    ENTITIES {
+        bigserial id PK
+        text entity_type FK "References entity_types"
+        text name "Display name"
+        text canonical_name UK "Normalized for dedup"
+        vector_384 embedding "HNSW indexed"
+        integer degree "Auto-updated by trigger"
+        integer in_degree "Incoming edge count"
+        integer out_degree "Outgoing edge count"
+        real pagerank "Computed periodically"
+        integer community_id "Community detection result"
+        text source_type "report|url|manual|extracted"
+        text source_id "Origin identifier"
+        real extraction_confidence "0.0-1.0"
+        jsonb properties "Flexible metadata"
+        integer usage_count "Access frequency"
+        timestamptz last_accessed
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RELATIONSHIPS {
+        bigserial id PK
+        bigint source_id FK "Source entity"
+        bigint target_id FK "Target entity"
+        text relationship_type FK "References rel_types"
+        real weight "Relationship strength"
+        real confidence "Extraction quality 0-1"
+        text source_evidence "Supporting text"
+        text extracted_by "Tool/agent name"
+        real extraction_confidence "0.0-1.0"
+        jsonb properties "Edge metadata"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    ENTITY_DEGREE_SUMMARY {
+        bigint entity_id PK "Materialized"
+        text entity_type
+        text name
+        integer out_degree
+        integer in_degree
+        integer total_degree
+    }
+
+    RELATIONSHIP_TYPE_STATS {
+        text relationship_type PK "Materialized"
+        integer count
+        real avg_weight
+        real avg_confidence
+        timestamptz first_seen
+        timestamptz last_seen
+    }
+
+%% Index Annotations
+%% HNSW: entities(embedding) WITH (m=24, ef_construction=100)
+%% B-tree: entities(entity_type), entities(canonical_name), entities(source_type, source_id)
+%% B-tree: relationships(source_id, relationship_type), relationships(target_id, relationship_type)
+%% GIN: entities(properties jsonb_path_ops), relationships(properties jsonb_path_ops)
+%% Composite: entities(pagerank DESC, degree DESC) WHERE embedding IS NOT NULL
+%% Composite: relationships(source_id, weight DESC, confidence DESC)

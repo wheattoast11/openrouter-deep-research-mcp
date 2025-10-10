@@ -203,6 +203,7 @@ const submitResearchSchema = conductResearchSchema.extend({
 }).describe("Submit a long-running research job asynchronously. Returns a job_id immediately. Use get_job_status/cancel_job to manage. Input synonyms supported (q,cost,aud,fmt,src,imgs,docs,data).");
 const getJobStatusSchema = z.object({ job_id: z.string(), since_event_id: z.number().int().optional(), format: z.enum(['summary','full','events']).optional().default('summary'), max_events: z.number().int().positive().optional().default(50) }).describe("Get job status with a compact summary by default. Use format: 'full' to include full status + events or 'events' to return only events.");
 const cancelJobSchema = z.object({ job_id: z.string() }).describe("Cancel a queued or running job (best-effort).");
+const getJobResultSchema = z.object({ job_id: z.string() }).describe("Get the structured result of a completed job if it succeeded.");
 
 // Unified research schema (async by default)
 const researchSchema = conductResearchSchema.extend({
@@ -764,8 +765,18 @@ async function submitResearch(params, mcpExchange = null, requestId = 'unknown-r
     const base = server.publicUrl || '';
     const sse_url = `${base.replace(/\/$/,'')}/jobs/${jobId}/events`;
     const ui_url = `${base.replace(/\/$/,'')}/ui?job=${encodeURIComponent(jobId)}`;
-    await dbClient.appendJobEvent(jobId, 'ui_hint', { sse_url, ui_url });
-    return JSON.stringify({ job_id: jobId, sse_url, ui_url });
+    const result_url = `${base.replace(/\/$/,'')}/mcp`; // Client would call get_job_result
+    
+    await dbClient.appendJobEvent(jobId, 'resource_links', { sse_url, ui_url, result_url });
+
+    return JSON.stringify({
+      job_id: jobId,
+      resources: [
+        { rel: 'monitor', href: sse_url, type: 'text/event-stream' },
+        { rel: 'alternate', href: ui_url, type: 'text/html' },
+        { rel: 'result', href: result_url, 'mcp-method': 'get_job_result' }
+      ]
+    });
   } catch (_) {
     return JSON.stringify({ job_id: jobId });
   }
@@ -773,29 +784,36 @@ async function submitResearch(params, mcpExchange = null, requestId = 'unknown-r
 
 async function getJobStatusTool(params) {
   const stat = await dbClient.getJobStatus(params.job_id);
-  const events = await dbClient.getJobEvents(params.job_id, params.since_event_id || 0, Math.max(1, params.max_events || 50));
-  const format = params.format || 'summary';
-  
-  if (format === 'summary') {
-    const summary = summarizeJobStatus(stat, events, params.max_events);
-    // Return concise text summary instead of verbose JSON
-    if (!stat) {
-      return `Job ${params.job_id || 'unknown'}: Not found or invalid job ID`;
-    }
-    const progress = summary.progressPercent ? ` (${summary.progressPercent}%)` : '';
-    const result = summary.artifacts?.reportId ? ` Report: ${summary.artifacts.reportId}` : '';
-    return `Job ${stat.id}: ${stat.status}${progress}${result}. Updated: ${summary.timestamps?.updatedAt || 'unknown'}`;
+  if (!stat) return JSON.stringify({ status: 'not_found' });
+  if (params.format === 'events') {
+    const events = await dbClient.getJobEvents(params.job_id, params.since_event_id, params.max_events);
+    return JSON.stringify({ job_id: params.job_id, events });
   }
-  
-  if (format === 'events') {
-    return JSON.stringify({ job: { id: stat?.id, status: stat?.status }, events }, null, 2);
+  if (params.format === 'full') {
+    const events = await dbClient.getJobEvents(params.job_id, params.since_event_id, params.max_events);
+    return JSON.stringify({ ...stat, events });
   }
-  return JSON.stringify({ job: stat, events }, null, 2);
+  // summary is default
+  const { result, ...summary } = stat;
+  return JSON.stringify(summary);
+}
+
+async function getJobResultTool(params) {
+  const stat = await dbClient.getJobStatus(params.job_id);
+  if (!stat) return JSON.stringify({ status: 'not_found', result: null });
+  if (stat.status !== 'succeeded') {
+    return JSON.stringify({
+      status: stat.status,
+      error: `Job status is '${stat.status}', not 'succeeded'. Result is only available for succeeded jobs.`,
+      result: null
+    });
+  }
+  return JSON.stringify(stat.result || {});
 }
 
 async function cancelJobTool(params) {
   await dbClient.cancelJob(params.job_id);
-  return JSON.stringify({ canceled: true }, null, 2);
+  return JSON.stringify({ acknowledged: true, job_id: params.job_id });
 }
 
 // Unified hybrid search
@@ -1661,22 +1679,45 @@ const agentSchema = z.object({
 }).describe("Single entrypoint agent tool. Routes to research, follow_up, or retrieve/query based on params. Set action to control explicitly or use action='auto'.");
 
 async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now()}`) {
-  const action = (params?.action || 'auto').toLowerCase();
-  if (action === 'research') return researchTool(params, mcpExchange, requestId);
-  if (action === 'follow_up') return researchFollowUp(params, mcpExchange, requestId);
-  if (action === 'retrieve') return retrieveTool({ mode: 'index', query: params.query, k: params.k, scope: params.scope, rerank: params.rerank }, mcpExchange, requestId);
-  if (action === 'query') return retrieveTool({ mode: 'sql', sql: params.sql, params: params.params || [], explain: !!params.explain }, mcpExchange, requestId);
-  if (params?.originalQuery && params?.followUpQuestion) {
-    return researchFollowUp({ originalQuery: params.originalQuery, followUpQuestion: params.followUpQuestion, costPreference: params.costPreference }, mcpExchange, requestId);
+  const { ZeroAgent } = require('../agents/zeroAgent');
+  const agent = params.__zeroInstance || new ZeroAgent();
+
+  const onEvent = async (type, payload) => {
+    if (mcpExchange && typeof mcpExchange.sendProgress === 'function') {
+      const value = { type, ...payload };
+      mcpExchange.sendProgress({ token: mcpExchange.progressToken, value });
+    }
+  };
+
+  try {
+    const result = await agent.execute(params, { job_id: requestId }, onEvent);
+    
+    // Final result should be a structured object
+    return {
+      content: [
+        {
+          type: 'object',
+          object: {
+            summary: result.synthesis.substring(0, 500) + '...',
+            reportId: result.metadata.reportId,
+            durationMs: result.metadata.duration_ms
+          }
+        },
+        {
+          type: 'resource',
+          resource: {
+            rel: 'full-report',
+            uri: `mcp://reports/${result.metadata.reportId}`
+          }
+        }
+      ]
+    };
+  } catch (error) {
+    return {
+      content: [{ type: 'text', text: `Agent execution failed: ${error.message}` }],
+      isError: true
+    };
   }
-  if (params?.sql) {
-    return retrieveTool({ mode: 'sql', sql: params.sql, params: params.params || [], explain: !!params.explain }, mcpExchange, requestId);
-  }
-  if (params?.mode === 'index' || (params?.k || params?.scope || params?.rerank)) {
-    if (!params?.query) throw new Error('agent: query is required for retrieve mode');
-    return retrieveTool({ mode: 'index', query: params.query, k: params.k || 10, scope: params.scope || 'both', rerank: !!params.rerank }, mcpExchange, requestId);
-  }
-  return researchTool(params, mcpExchange, requestId);
 }
 
 // Ping tool for health check and latency
@@ -1705,6 +1746,7 @@ module.exports = {
   submitResearchSchema,
   getJobStatusSchema,
   cancelJobSchema,
+  getJobResultSchema,
   executeSqlSchema, // Add new schema
   researchFollowUpSchema,
   getPastResearchSchema,
@@ -1737,6 +1779,7 @@ module.exports = {
   conductResearch,
    submitResearch,
   getJobStatusTool,
+  getJobResultTool,
   cancelJobTool,
   researchFollowUp,
   getPastResearch,

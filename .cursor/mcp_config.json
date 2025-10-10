@@ -1,0 +1,38 @@
+{
+  "mcpServers": {
+    "openrouter-agents": {
+      "command": "npx",
+      "args": [
+        "@terminals-tech/openrouter-agents",
+        "--stdio"
+      ],
+      "env": {
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+        "SERVER_API_KEY": "${SERVER_API_KEY}",
+        "PGLITE_DATA_DIR": "./researchAgentDB",
+        "MODE": "ALL",
+        "INDEXER_ENABLED": "true",
+        "MCP_ENABLE_PROMPTS": "true",
+        "MCP_ENABLE_RESOURCES": "true",
+        "MAX_RESEARCH_ITERATIONS": "2",
+        "CACHE_TTL": "3600",
+        "NODE_ENV": "development"
+      },
+      "disabled": false,
+      "alwaysAllow": []
+    },
+    "openrouter-agents-http": {
+      "url": "http://localhost:3008",
+      "transport": "http",
+      "headers": {
+        "Authorization": "Bearer ${SERVER_API_KEY}",
+        "Content-Type": "application/json"
+      },
+      "disabled": true,
+      "description": "HTTP/SSE transport (requires manual server start)"
+    }
+  }
+}
+
+
+

@@ -4,7 +4,7 @@ const pkg = require('./package.json');
 const config = {
   server: {
     // Support both SERVER_PORT and PORT, prefer SERVER_PORT if present
-    port: process.env.SERVER_PORT || process.env.PORT || 3002,
+    port: process.env.SERVER_PORT || process.env.PORT || 3009, // Changed port to 3009
     name: "openrouter_agents",
     version: pkg.version,
     // Add a key for basic server authentication (optional)
@@ -232,7 +232,8 @@ config.mcp = {
   connectors: {
     x402: process.env.MCP_CONNECTOR_X402_ENABLED === 'true',
     ap2: process.env.MCP_CONNECTOR_AP2_ENABLED === 'true'
-  }
+  },
+  sessionTimeoutSeconds: parseInt(process.env.MCP_SESSION_TIMEOUT_SECONDS, 10) || 3600
 };
 config.mcp.mode = (process.env.MODE || (config.features.zeroOrchestrator ? 'AGENT' : 'ALL')).toUpperCase(); // v2.1: Default to AGENT mode if zero orchestrator enabled
 
@@ -243,7 +244,7 @@ config.modes = {
 
 // MCP transport preferences
 config.mcp.transport = {
-  streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED === 'false' ? false : true,
+  streamableHttpEnabled: true, // Re-enable streamableHttp for testing
   stdio: process.env.MCP_STDIO_ENABLED !== 'false',
   websocket: process.env.MCP_WEBSOCKET_ENABLED !== 'false'
 };

@@ -329,6 +329,148 @@ async function testTimeoutHandling() {
   }
 }
 
+async function testHttpBatchRejection() {
+  console.log('\n=== Test 6: HTTP Batch Rejection ===');
+
+  const PORT = 38505;
+  const server = await spawnHttpServer({
+    MODE: 'AGENT',
+    SERVER_API_KEY: 'sdk-test-secret'
+  }, PORT);
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer sdk-test-secret',
+        'MCP-Protocol-Version': '2025-03-26'
+      },
+      body: JSON.stringify([
+        { jsonrpc: '2.0', method: 'tools/list', id: 1 },
+        { jsonrpc: '2.0', method: 'tools/list', id: 2 }
+      ])
+    });
+
+    const payload = await res.json();
+    assert.strictEqual(res.status, 400, 'Batch requests should be rejected with 400');
+    assert.strictEqual(payload.error?.code, -32600, 'Batch rejection should use invalid request code');
+    console.log('✓ HTTP batch requests rejected as per spec');
+  } finally {
+    await server.stop();
+  }
+}
+
+async function testHttpVersionHeaderRequired() {
+  console.log('\n=== Test 7: HTTP Requires MCP-Protocol-Version ===');
+
+  const PORT = 38506;
+  const server = await spawnHttpServer({
+    MODE: 'AGENT',
+    SERVER_API_KEY: 'sdk-test-secret'
+  }, PORT);
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer sdk-test-secret'
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 })
+    });
+
+    const payload = await res.json();
+    assert.strictEqual(res.status, 400, 'Missing version header must be rejected');
+    assert.strictEqual(payload.error?.code, -32600, 'Missing version header returns invalid request');
+    console.log('✓ Missing MCP-Protocol-Version header rejected');
+  } finally {
+    await server.stop();
+  }
+}
+
+async function testWebSocketScopeEnforcement() {
+  console.log('\n=== Test 8: WebSocket Scope Enforcement ===');
+
+  const PORT = 38507;
+  const server = await spawnHttpServer({
+    MODE: 'AGENT',
+    SERVER_API_KEY: 'ws-test-secret',
+    AUTH_SCOPES_MINIMAL: 'mcp:read',
+    ALLOW_NO_API_KEY: 'false'
+  }, PORT);
+
+  const WebSocket = require('ws');
+
+  try {
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${PORT}/mcp/ws`);
+      ws.on('open', () => reject(new Error('Connection should not succeed without token')));
+      ws.on('close', (code) => {
+        if (code === 4401 || code === 1008) {
+          console.log('✓ WebSocket unauthorized connection rejected');
+          resolve();
+        } else {
+          reject(new Error(`Unexpected close code ${code}`));
+        }
+      });
+      ws.on('error', reject);
+    });
+
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${PORT}/mcp/ws?token=ws-test-secret`);
+      ws.on('open', () => {
+        ws.send(JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/list'
+        }));
+      });
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.error && msg.error.code === -32001) {
+          console.log('✓ Insufficient scope causes -32001 error');
+          ws.close();
+          resolve();
+        }
+      });
+      ws.on('close', (code) => {
+        if (code === 4403) {
+          console.log('✓ WebSocket closed with insufficient scope code');
+        }
+      });
+      ws.on('error', reject);
+    });
+  } finally {
+    await server.stop();
+  }
+}
+
+async function testHttpUnauthorized() {
+  console.log('\n=== Test 9: HTTP Unauthorized Handling ===');
+
+  const PORT = 38508;
+  const server = await spawnHttpServer({
+    MODE: 'AGENT',
+    SERVER_API_KEY: 'auth-test-secret'
+  }, PORT);
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'MCP-Protocol-Version': '2025-03-26' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 })
+    });
+
+    assert.strictEqual(res.status, 401, 'Missing auth should return 401');
+    const header = res.headers.get('www-authenticate');
+    assert(header && header.includes('Bearer'), 'WWW-Authenticate header should be present');
+    console.log('✓ Unauthorized HTTP request challenged with WWW-Authenticate');
+  } finally {
+    await server.stop();
+  }
+}
+
 // ============================================================================
 // Main Test Runner
 // ============================================================================
@@ -341,6 +483,10 @@ async function testTimeoutHandling() {
     await testStdioTransport();
     await testProgressEventOrdering();
     await testTimeoutHandling();
+    await testHttpBatchRejection();
+    await testHttpVersionHeaderRequired();
+    await testWebSocketScopeEnforcement();
+    await testHttpUnauthorized();
 
     console.log('\n✅ All MCP SDK Compatibility tests PASSED');
     process.exit(0);
@@ -350,4 +496,6 @@ async function testTimeoutHandling() {
     process.exit(1);
   }
 })();
+
+
 

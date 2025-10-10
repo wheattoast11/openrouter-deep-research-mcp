@@ -4,6 +4,7 @@ const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import the new parser
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
 const parallelism = require('../../config').models.parallelism || 4;
+const { BoundedExecutor } = require('@terminals-tech/core');
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
 const COMPLEXITY_LEVELS = ["simple", "moderate", "complex"];
@@ -394,27 +395,55 @@ class ResearchAgent {
 
     const mode = extra?.mode || 'standard';
 
-    // Bounded concurrency queue
-    const results = [];
-    let idx = 0;
-    const worker = async () => {
-      while (idx < queries.length) {
-        const current = idx++;
-        const q = queries[current];
+    const executor = new BoundedExecutor({
+      maxConcurrency: Math.min(parallelism, queries.length),
+      meter: extra?.meter,
+      onTaskStart: async ({ index }) => {
+        const q = queries[index];
+        if (q && onEvent) await onEvent('agent_started', { agent_id: q.id, query: q.query, cost: costPreference, mode });
+      },
+      onTaskFinish: async ({ index, result, error }) => {
+        const q = queries[index];
+        if (!q || !onEvent) return;
+        const ok = error ? false : (Array.isArray(result) ? result.every(r => !r.error) : !result?.error);
+        await onEvent('agent_completed', { agent_id: q.id, ok });
+      }
+    });
+
+    const tasks = queries.map((q, index) => ({
+      id: q.id || `agent-${index}`,
+      run: async () => {
         try {
-          if (onEvent) await onEvent('agent_started', { agent_id: q.id, query: q.query, cost: costPreference, mode });
-          const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent, { mode });
-          results[current] = value; // array of ensemble results
-          const ok = Array.isArray(value) ? value.every(v => !v.error) : !value.error;
-          if (onEvent) await onEvent('agent_completed', { agent_id: q.id, ok });
+          const value = await this.conductResearch(
+            q.query,
+            q.id,
+            costPreference,
+            'intermediate',
+            true,
+            images,
+            textDocuments,
+            structuredData,
+            inputEmbeddings,
+            requestId,
+            onEvent,
+            { mode }
+          );
+          return value;
         } catch (e) {
-          results[current] = [{ agentId: q.id, model: 'N/A', query: q.query, result: `Error: ${e.message}`, error: true, errorMessage: e.message }];
-          if (onEvent) await onEvent('agent_completed', { agent_id: q.id, ok: false });
+          console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent task failure for ${q.id}:`, e);
+          return [{
+            agentId: q.id,
+            model: 'N/A',
+            query: q.query,
+            result: `Error: ${e.message}`,
+            error: true,
+            errorMessage: e.message
+          }];
         }
       }
-    };
-    const workers = Array.from({ length: Math.min(parallelism, queries.length) }, () => worker());
-    await Promise.all(workers);
+    }));
+
+    const results = await executor.runAll(tasks);
 
     const flatResults = results.flat();
     const duration = Date.now() - startTime;

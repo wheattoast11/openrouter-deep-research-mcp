@@ -306,6 +306,19 @@ async function initDB() {
     await db.query(`CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);`);
     process.stderr.write(`[${new Date().toISOString()}] Job tables created or verified\n`);
 
+    // MCP HTTP session store
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS mcp_sessions (
+        id TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        protocol_version TEXT,
+        capabilities JSONB,
+        log_level TEXT DEFAULT 'info'
+      );
+    `);
+    process.stderr.write(`[${new Date().toISOString()}] mcp_sessions table created or verified\n`);
+
     // Usage counters to track interactions with docs/reports
     await db.query(`
       CREATE TABLE IF NOT EXISTS usage_counters (
@@ -937,8 +950,58 @@ module.exports = {
   cancelJob,
   // Usage API
   incrementUsage,
-  incrementUsageMany
+  incrementUsageMany,
+  // HTTP Session Management
+  createHttpSession,
+  getHttpSession,
+  touchHttpSession,
+  deleteHttpSession,
+  cleanupExpiredHttpSessions
 };
+
+// --- MCP HTTP Session Management ---
+async function createHttpSession(sessionId, { protocolVersion, capabilities }) {
+  return executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO mcp_sessions (id, protocol_version, capabilities) VALUES ($1, $2, $3);`,
+      [sessionId, protocolVersion, JSON.stringify(capabilities || {})]
+    );
+    return { id: sessionId, protocolVersion, capabilities };
+  }, 'createHttpSession', null);
+}
+
+async function getHttpSession(sessionId) {
+  return executeWithRetry(async () => {
+    const res = await db.query(`SELECT * FROM mcp_sessions WHERE id = $1;`, [sessionId]);
+    return res.rows[0] || null;
+  }, 'getHttpSession', null);
+}
+
+async function touchHttpSession(sessionId) {
+  return executeWithRetry(async () => {
+    await db.query(`UPDATE mcp_sessions SET updated_at = NOW() WHERE id = $1;`, [sessionId]);
+  }, 'touchHttpSession', null);
+}
+
+async function deleteHttpSession(sessionId) {
+  return executeWithRetry(async () => {
+    await db.query(`DELETE FROM mcp_sessions WHERE id = $1;`, [sessionId]);
+  }, 'deleteHttpSession', null);
+}
+
+async function cleanupExpiredHttpSessions() {
+  const sessionTimeout = config.mcp?.sessionTimeoutSeconds || 3600;
+  return executeWithRetry(async () => {
+    const res = await db.query(
+      `DELETE FROM mcp_sessions WHERE updated_at < NOW() - INTERVAL '${sessionTimeout} seconds';`
+    );
+    if (res.rowCount > 0) {
+      console.error(`[MCP] Cleaned up ${res.rowCount} expired HTTP sessions.`);
+    }
+    return res.rowCount;
+  }, 'cleanupExpiredHttpSessions', 0);
+}
+
 
 // Function to retrieve a single report by its ID
 async function getReportById(reportId) {
@@ -1159,3 +1222,18 @@ async function heartbeatJob(jobId) {
 
 module.exports.claimNextJob = claimNextJob;
 module.exports.heartbeatJob = heartbeatJob;
+
+let cleanupIntervalHandle = null;
+
+async function scheduleHttpSessionCleanup() {
+  if (cleanupIntervalHandle) return;
+  const intervalSeconds = parseInt(process.env.MCP_SESSION_CLEANUP_INTERVAL_SECONDS, 10) || 600;
+  cleanupIntervalHandle = setInterval(() => {
+    cleanupExpiredHttpSessions().catch(err => {
+      console.error(`[${new Date().toISOString()}] Error during HTTP session cleanup:`, err);
+    });
+  }, intervalSeconds * 1000);
+  cleanupIntervalHandle.unref?.();
+}
+
+module.exports.scheduleHttpSessionCleanup = scheduleHttpSessionCleanup;

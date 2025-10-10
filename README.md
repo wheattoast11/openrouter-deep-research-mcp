@@ -50,16 +50,12 @@ npx @terminals-tech/openrouter-agents --stdio
 SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 ```
 
-## What's new (v2.1) - MCP v2.1 Compliance + OAuth 2.1 ✅
-- **MCP v2.1 Streamable HTTP**: Unified `/mcp` endpoint (POST/GET/DELETE) with session management, resumability, and protocol version negotiation
-- **OAuth 2.1 Resource Server**: Strict JWT validation (JWKS), audience binding, Protected Resource Metadata discovery (RFC 9728), WWW-Authenticate challenges, and scope-based authorization
-- **No Token Passthrough**: Audience-validated JWTs only; no raw token forwarding to downstream services
-- **Single-agent architecture**: MODE defaults to AGENT (6 tools total)
-- **Unified agent tool**: Single entry point that routes to research/follow_up/retrieve/query
-- **Local embeddings**: @xenova/transformers v2 (384D, no external API needed)
-- **PGlite + pgvector**: Persistent vector storage with semantic similarity search
-- **A2A Connector Scaffolding**: Feature-flagged x402 (Coinbase) and AP2 (Google) connectors (awaiting specs)
-- **Backward compatible**: Set MODE=ALL to restore full v1.5 behavior
+## What's new (v2.2) - Full MCP v2.1 alignment
+- **Server Identity**: `/.well-known/mcp-server` and `/.well-known/oauth-protected-resource` endpoints for automated discovery.
+- **Stateless HTTP Sessions**: HTTP transport sessions are now backed by the PGlite database for improved scalability.
+- **Elicitation**: Support for server-initiated user prompts via the `elicitation/request` event and `elicitation_response` tool.
+- **Structured Tool Outputs**: The `agent` tool now returns structured objects and resource links instead of plain text.
+- **Unified Event Streams**: WebSocket and SSE event streams now support resumable cursors for more reliable streaming.
 
 [Changelog →](docs/CHANGELOG.md)
 
@@ -230,8 +226,10 @@ The response will include an `Mcp-Session-Id` header. Include this header in all
 ### OAuth 2.1 Resource Server
 
 #### Discovery Endpoints
-- `/.well-known/oauth-protected-resource` - Protected Resource Metadata (RFC 9728)
-- `/.well-known/mcp.json` - Legacy MCP server discovery with transport URLs and capabilities
+- `/.well-known/mcp-server` - MCP Server Discovery with transport URLs and capabilities
+- `/.well-known/oauth-protected-resource` - OAuth 2.1 Protected Resource metadata (RFC 8414)
+
+Set `PUBLIC_URL` to your externally reachable server URL so discovery metadata advertises the correct origins. Enable well-known endpoints by ensuring `WELL_KNOWN_ENABLED=true` (default). Clients should read scope metadata and transport URIs from discovery before connecting.
 
 #### Authentication Flow
 1. Configure `AUTH_JWKS_URL`, `AUTH_EXPECTED_AUD`, and optional `AUTH_ISSUER_URL` in `.env` (see `env.example`).
@@ -240,7 +238,7 @@ The response will include an `Mcp-Session-Id` header. Include this header in all
 4. Server validates issuer (if provided), audience, expiration, signature, and scopes.
 
 #### Scope-Based Authorization
-The server enforces scopes for MCP methods:
+The server enforces scopes for MCP methods, including the new elicitation response tool:
 
 | Method | Required scopes |
 | --- | --- |
@@ -254,6 +252,7 @@ The server enforces scopes for MCP methods:
 | `completion/complete` | `mcp:completions` |
 | `resources/subscribe`, `resources/unsubscribe` | `mcp:resources:subscribe` |
 | `notifications/message` | `mcp:notifications:write` |
+| `elicitation_response` | `mcp:elicitation:write` |
 
 If scopes are missing, the response is `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="mcp:completions"` listing what is required. For missing/invalid tokens, the response is `401` with `WWW-Authenticate: Bearer realm="openrouter-agents", error="invalid_token"`.
 

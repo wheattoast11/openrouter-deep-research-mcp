@@ -5,6 +5,25 @@ const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../../config');
 const dbClient = require('../utils/dbClient'); // Import dbClient for job monitoring
+const { createAuthMiddleware } = require('./oauthResourceServer');
+
+/**
+ * Validate and negotiate MCP protocol version.
+ * Returns the negotiated version string or null if unsupported.
+ */
+function negotiateProtocolVersion(requestedVersion) {
+  const supported = config.mcp?.supportedVersions || ['2024-11-05', '2025-03-26'];
+  // If client requests a supported version, use it.
+  if (supported.includes(requestedVersion)) {
+    return requestedVersion;
+  }
+  // Per spec, if no version is requested, server picks latest.
+  if (!requestedVersion) {
+    return config.mcp?.protocolVersion || '2025-03-26';
+  }
+  // If requested version is unsupported, negotiation fails.
+  return null;
+}
 
 /**
  * WebSocket-based MCP Transport
@@ -19,6 +38,11 @@ class WebSocketTransport {
     this.requestHandlers = new Map();
     this.jobMonitors = new Map(); // Store active job monitors
     this.policy = policy;
+
+    // Protocol state
+    this.state = 'pre-init'; // pre-init -> initialized
+    this.protocolVersion = null;
+    this.clientCapabilities = null;
 
     // Telemetry state
     this.telemetry = {
@@ -220,12 +244,82 @@ class WebSocketTransport {
   async handleMessage(data) {
     try {
       const message = JSON.parse(data.toString());
+
+      if (Array.isArray(message)) {
+        return this.send({
+          jsonrpc: '2.0',
+          error: { code: -32600, message: 'Batch requests are not supported.' },
+          id: null
+        });
+      }
+
+      // Handle initialize message (must be the first message)
+      if (message.method === 'initialize') {
+        if (this.state !== 'pre-init') {
+          return this.send({
+            jsonrpc: '2.0',
+            id: message.id,
+            error: { code: -32002, message: 'Session already initialized' }
+          });
+        }
+
+        const negotiatedVersion = negotiateProtocolVersion(message.params?.protocolVersion);
+
+        if (!negotiatedVersion) {
+          this.send({
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: -32600,
+              message: `Unsupported protocol version: ${message.params?.protocolVersion}`,
+              data: { supported: config.mcp?.supportedVersions || ['2024-11-05', '2025-03-26'] }
+            }
+          });
+          return this.ws.close(1002, 'Unsupported protocol version');
+        }
+
+        this.protocolVersion = negotiatedVersion;
+        this.clientCapabilities = message.params?.capabilities || {};
+        this.state = 'initialized';
+
+        // Build server capabilities
+        const serverCapabilities = {
+          tools: { list: true, call: true },
+          prompts: { list: true, get: true, listChanged: true },
+          resources: { list: true, read: true, subscribe: true, listChanged: true },
+          logging: {},
+          completions: {}
+        };
+
+        return this.send({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: this.protocolVersion,
+            capabilities: serverCapabilities,
+            serverInfo: {
+              name: config.server.name,
+              version: config.server.version
+            },
+            sessionId: this.sessionId
+          }
+        });
+      }
+
+      // Gate all other messages until initialized
+      if (this.state !== 'initialized') {
+        return this.send({
+          jsonrpc: '2.0',
+          id: message.id,
+          error: { code: -32002, message: 'Session not initialized. Send initialize request first.' }
+        });
+      }
       
       // Handle JSON-RPC requests
       if (message.method) {
         const handler = this.requestHandlers.get(message.method);
         if (handler) {
-          const result = await handler(message.params);
+          const result = await handler(message.params, message.id);
           this.send({
             jsonrpc: '2.0',
             id: message.id,
@@ -289,7 +383,7 @@ class WebSocketTransport {
     }
     if (this.jobMonitors.has(jobId)) return;
 
-    let lastEventId = 0;
+    let lastEventId = policyOverrides.since_event_id || 0;
     let isMonitoring = true;
 
     const monitorJob = async () => {
@@ -442,7 +536,7 @@ class WebSocketTransport {
 /**
  * Create and initialize a WebSocket server on top of an Express app
  */
-function setupWebSocketServer(httpServer, mcpServer, authenticate) {
+function setupWebSocketServer(httpServer, mcpServer, authenticate, requireScopes, getScopesForMethod) {
   const wss = new WebSocket.Server({ 
     server: httpServer,
     path: '/mcp/ws'
@@ -450,35 +544,86 @@ function setupWebSocketServer(httpServer, mcpServer, authenticate) {
 
   const sessions = new Map();
 
+  function enforceScopes(required, userScopes = []) {
+    if (!required || required.length === 0) return;
+    if (userScopes.includes('*')) return;
+    const missing = required.filter(scope => !userScopes.includes(scope));
+    if (missing.length === 0) return;
+    const err = new Error('Forbidden: Insufficient scope');
+    err.code = -32001;
+    err.missingScopes = missing;
+    throw err;
+  }
+
   wss.on('connection', async (ws, req) => {
-    // Authentication check
-    const token = new URL(req.url, 'ws://localhost').searchParams.get('token');
-    
-    // Simple auth bypass for demo; in production, validate token
-    const allowNoAuth = process.env.ALLOW_NO_API_KEY === 'true';
-    if (!allowNoAuth && !token) {
-      ws.close(1008, 'Unauthorized');
+    const headers = req.headers || {};
+    const url = new URL(req.url, `ws://${req.headers.host || 'localhost'}`);
+    const tokenFromQuery = url.searchParams.get('token');
+    let authInfo = null;
+
+    const authResult = await new Promise((resolve) => {
+      const fakeRes = {
+        status(code) {
+          this.statusCode = code;
+          return this;
+        },
+        json(payload) {
+          this.payload = payload;
+          resolve({ ok: false, payload });
+        },
+        setHeader() {}
+      };
+
+      const fakeReq = {
+        method: 'GET',
+        headers: {
+          ...headers,
+          authorization: headers.authorization || (tokenFromQuery ? `Bearer ${tokenFromQuery}` : undefined)
+        }
+      };
+
+      authenticate(fakeReq, fakeRes, () => {
+        authInfo = {
+          user: fakeReq.user,
+          scopes: fakeReq.scopes
+        };
+        resolve({ ok: true });
+      });
+    });
+
+    if (!authResult.ok || !authInfo) {
+      const reason = authResult.payload?.error || 'Unauthorized';
+      ws.close(4401, reason);
       return;
     }
 
     const sessionId = uuidv4();
     const transport = new WebSocketTransport(ws, sessionId, config?.policies || {});
+    transport.authInfo = authInfo;
     sessions.set(sessionId, transport);
+    try {
+      const { registerSessionStream } = require('./mcpServer');
+      registerSessionStream(sessionId, transport, 'ws');
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] [${sessionId}] Failed to register session stream:`, e.message);
+    }
 
-    console.error(`[${new Date().toISOString()}] [${sessionId}] New WebSocket connection established`);
-
-    // Send session started event
-    transport.sendEvent('session.started', {
-      sessionId,
-      capabilities: {
-        bidirectional: true,
-        proactive: true,
-        temporal: true
-      }
-    });
+    console.error(`[${new Date().toISOString()}] [${sessionId}] New WebSocket connection established. Waiting for initialize...`);
 
     // Register JSON-RPC method handlers
-    transport.on('tools/list', async () => mcpServer.listTools());
+    transport.on('tools/list', async () => {
+      try {
+        if (requireScopes && getScopesForMethod) {
+          const required = getScopesForMethod('tools/list') || config.auth.scopes?.minimal || [];
+          enforceScopes(required, authInfo.scopes);
+        }
+      } catch (err) {
+        const reason = err.missingScopes ? `Insufficient scope: ${err.missingScopes.join(',')}` : err.message;
+        ws.close(4403, reason);
+        throw err;
+      }
+      return mcpServer.listTools();
+    });
 
     transport.on('tools/call', async (params) => {
       const { name, arguments: args } = params;
@@ -490,7 +635,18 @@ function setupWebSocketServer(httpServer, mcpServer, authenticate) {
         callArgs.__zeroInstance = zeroInstance;
       }
 
-      const result = await mcpServer.callTool({ name, arguments: callArgs });
+      try {
+        if (requireScopes && getScopesForMethod) {
+          const required = getScopesForMethod('tools/call') || config.auth.scopes?.minimal || [];
+          enforceScopes(required, authInfo.scopes);
+        }
+      } catch (err) {
+        const reason = err.missingScopes ? `Insufficient scope: ${err.missingScopes.join(',')}` : err.message;
+        ws.close(4403, reason);
+        throw err;
+      }
+
+      const result = await mcpServer.callTool({ name, arguments: callArgs, extra: { authInfo } });
 
       if (result && result.job_id) {
         let metricsGetter = null;
@@ -515,9 +671,31 @@ function setupWebSocketServer(httpServer, mcpServer, authenticate) {
       return result;
     });
 
-    transport.on('resources/list', async () => mcpServer.listResources());
+    transport.on('resources/list', async () => {
+      try {
+        if (requireScopes && getScopesForMethod) {
+          const required = getScopesForMethod('resources/list') || config.auth.scopes?.minimal || [];
+          enforceScopes(required, authInfo.scopes);
+        }
+      } catch (err) {
+        const reason = err.missingScopes ? `Insufficient scope: ${err.missingScopes.join(',')}` : err.message;
+        ws.close(4403, reason);
+        throw err;
+      }
+      return mcpServer.listResources();
+    });
 
     transport.on('resources/subscribe', async (params) => {
+      try {
+        if (requireScopes && getScopesForMethod) {
+          const required = getScopesForMethod('resources/subscribe') || config.auth.scopes?.minimal || [];
+          enforceScopes(required, authInfo.scopes);
+        }
+      } catch (err) {
+        const reason = err.missingScopes ? `Insufficient scope: ${err.missingScopes.join(',')}` : err.message;
+        ws.close(4403, reason);
+        throw err;
+      }
       const { uri } = params;
       console.error(`[${new Date().toISOString()}] [${sessionId}] Client subscribed to resource: ${uri}`);
       return { subscribed: true, uri };
@@ -525,6 +703,12 @@ function setupWebSocketServer(httpServer, mcpServer, authenticate) {
 
     ws.on('close', () => {
       sessions.delete(sessionId);
+      try {
+        const { releaseSessionStream } = require('./mcpServer');
+        releaseSessionStream(sessionId);
+      } catch (e) {
+        console.error(`[${new Date().toISOString()}] [${sessionId}] Failed to release session stream:`, e.message);
+      }
       console.error(`[${new Date().toISOString()}] [${sessionId}] WebSocket session ended`);
     });
   });

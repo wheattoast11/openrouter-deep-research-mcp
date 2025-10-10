@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-terminal-border;
+  }
+  body {
+    @apply bg-terminal-bg text-terminal-text font-sans antialiased;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-terminal-card/30 backdrop-blur-sm border border-terminal-border/50;
+  }
+  
+  .glow {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
+  }
+}
+

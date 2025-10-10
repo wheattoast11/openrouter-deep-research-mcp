@@ -1,0 +1,47 @@
+name: 'Agent Zero'
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  agent_zero_handler:
+    runs-on: ubuntu-latest
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '@zero')
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Call Agent Zero
+        id: agent-zero
+        env:
+          ZERO_QUERY: ${{ github.event.comment.body }}
+        run: |
+          QUERY=$(echo "$ZERO_QUERY" | sed 's/@zero//')
+          echo "query=$QUERY" >> $GITHUB_OUTPUT
+          RESPONSE=$(npx node ./scripts/debug-tools-list.js --query "$QUERY" 2>&1 || true)
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESPONSE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Add Comment with Result
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const response = core.getInput('response', { required: true });
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Agent Zero processed your request.\n\n\u60af\n${response}`
+            })

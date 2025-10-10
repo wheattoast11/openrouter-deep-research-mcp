@@ -1,0 +1,69 @@
+# Test files
+tests/
+*.spec.js
+
+# Development files
+.env
+.env.*
+*.log
+dev-*.log
+
+# Documentation (include only essential)
+docs/archive/
+docs/sessions/
+docs/*-PLAN.md
+docs/issues.md
+docs/logs.md
+
+# Build artifacts
+*.tgz
+.next/
+out/
+
+# Database
+researchAgentDB/
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Temporary
+temp/
+tmp/
+*.tmp
+
+# Research outputs (user data)
+research_outputs/
+
+# Backups
+backups/
+
+# Client (publish separately)
+client/
+
+# CI
+.github/
+
+# Scripts (dev only)
+scripts/validate-*.js
+scripts/production-readiness-check.js
+scripts/smoke-test.js
+
+# Test data
+test-*.json
+qa_outputs/
+
+# Plan files
+*.plan.md
+

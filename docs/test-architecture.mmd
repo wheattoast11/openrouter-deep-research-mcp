@@ -1,0 +1,57 @@
+graph TB
+    subgraph "Test Harness (v1.6.0)"
+        A[Test Runner] --> B[Transport Tests]
+        A --> C[Security Tests]
+        A --> D[Integration Tests]
+        A --> E[Performance Tests]
+    end
+
+    subgraph "Transport Coverage"
+        B --> B1[STDIO Matrix]
+        B --> B2[Streamable HTTP]
+        B --> B3[OAuth2 JWT]
+        B --> B4[API Key Auth]
+        B --> B5[No-Auth Dev]
+    end
+
+    subgraph "Security Validation"
+        C --> C1[SSRF Blocking]
+        C --> C2[Secret Redaction]
+        C --> C3[PII Sanitization]
+        C --> C4[SQL Injection Guards]
+    end
+
+    subgraph "Integration Coverage"
+        D --> D1[Streaming Contract]
+        D --> D2[Resource Subscriptions]
+        D --> D3[Lease/Heartbeat]
+        D --> D4[Cache Invalidation]
+        D --> D5[Model Routing]
+        D --> D6[Webcontainer /zero]
+    end
+
+    subgraph "Performance & Reliability"
+        E --> E1[Latency Benchmarks]
+        E --> E2[Dual Embedding Eval]
+        E --> E3[Fault Injection]
+        E --> E4[Zod Schema]
+    end
+
+    subgraph "CI/CD Pipeline"
+        F[GitHub Actions] --> F1[Ubuntu × Node 18/20]
+        F --> F2[Windows × Node 18/20]
+        F --> F3[macOS × Node 18/20]
+        F --> F4[QA Report Generation]
+    end
+
+    A --> F
+    F --> G[Automated QA Report]
+    G --> H{Critical Failures?}
+    H -->|Yes| I[Block Release]
+    H -->|No| J[Production Ready]
+
+    style J fill:#22c55e,stroke:#16a34a,color:#fff
+    style I fill:#ef4444,stroke:#dc2626,color:#fff
+    style A fill:#3b82f6,stroke:#2563eb,color:#fff
+    style F fill:#8b5cf6,stroke:#7c3aed,color:#fff
+

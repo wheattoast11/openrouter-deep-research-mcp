@@ -103,9 +103,9 @@ check('CI/CD', 'GitHub Actions workflow', () => {
 });
 
 // 5. Package Configuration
-check('Package', 'Version is 1.6.0', () => {
+check('Package', 'Version is 2.1.1-beta', () => {
   const pkg = require('../package.json');
-  if (pkg.version !== '1.6.0') throw new Error(`Version is ${pkg.version}, expected 1.6.0`);
+  if (pkg.version !== '2.1.1-beta') throw new Error(`Version is ${pkg.version}, expected 2.1.1-beta`);
 });
 
 check('Package', 'Has test:suite script', () => {
@@ -113,9 +113,9 @@ check('Package', 'Has test:suite script', () => {
   if (!pkg.scripts['test:suite']) throw new Error('Missing test:suite');
 });
 
-check('Package', 'Has qa:report script', () => {
+check('Package', 'Bin scripts defined', () => {
   const pkg = require('../package.json');
-  if (!pkg.scripts['qa:report']) throw new Error('Missing qa:report');
+  if (!pkg.bin || !pkg.bin['openrouter-agents']) throw new Error('Missing bin scripts');
 });
 
 // 6. Module Loading
@@ -174,17 +174,6 @@ if (failed > 0) {
 } else {
   console.log('\n✅ ALL CHECKS PASSED - PRODUCTION READY');
 }
-
-// 5. Package metadata
-check('Package', 'Version is 2.1.1-beta', () => {
-  const pkg = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
-  if (pkg.version !== '2.1.1-beta') throw new Error(`Expected 2.1.1-beta, got ${pkg.version}`);
-});
-
-check('Package', 'Bin scripts defined', () => {
-  const pkg = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
-  if (!pkg.bin || !pkg.bin['openrouter-agents']) throw new Error('Missing bin scripts');
-});
 
 console.log('\n=== Next Steps ===');
 console.log('1. Run: npm run test:all-beta');

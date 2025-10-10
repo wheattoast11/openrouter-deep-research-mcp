@@ -6,6 +6,11 @@ const express = require('express');
 const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
 const config = require('../../config');
+const { setupWellKnownEndpoints } = require('./wellKnown');
+const { createAuthMiddleware, requireScopes, getScopesForMethod } = require('./oauthResourceServer');
+const elicitationManager = require('./elicitation');
+const { zodToJsonSchema } = require('zod-to-json-schema');
+const { McpError, ErrorCode } = require('@modelcontextprotocol/sdk/dist/cjs/types.js');
 const { 
   // Schemas
   conductResearchSchema,
@@ -38,6 +43,7 @@ const {
   retrieveSchema, // New: schema for retrieve tool
   getJobStatusSchema,
   cancelJobSchema,
+  getJobResultSchema,
   
   // Functions
   conductResearch,
@@ -51,6 +57,7 @@ const {
   
   getJobStatusTool,
   cancelJobTool,
+  getJobResultTool,
   exportReports,
   importReports,
   backupDb,
@@ -71,6 +78,7 @@ const {
   
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
+const { scheduleHttpSessionCleanup } = require('../utils/dbClient');
 const nodeFetch = require('node-fetch');
 const cors = require('cors');
 
@@ -79,9 +87,9 @@ const server = new McpServer({
   name: config.server.name,
   version: config.server.version,
   capabilities: {
-    tools: {},
-    prompts: { listChanged: true },
-    resources: { subscribe: true, listChanged: true }
+    tools: { list: true, call: true },
+    prompts: { list: true, get: true, listChanged: true },
+    resources: { list: true, read: true, subscribe: true, listChanged: true }
   }
 });
 
@@ -100,8 +108,190 @@ function shouldExpose(name) {
   if (MODE === 'MANUAL') return MANUAL_SET.has(name);
   return true; // ALL
 }
-function register(name, schema, handler) {
-  if (shouldExpose(name)) server.tool(name, schema, handler);
+
+const TOOL_DESCRIPTIONS = {
+  agent: 'Single entrypoint agent. Routes to research, follow-up, or retrieve/query actions.',
+  ping: 'Health check. Returns pong, optionally with server info.',
+  research: 'Submit research query. async:true (default) returns job_id, async:false streams results.',
+  conduct_research: 'Synchronous research; returns final text. Accepts freeform query or {query}.',
+  submit_research: 'Submit a long-running research job asynchronously. Returns a job_id immediately.',
+  job_status: 'Check async job progress with summary, events, or full detail.',
+  get_job_status: 'Alias for job_status with identical semantics.',
+  get_job_result: 'Retrieve the structured result for a completed async job.',
+  cancel_job: 'Request cancellation of a queued or running job.',
+  retrieve: 'Unified knowledge base retrieval across indexes or SQL.',
+  search: 'Simplified alias for retrieve in index mode.',
+  query: 'Simplified alias for retrieve in SQL mode.',
+  execute_sql: 'Execute a guarded SQL SELECT with optional parameter binding.',
+  list_models: 'List available model configurations; refresh optionally forces catalog reload.',
+  research_follow_up: 'Run a follow-up query building on existing research results.',
+  get_past_research: 'Retrieve semantically similar past research reports.',
+  rate_research_report: 'Record structured feedback for a research report.',
+  list_research_history: 'List recent research reports with optional filter.',
+  history: 'Alias for list_research_history.',
+  get_report: 'Get research report by ID. Supports summary/full modes.',
+  get_report_content: 'Fetch research report content with flexible output modes.',
+  get_server_status: 'Server health summary including DB/embedder/job queue status.',
+  export_reports: 'Export stored research reports as JSON or NDJSON.',
+  import_reports: 'Import research reports from JSON or NDJSON payloads.',
+  backup_db: 'Create a compressed backup archive of the local database.',
+  db_health: 'Quick database health snapshot.',
+  reindex_vectors: 'Rebuild vector indexes for semantic search.',
+  search_web: 'Perform resilient web search with optional scraping.',
+  fetch_url: 'Fetch and summarize content from a URL.',
+  index_texts: 'Index provided documents into the hybrid search store.',
+  index_url: 'Fetch and index a URL into the hybrid search store.',
+  search_index: 'Search the hybrid BM25/vector index.',
+  index_status: 'Report indexer configuration and status.',
+  list_tools: 'List available MCP tools with metadata.',
+  search_tools: 'Semantic search over available tools.',
+  date_time: 'Get current date/time in various formats.',
+  calc: 'Evaluate arithmetic expressions safely.'
+};
+
+function stripMetaArguments(params) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return params;
+  if ('_meta' in params) {
+    const { _meta, ...rest } = params;
+    return rest;
+  }
+  return params;
+}
+
+function createMcpExchange(extra) {
+  const progressToken = extra?._meta?.progressToken;
+  if (!progressToken || typeof extra?.sendNotification !== 'function') {
+    return progressToken ? { progressToken, sendProgress: () => {} } : null;
+  }
+  const sendProgress = ({ value }) => {
+    let progressValue = 0;
+    let message;
+    if (value && typeof value === 'object') {
+      if (typeof value.progress === 'number') progressValue = value.progress;
+      if (typeof value.message === 'string') {
+        message = value.message;
+      } else if (typeof value.content === 'string') {
+        message = value.content;
+      } else {
+        try {
+          message = JSON.stringify(value);
+        } catch (_) {
+          message = '[progress update]';
+        }
+      }
+    } else if (typeof value === 'string') {
+      message = value;
+    }
+    extra.sendNotification({
+      method: 'notifications/progress',
+      params: {
+        progressToken,
+        progress: progressValue,
+        ...(message ? { message } : {})
+      }
+    });
+  };
+  return { progressToken, sendProgress };
+}
+
+function tryParseJson(text) {
+  if (typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function formatToolResult(_name, rawResult) {
+  if (rawResult === undefined || rawResult === null) {
+    return { content: [] };
+  }
+  if (rawResult instanceof Error) {
+    return { content: [{ type: 'text', text: rawResult.message }], isError: true };
+  }
+  if (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult)) {
+    if (Array.isArray(rawResult.content)) {
+      return rawResult;
+    }
+    const text = JSON.stringify(rawResult, null, 2);
+    return {
+      content: [{ type: 'text', text }],
+      structuredContent: rawResult
+    };
+  }
+  if (typeof rawResult === 'string') {
+    const parsed = tryParseJson(rawResult);
+    if (parsed) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed
+      };
+    }
+    return { content: [{ type: 'text', text: rawResult }] };
+  }
+  if (Buffer.isBuffer(rawResult)) {
+    return {
+      content: [{ type: 'text', text: rawResult.toString('utf8') }]
+    };
+  }
+  return { content: [{ type: 'text', text: String(rawResult) }] };
+}
+
+function buildAnnotations(schema, extraAnnotations) {
+  const annotations = { ...(extraAnnotations || {}) };
+  if (schema) {
+    try {
+      annotations['x-schema-json'] = zodToJsonSchema(schema, { name: `${Date.now()}Params` });
+    } catch (_) {
+      // Ignore schema conversion problems
+    }
+  }
+  return Object.keys(annotations).length ? annotations : undefined;
+}
+
+function registerNormalizedTool(name, schema, handler, options = {}) {
+  if (!shouldExpose(name)) return;
+  const description = options.description || TOOL_DESCRIPTIONS[name];
+  const annotations = buildAnnotations(schema, options.annotations);
+  const registration = {
+    title: options.title,
+    description,
+    annotations
+  };
+  server.registerTool(name, registration, async (rawParams = {}, extra = {}) => {
+    const cleanedParams = stripMetaArguments(rawParams);
+    const normalized = normalizeParamsForTool(name, cleanedParams);
+    let parsed = normalized;
+    if (schema) {
+      const result = await schema.safeParseAsync(normalized);
+      if (!result.success) {
+        throw new McpError(ErrorCode.InvalidParams, result.error.message, { issues: result.error.issues });
+      }
+      parsed = result.data;
+    }
+    const requestId = extra?.requestId ? String(extra.requestId) : `req-${Date.now()}`;
+    const exchange = createMcpExchange(extra);
+    const rawResult = await handler(parsed, exchange, requestId);
+    return formatToolResult(name, rawResult);
+  });
+}
+
+const sessionStreams = new Map();
+
+function registerSessionStream(sessionId, transport, transportType = 'ws') {
+  if (!sessionId || !transport) return;
+  sessionStreams.set(sessionId, { transport, transportType });
+}
+
+function releaseSessionStream(sessionId) {
+  if (!sessionId) return;
+  sessionStreams.delete(sessionId);
 }
 
 // Permissive parameter normalizer to accept loose single-string inputs (e.g., random_string)
@@ -112,14 +302,6 @@ function extractRawParam(input) {
       if (typeof input[key] === 'string' && input[key].trim()) return input[key];
     }
   }
-  return null;
-}
-
-function tryParseJson(text) {
-  try {
-    const obj = JSON.parse(text);
-    if (obj && typeof obj === 'object') return obj;
-  } catch (_) {}
   return null;
 }
 
@@ -187,7 +369,10 @@ function normalizeParamsForTool(toolName, params) {
 
     case 'job_status':
     case 'get_job_status':
+    case 'get_job_result':
       if (parsed && parsed.job_id) return parsed;
+      if (parsed && parsed.jobId) return { ...parsed, job_id: parsed.jobId };
+      if (parsed && parsed.id) return { ...parsed, job_id: parsed.id };
       return { job_id: s || String(parsed._raw || '') };
 
     case 'cancel_job':
@@ -584,123 +769,49 @@ if (config.mcp?.features?.resources) {
   });
 }
 
-// Register tools (minimal unified set)
-register(
-  "research",
-  researchSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('research', params); const text = await researchTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error research: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "agent",
-  require('./tools').agentSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('agent', params); const text = await require('./tools').agentTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error agent: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "ping",
-  require('./tools').pingSchema,
-  async (params) => {
-    try { const text = await require('./tools').pingTool(params); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error ping: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "job_status",
-  getJobStatusSchema,
-  async (params) => {
-    try { const norm = normalizeParamsForTool('job_status', params); const text = await getJobStatusTool(norm); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error job_status: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "cancel_job",
-  cancelJobSchema,
-  async (params) => {
-    try { const norm = normalizeParamsForTool('cancel_job', params); const text = await cancelJobTool(norm); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error cancel_job: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "retrieve",
-  retrieveSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('retrieve', params); const text = await retrieveTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error retrieve: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "get_report",
-  getReportContentSchema,
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    try { const norm = normalizeParamsForTool('get_report', params); const result = await getReportContent(norm, exchange, requestId); return { content: [{ type: 'text', text: result }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error get_report: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "history",
-  listResearchHistorySchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('history', params); const text = await listResearchHistory(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error history: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "date_time",
-  dateTimeSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('date_time', params); const text = await dateTimeTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error date_time: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "calc",
-  calcSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('calc', params); const text = await calcTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error calc: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "list_tools",
-  listToolsSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('list_tools', params); const text = await listToolsTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error list_tools: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "search_tools",
-  searchToolsSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('search_tools', params); const text = await searchToolsTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error search_tools: ${e.message}` }], isError: true }; }
-  }
-);
-register(
-  "get_server_status",
-  getServerStatusSchema,
-  async (params, exchange) => {
-    try { const text = await getServerStatus({}, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error get_server_status: ${e.message}` }], isError: true }; }
-  }
-);
-
-// Back-compat aliases → unified tools
-register("submit_research", submitResearchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('submit_research', p); const t = await researchTool({ ...norm, async: true }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error submit_research: ${e.message}`}], isError:true }; }});
-register("get_job_status", getJobStatusSchema, async (p) => { try { const norm = normalizeParamsForTool('get_job_status', p); const t = await getJobStatusTool(norm); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_job_status: ${e.message}`}], isError:true }; }});
-register("search", searchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('search', p); const t = await retrieveTool({ mode: 'index', query: norm.q || norm.query, k: norm.k, scope: norm.scope, rerank: norm.rerank }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error search: ${e.message}`}], isError:true }; }});
-register("query", querySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('query', p); const t = await retrieveTool({ mode: 'sql', sql: norm.sql, params: norm.params, explain: norm.explain }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error query: ${e.message}`}], isError:true }; }});
-register("conduct_research", researchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('conduct_research', p); const t = await researchTool({ ...norm, async: false }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error conduct_research: ${e.message}`}], isError:true }; }});
-register("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
-register("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
-register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
+// Register all core tools
+registerNormalizedTool('ping', pingSchema, pingTool);
+registerNormalizedTool('agent', agentSchema, agentTool);
+registerNormalizedTool('research', researchSchema, researchTool);
+registerNormalizedTool('conduct_research', conductResearchSchema, conductResearch);
+registerNormalizedTool('submit_research', submitResearchSchema, submitResearch);
+registerNormalizedTool('job_status', getJobStatusSchema, getJobStatusTool);
+registerNormalizedTool('get_job_status', getJobStatusSchema, getJobStatusTool);
+registerNormalizedTool('get_job_result', getJobResultSchema, getJobResultTool);
+registerNormalizedTool('cancel_job', cancelJobSchema, cancelJobTool);
+registerNormalizedTool('retrieve', retrieveSchema, retrieveTool);
+registerNormalizedTool('search', searchSchema, searchTool);
+registerNormalizedTool('query', querySchema, queryTool);
+registerNormalizedTool('research_follow_up', researchFollowUpSchema, researchFollowUp);
+registerNormalizedTool('get_past_research', getPastResearchSchema, getPastResearch);
+registerNormalizedTool('rate_research_report', rateResearchReportSchema, rateResearchReport);
+registerNormalizedTool('list_research_history', listResearchHistorySchema, listResearchHistory);
+registerNormalizedTool('history', listResearchHistorySchema, listResearchHistory);
+registerNormalizedTool('get_report_content', getReportContentSchema, getReportContent);
+registerNormalizedTool('get_report', getReportContentSchema, getReportContent);
+registerNormalizedTool('get_server_status', getServerStatusSchema, getServerStatus);
+registerNormalizedTool('list_models', listModelsSchema, listModels);
+registerNormalizedTool('execute_sql', executeSqlSchema, executeSql);
+registerNormalizedTool('export_reports', exportReportsSchema, exportReports);
+registerNormalizedTool('import_reports', importReportsSchema, importReports);
+registerNormalizedTool('backup_db', backupDbSchema, backupDb);
+registerNormalizedTool('db_health', dbHealthSchema, dbHealth);
+registerNormalizedTool('reindex_vectors', reindexVectorsSchema, reindexVectorsTool);
+registerNormalizedTool('search_web', searchWebSchema, searchWeb);
+registerNormalizedTool('fetch_url', fetchUrlSchema, fetchUrl);
+registerNormalizedTool('index_texts', indexTextsSchema, index_texts);
+registerNormalizedTool('index_url', indexUrlSchema, index_url);
+registerNormalizedTool('search_index', searchIndexSchema, search_index);
+registerNormalizedTool('index_status', indexStatusSchema, index_status);
+registerNormalizedTool('list_tools', listToolsSchema, listToolsTool);
+registerNormalizedTool('search_tools', searchToolsSchema, searchToolsTool);
+registerNormalizedTool('date_time', dateTimeSchema, dateTimeTool);
+registerNormalizedTool('calc', calcSchema, calcTool);
+registerNormalizedTool('elicitation_response', z.object({ elicitationId: z.string(), data: z.any() }), async (params) => {
+  const { elicitationId, data } = params;
+  const resolved = elicitationManager.resolve(elicitationId, data);
+  return { success: resolved };
+});
  
  // Set up transports based on environment
  const setupTransports = async () => {
@@ -734,39 +845,13 @@ register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { 
     });
   }
     
-  // Authentication Middleware (JWT first, fallback API key if configured)
-  const authenticate = async (req, res, next) => {
-    const allowNoAuth = process.env.ALLOW_NO_API_KEY === 'true';
-    const authHeader = req.headers.authorization || '';
-    if (!authHeader.startsWith('Bearer ')) {
-      if (allowNoAuth) return next();
-      return res.status(401).json({ error: 'Unauthorized: Missing bearer token' });
-    }
-    const token = authHeader.split(' ')[1];
-    if (jwksUrl) {
-      try {
-        // Lazy import jose to keep dep optional
-        const { createRemoteJWKSet, jwtVerify } = require('jose');
-        const JWKS = createRemoteJWKSet(new URL(jwksUrl));
-        const { payload } = await jwtVerify(token, JWKS, { audience: expectedAudience });
-        if (!payload || (expectedAudience && payload.aud !== expectedAudience && !Array.isArray(payload.aud))) {
-          return res.status(403).json({ error: 'Forbidden: invalid token audience' });
-        }
-        return next();
-      } catch (e) {
-        if (!serverApiKey) {
-          return res.status(403).json({ error: 'Forbidden: JWT verification failed' });
-        }
-        // Fall through to API key if configured
-      }
-    }
-    if (serverApiKey && token === serverApiKey) return next();
-    if (allowNoAuth) return next();
-    return res.status(403).json({ error: 'Forbidden: Auth failed' });
-  };
- 
+  // Authentication Middleware
+  const authenticate = createAuthMiddleware();
+
+  scheduleHttpSessionCleanup();
+
   console.error(`Starting MCP server with HTTP/SSE transport on port ${port}`); // Use error
-  if (jwksUrl) {
+  if (config.auth.jwksUrl) {
     console.error(`[${new Date().toISOString()}] OAuth2/JWT auth ENABLED (JWKS=${jwksUrl}, aud=${expectedAudience}).`);
   } else if (serverApiKey) {
     console.error(`[${new Date().toISOString()}] API key fallback ENABLED for HTTP transport.`);
@@ -779,17 +864,9 @@ register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { 
   // Streamable HTTP transport (preferred) guarded by feature flag
   if (require('../../config').mcp.transport.streamableHttpEnabled) {
     try {
-      const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-      app.all('/mcp', authenticate, async (req, res) => {
-        const transport = new StreamableHTTPServerTransport({
-          enableDnsRebindingProtection: true,
-          allowedHosts: ['127.0.0.1', 'localhost'],
-          allowedOrigins: ['http://localhost', 'http://127.0.0.1']
-        });
-        res.on('close', () => transport.close());
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
-      });
+      const { setupMCPEndpoint } = require('./mcpStreamableHttp');
+      setupMCPEndpoint(app, server, authenticate, requireScopes, getScopesForMethod);
+      setupWellKnownEndpoints(app);
     } catch (e) {
       console.error('StreamableHTTP transport not available:', e.message);
     }
@@ -839,13 +916,21 @@ register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { 
    // Job events SSE per job id
    app.get('/jobs/:jobId/events', authenticate, async (req, res) => {
      const { jobId } = req.params;
+     const sinceEventId = req.headers['last-event-id'] || req.query.since_event_id || 0;
+
      res.writeHead(200, {
        'Content-Type': 'text/event-stream',
        'Cache-Control': 'no-cache',
        'Connection': 'keep-alive'
      });
-     let lastEventId = 0;
-     const send = (type, data) => { try { res.write(`event: ${type}\n`); res.write(`data: ${JSON.stringify(data)}\n\n`);} catch(_){} };
+     let lastEventId = sinceEventId;
+     const send = (type, data) => { 
+       try { 
+         if (data && data.id) res.write(`id: ${data.id}\n`);
+         res.write(`event: ${type}\n`); 
+         res.write(`data: ${JSON.stringify(data)}\n\n`);
+       } catch(_){}
+     };
      send('open', { ok: true, jobId });
      const timer = setInterval(async () => {
        try {
@@ -1053,9 +1138,15 @@ register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { 
   });
 
    // Start server
-   app.listen(port, () => {
+   const httpServer = app.listen(port, () => {
      console.error(`MCP server listening on port ${port}`); // Use error
    });
+
+   if (config.mcp.transport.websocketEnabled) {
+      const { setupWebSocketServer } = require('./wsTransport');
+      setupWebSocketServer(httpServer, server, authenticate, requireScopes, getScopesForMethod);
+   }
+
   } // Close the else block for HTTP setup
  };
 
