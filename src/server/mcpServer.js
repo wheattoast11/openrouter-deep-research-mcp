@@ -10,7 +10,7 @@ const { setupWellKnownEndpoints } = require('./wellKnown');
 const { createAuthMiddleware, requireScopes, getScopesForMethod } = require('./oauthResourceServer');
 const elicitationManager = require('./elicitation');
 const { zodToJsonSchema } = require('zod-to-json-schema');
-const { McpError, ErrorCode } = require('@modelcontextprotocol/sdk/dist/cjs/types.js');
+const { McpError, ErrorCode } = require('@modelcontextprotocol/sdk/types.js');
 const { 
   // Schemas
   conductResearchSchema,
@@ -44,9 +44,13 @@ const {
   getJobStatusSchema,
   cancelJobSchema,
   getJobResultSchema,
+  agentSchema,
+  pingSchema,
+  executeSqlSchema,
   
   // Functions
   conductResearch,
+  submitResearch,
   researchFollowUp,
   getPastResearch,
   rateResearchReport,
@@ -54,10 +58,13 @@ const {
   getReportContent,
   getServerStatus, // Import function for status tool
   listModels, // New: function for listing models
+  executeSql,
   
   getJobStatusTool,
   cancelJobTool,
   getJobResultTool,
+  searchTool,
+  queryTool,
   exportReports,
   importReports,
   backupDb,
@@ -75,7 +82,8 @@ const {
   dateTimeTool,
   calcTool,
   retrieveTool, // New: function for retrieve tool
-  
+  agentTool,
+  pingTool
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 const { scheduleHttpSessionCleanup } = require('../utils/dbClient');

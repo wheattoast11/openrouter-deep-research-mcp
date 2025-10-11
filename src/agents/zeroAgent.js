@@ -8,9 +8,10 @@ const contextAgent = require('./contextAgent');
 
 class ZeroAgent {
   constructor() {
-    this.planner = new planningAgent.PlanningAgent();
-    this.researcher = new researchAgent.ResearchAgent();
-    this.synthesizer = new contextAgent.ContextAgent();
+    // planningAgent, researchAgent, and contextAgent export instances
+    this.planner = planningAgent;
+    this.researcher = researchAgent;
+    this.synthesizer = contextAgent;
 
     // Zero behavior modes
     this.modes = {
@@ -66,7 +67,7 @@ class ZeroAgent {
         message: `Planning ${mode} approach for query`
       });
 
-      const plan = await this.planner.planQuery(request.query, {
+      const plan = await this.planner.planResearch(request.query, {
         mode: mode,
         costPreference: request.costPreference,
         audienceLevel: request.audienceLevel,
