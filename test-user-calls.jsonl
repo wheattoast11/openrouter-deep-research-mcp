@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"user-test","version":"1.0.0"}},"id":1}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ping","arguments":{"info":true}},"id":2}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"agent","arguments":{"action":"research","query":"What is the Model Context Protocol?","async":true}},"id":3}
+

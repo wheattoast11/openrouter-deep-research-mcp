@@ -1,0 +1,44 @@
+---
+alwaysApply: true
+description: Core architecture and design patterns for openrouter-agents MCP server
+---
+
+# OpenRouter Agents - Core Architecture
+
+## Project Overview
+This is a stateless, asynchronous MCP (Model Context Protocol) server v2.2+ compliant implementation with OAuth 2.1 Resource Server capabilities, bidirectional WebSocket communication, and a unified agent architecture.
+
+## Key Architectural Principles
+
+1. **Stateless by Default**: All state (jobs, caches, sessions) persists in PGlite database. Server instances are ephemeral and scalable.
+
+2. **Asynchronous Operations**: Primary `agent` tool is async, returns `job_id` immediately, results streamed over WebSocket.
+
+3. **Bidirectional Communication**: Primary transport is WebSocket (`/mcp/ws`), enabling real-time conversational interaction.
+
+4. **Unified Agent Tool**: The `agent` tool is the single entry point for research, retrieval, and follow-up tasks.
+
+## Core File Structure
+
+- [src/server/mcpServer.js](mdc:src/server/mcpServer.js) - Main server entry point, Express routes, middleware, tool registration
+- [src/server/wsTransport.js](mdc:src/server/wsTransport.js) - WebSocket transport layer with real-time messaging
+- [src/server/mcpStreamableHttp.js](mdc:src/server/mcpStreamableHttp.js) - HTTP/SSE streamable transport
+- [src/server/tools.js](mdc:src/server/tools.js) - Tool definitions and schemas (Zod-based)
+- [src/server/oauthResourceServer.js](mdc:src/server/oauthResourceServer.js) - OAuth 2.1 JWT validation and scope enforcement
+- [src/server/wellKnown.js](mdc:src/server/wellKnown.js) - Discovery endpoints (/.well-known/*)
+- [src/utils/dbClient.js](mdc:src/utils/dbClient.js) - PGlite database schema and operations
+- [src/agents/](mdc:src/agents/) - Core agent logic (planning, research, context synthesis)
+- [config.js](mdc:config.js) - Centralized configuration with environment variable loading
+
+## Critical Dependencies
+
+- `@terminals-tech/core` - BoundedExecutor for deterministic concurrency
+- `@terminals-tech/embeddings` - Standardized embedding provider (gemini-embedding-001)
+- `@terminals-tech/graph` - Knowledge graph integration
+- `@modelcontextprotocol/sdk` - MCP protocol implementation
+
+## Transport Modes
+
+1. **STDIO**: For direct integration with Claude Desktop, Cursor IDE
+2. **WebSocket**: Real-time bidirectional communication at `/mcp/ws`
+3. **HTTP Streamable**: SSE-based streaming at `/mcp` with session management

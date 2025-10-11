@@ -1,0 +1,70 @@
+---
+globs: src/server/mcpServer.js,src/server/tools.js
+description: Rules for registering and implementing MCP tools
+---
+
+# Tool Registration and Implementation
+
+## Tool Registration Pattern
+
+**Always use `registerNormalizedTool` helper** (defined in [src/server/mcpServer.js](mdc:src/server/mcpServer.js)):
+
+```javascript
+registerNormalizedTool(
+  'tool_name',           // Tool identifier (kebab-case)
+  zodSchema,             // Zod schema for input validation
+  handlerFunction,       // Async handler from tools.js
+  {
+    title: 'Human Title',
+    description: 'Tool description for clients',
+    annotations: {
+      // Optional: scope requirements, rate limits, etc.
+    }
+  }
+);
+```
+
+## Parameter Normalization
+
+The `registerNormalizedTool` wrapper automatically:
+1. Strips meta arguments (`_meta`, `_progressToken`)
+2. Applies `normalizeParamsForTool` for backward compatibility (handles `jobId`→`job_id`, etc.)
+3. Validates with Zod schema
+4. Formats output with structured content
+5. Handles progress notifications when `progressToken` is provided
+
+## Tool Handler Requirements
+
+All tool handlers in [src/server/tools.js](mdc:src/server/tools.js) must:
+
+1. **Be async functions**
+2. **Return structured objects**, not JSON strings
+3. **Accept a single params object** (Zod-validated)
+4. **Return objects that include resource links** when referencing jobs/reports:
+   ```javascript
+   return {
+     job_id: 'xyz',
+     resources: [
+       { uri: `mcp://jobs/${jobId}`, name: 'Job Status' }
+     ]
+   };
+   ```
+
+## Schema Definition
+
+Define schemas in [src/server/tools.js](mdc:src/server/tools.js) using Zod:
+
+```javascript
+const toolSchema = z.object({
+  requiredParam: z.string().describe('Description for LLM'),
+  optionalParam: z.string().optional().describe('Optional description')
+});
+```
+
+## Tool Categories
+
+1. **Always-on**: `ping`, `get_server_status`, `job_status`, `get_job_status`, `cancel_job`
+2. **Agent mode**: `agent` (unified entry point)
+3. **Manual mode**: `research`, `conduct_research`, `submit_research`, retrieval tools, indexing tools
+
+Filter via `shouldExpose(name)` based on `MODE` env variable.

@@ -47,6 +47,8 @@ const {
   agentSchema,
   pingSchema,
   executeSqlSchema,
+  browserInferenceRequestSchema,
+  browserInferenceResultSchema,
   
   // Functions
   conductResearch,
@@ -83,7 +85,9 @@ const {
   calcTool,
   retrieveTool, // New: function for retrieve tool
   agentTool,
-  pingTool
+  pingTool,
+  runBrowserInference,
+  handleBrowserInferenceResult
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 const { scheduleHttpSessionCleanup } = require('../utils/dbClient');
@@ -108,7 +112,8 @@ const AGENT_ONLY = new Set(['agent']);
 const MANUAL_SET = new Set([
   'research','conduct_research','submit_research','research_follow_up',
   'retrieve','search','query',
-  'get_report','get_report_content','history','list_research_history'
+  'get_report','get_report_content','history','list_research_history',
+  'browser_inference_request','browser_inference_result'
 ]);
 function shouldExpose(name) {
   if (ALWAYS_ON.has(name)) return true;
@@ -154,7 +159,9 @@ const TOOL_DESCRIPTIONS = {
   list_tools: 'List available MCP tools with metadata.',
   search_tools: 'Semantic search over available tools.',
   date_time: 'Get current date/time in various formats.',
-  calc: 'Evaluate arithmetic expressions safely.'
+  calc: 'Evaluate arithmetic expressions safely.',
+  browser_inference_request: 'Request a client (browser) to perform LLM inference.',
+  browser_inference_result: 'Handle LLM inference results received from a client (browser).',
 };
 
 function stripMetaArguments(params) {
@@ -820,6 +827,8 @@ registerNormalizedTool('elicitation_response', z.object({ elicitationId: z.strin
   const resolved = elicitationManager.resolve(elicitationId, data);
   return { success: resolved };
 });
+registerNormalizedTool('browser_inference_request', browserInferenceRequestSchema, runBrowserInference);
+registerNormalizedTool('browser_inference_result', browserInferenceResultSchema, handleBrowserInferenceResult);
  
  // Set up transports based on environment
  const setupTransports = async () => {

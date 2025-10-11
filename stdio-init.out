@@ -1,0 +1,32 @@
+[2025-10-11T20:07:09.755Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:07:10.710Z] In-memory cache initialized with TTL: 3600s, max keys: 100
+[2025-10-11T20:07:10.723Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:07:10.723Z] Waiting 500ms before retrying DB initialization (last attempt 0ms ago)
+(node:28096) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+{"result":{"protocolVersion":"2025-03-26","capabilities":{"prompts":{"listChanged":true},"completions":{},"resources":{"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"openrouter_agents","version":"2.1.1-beta","capabilities":{"tools":{"list":true,"call":true},"prompts":{"list":true,"get":true,"listChanged":true},"resources":{"list":true,"read":true,"subscribe":true,"listChanged":true}}}},"jsonrpc":"2.0","id":1}
+[2025-10-11T20:07:10.897Z] Successfully imported @xenova/transformers.
+[2025-10-11T20:07:10.897Z] Initializing embedding model Xenova/all-MiniLM-L6-v2...
+[2025-10-11T20:07:11.133Z] Embedding model initialized successfully.
+[2025-10-11T20:07:13.165Z] PGLite vector extension enabled
+[2025-10-11T20:07:13.177Z] PGLite reports table created or verified
+[2025-10-11T20:07:13.210Z] BM25/vector index tables created or verified
+[2025-10-11T20:07:13.226Z] Job tables created or verified
+[2025-10-11T20:07:13.230Z] mcp_sessions table created or verified
+[2025-10-11T20:07:13.235Z] usage_counters table created or verified
+[2025-10-11T20:07:13.241Z] PGLite indexes created or verified
+[2025-10-11T20:07:13.253Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:07:14.267Z] PGLite vector extension enabled
+[2025-10-11T20:07:14.273Z] PGLite reports table created or verified
+[2025-10-11T20:07:14.292Z] BM25/vector index tables created or verified
+[2025-10-11T20:07:14.301Z] Job tables created or verified
+[2025-10-11T20:07:14.304Z] mcp_sessions table created or verified
+[2025-10-11T20:07:14.307Z] usage_counters table created or verified
+[2025-10-11T20:07:14.311Z] PGLite indexes created or verified
+[2025-10-11T20:07:15.765Z] PGLite vector extension enabled
+[2025-10-11T20:07:15.771Z] PGLite reports table created or verified
+[2025-10-11T20:07:15.789Z] BM25/vector index tables created or verified
+[2025-10-11T20:07:15.800Z] Job tables created or verified
+[2025-10-11T20:07:15.804Z] mcp_sessions table created or verified
+[2025-10-11T20:07:15.807Z] usage_counters table created or verified
+[2025-10-11T20:07:15.811Z] PGLite indexes created or verified

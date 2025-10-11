@@ -1,0 +1,236 @@
+---
+globs: src/**/*.js
+description: Error handling and logging patterns
+---
+
+# Error Handling and Logging
+
+## Error Types
+
+### 1. MCP Protocol Errors
+
+Use `McpError` from `@modelcontextprotocol/sdk`:
+
+```javascript
+const { McpError, ErrorCode } = require('@modelcontextprotocol/sdk/dist/cjs/types.js');
+
+throw new McpError(
+  ErrorCode.InvalidParams,
+  'Parameter validation failed: missing required field "query"'
+);
+```
+
+Standard error codes:
+- `ErrorCode.ParseError` (-32700)
+- `ErrorCode.InvalidRequest` (-32600)
+- `ErrorCode.MethodNotFound` (-32601)
+- `ErrorCode.InvalidParams` (-32602)
+- `ErrorCode.InternalError` (-32603)
+
+### 2. Custom Application Errors
+
+For domain-specific errors:
+
+```javascript
+class InsufficientScopeError extends Error {
+  constructor(requiredScopes, userScopes) {
+    super('Insufficient scope');
+    this.name = 'InsufficientScopeError';
+    this.code = -32001;
+    this.requiredScopes = requiredScopes;
+    this.userScopes = userScopes;
+  }
+}
+```
+
+### 3. WebSocket Close Codes
+
+Standard codes for WebSocket termination:
+- `1000` - Normal closure
+- `1002` - Protocol error (unsupported version)
+- `1008` - Policy violation (auth failure)
+- `4403` - Custom: Insufficient scope
+
+```javascript
+ws.close(1008, 'Unauthorized: Invalid token');
+```
+
+## Logging Standards
+
+### Log Levels
+
+Use environment variable `LOG_LEVEL`:
+- `error` - Errors only
+- `warn` - Errors + warnings
+- `info` - Errors + warnings + info (default)
+- `debug` - All logs including verbose details
+
+### Log Format
+
+Always include ISO timestamp and context:
+
+```javascript
+console.error(`[${new Date().toISOString()}] [${requestId}] Error message`, error);
+```
+
+For structured logging:
+```javascript
+console.log(JSON.stringify({
+  timestamp: new Date().toISOString(),
+  level: 'info',
+  requestId: 'req-123',
+  message: 'Job started',
+  data: { jobId, operation }
+}));
+```
+
+## Error Responses
+
+### JSON-RPC Format
+
+```javascript
+{
+  jsonrpc: '2.0',
+  id: requestId,
+  error: {
+    code: -32602,
+    message: 'Invalid params',
+    data: {
+      field: 'query',
+      reason: 'Required field missing'
+    }
+  }
+}
+```
+
+### HTTP Error Format
+
+For non-JSON-RPC HTTP endpoints:
+
+```javascript
+res.status(400).json({
+  error: 'Bad Request',
+  message: 'Missing required parameter',
+  details: { field: 'query' }
+});
+```
+
+## Try-Catch Patterns
+
+### Async Tool Handlers
+
+Always wrap in try-catch:
+
+```javascript
+async function toolHandler(params) {
+  try {
+    // Tool logic
+    return result;
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Tool error:`, error);
+    throw new McpError(
+      ErrorCode.InternalError,
+      error.message || 'Internal error'
+    );
+  }
+}
+```
+
+### Database Operations
+
+Handle specific errors:
+
+```javascript
+try {
+  const result = await db.query(sql, params);
+  return result;
+} catch (error) {
+  if (error.code === 'SQLITE_CONSTRAINT') {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'Duplicate entry'
+    );
+  }
+  console.error('Database error:', error);
+  throw new McpError(
+    ErrorCode.InternalError,
+    'Database operation failed'
+  );
+}
+```
+
+## Validation Errors
+
+Use Zod's error messages:
+
+```javascript
+const result = await schema.safeParseAsync(params);
+if (!result.success) {
+  throw new McpError(
+    ErrorCode.InvalidParams,
+    result.error.message
+  );
+}
+```
+
+## Background Job Errors
+
+Capture errors in job events:
+
+```javascript
+try {
+  const result = await doWork(params);
+  await dbClient.setJobStatus(jobId, 'succeeded', result);
+} catch (error) {
+  await dbClient.appendJobEvent(jobId, {
+    type: 'error',
+    message: error.message,
+    stack: error.stack
+  });
+  await dbClient.setJobStatus(jobId, 'failed', {
+    error: error.message
+  });
+}
+```
+
+## OAuth Error Responses
+
+Include WWW-Authenticate header:
+
+```javascript
+res.setHeader('WWW-Authenticate',
+  `Bearer realm="${config.server.name}", ` +
+  `error="invalid_token", ` +
+  `error_description="Token expired", ` +
+  `resource_metadata="${config.server.publicUrl}/.well-known/oauth-protected-resource"`
+);
+res.status(401).json({
+  error: 'Unauthorized',
+  message: 'Token expired'
+});
+```
+
+## Graceful Degradation
+
+For non-critical failures:
+
+```javascript
+let enrichedData = baseData;
+try {
+  enrichedData = await enrichWithMetadata(baseData);
+} catch (error) {
+  console.warn(`[${new Date().toISOString()}] Metadata enrichment failed:`, error.message);
+  // Continue with base data
+}
+```
+
+## STDIO Transport Special Case
+
+**Never log to stdout/stderr when STDIO transport is active** (interferes with JSON-RPC):
+
+```javascript
+if (process.argv.includes('--stdio')) {
+  // NO console.log, console.error, or console.warn
+  // Use file-based logging if needed
+}
+```

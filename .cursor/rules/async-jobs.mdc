@@ -1,0 +1,128 @@
+---
+globs: src/utils/dbClient.js,src/agents/*.js,src/server/tools.js
+description: Async job lifecycle implementation (SEP-1391 compliance)
+---
+
+# Async Job Lifecycle
+
+## Job States
+
+Jobs in `job_queue` table ([src/utils/dbClient.js](mdc:src/utils/dbClient.js)):
+
+1. `queued` - Submitted, awaiting execution
+2. `running` - Currently executing
+3. `succeeded` - Completed successfully with result
+4. `failed` - Terminated with error
+5. `cancelled` - Cancelled by user/system
+
+## Job Creation
+
+```javascript
+const jobId = await dbClient.createJob({
+  operation: 'research',
+  params: { query: 'question' },
+  status: 'queued'
+});
+```
+
+## Event Streaming
+
+Jobs emit events via `appendJobEvent`:
+
+```javascript
+await dbClient.appendJobEvent(jobId, {
+  type: 'progress',
+  message: 'Starting research...',
+  progress: 0.1
+});
+```
+
+Event types:
+- `progress` - Progress updates (0.0-1.0)
+- `intermediate` - Partial results
+- `status_change` - State transitions
+- `error` - Error details
+
+## Job Retrieval Tools
+
+1. **`job_status`** / **`get_job_status`**: Returns current status + recent events
+   - Params: `job_id`, optional `format` ('summary'|'events'|'full')
+   - Returns structured object with status, progress, events
+
+2. **`get_job_result`**: Returns final result for succeeded jobs
+   - Params: `job_id`
+   - Returns result object (e.g., research report)
+
+3. **`cancel_job`**: Request cancellation
+   - Params: `job_id`
+   - Returns cancellation acknowledgment
+
+## Submission Pattern
+
+For async tools (e.g., `submit_research`):
+
+```javascript
+async function submitResearch(params) {
+  const jobId = await dbClient.createJob({
+    operation: 'research',
+    params: params,
+    status: 'queued'
+  });
+  
+  // Start background worker (don't await)
+  executeResearchJob(jobId, params).catch(err => {
+    dbClient.setJobStatus(jobId, 'failed', { error: err.message });
+  });
+  
+  return {
+    job_id: jobId,
+    status: 'queued',
+    resources: [
+      { uri: `mcp://jobs/${jobId}`, name: 'Job Status' },
+      { uri: `mcp://jobs/${jobId}/events`, name: 'Event Stream' }
+    ]
+  };
+}
+```
+
+## Progress Notifications
+
+When `progressToken` is provided by client:
+
+```javascript
+const exchange = createMcpExchange(extra); // from mcpServer.js
+if (exchange) {
+  await exchange.sendProgress({
+    progress: 0.5,
+    message: 'Halfway done...'
+  });
+}
+```
+
+## Resumable Event Cursors
+
+Event queries support `since_event_id` for resumption:
+
+```javascript
+const events = await dbClient.getJobEvents(jobId, { 
+  since_event_id: lastSeenEventId 
+});
+```
+
+## Concurrency Control
+
+Use `BoundedExecutor` from `@terminals-tech/core` for parallel operations:
+
+```javascript
+const { BoundedExecutor } = require('@terminals-tech/core');
+
+const executor = new BoundedExecutor({ 
+  concurrency: parallelism 
+});
+
+const results = await Promise.all(
+  queries.map(q => executor.submit(() => doWork(q)))
+);
+```
+
+Used in [src/agents/researchAgent.js](mdc:src/agents/researchAgent.js) for parallel research.

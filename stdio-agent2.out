@@ -1,0 +1,34 @@
+[2025-10-11T20:37:41.826Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:37:42.838Z] In-memory cache initialized with TTL: 3600s, max keys: 100
+[2025-10-11T20:37:42.859Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:37:42.859Z] Waiting 500ms before retrying DB initialization (last attempt 0ms ago)
+(node:26612) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+{"result":{"protocolVersion":"2025-03-26","capabilities":{"prompts":{"listChanged":true},"completions":{},"resources":{"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"openrouter_agents","version":"2.1.1-beta","capabilities":{"tools":{"list":true,"call":true},"prompts":{"list":true,"get":true,"listChanged":true},"resources":{"list":true,"read":true,"subscribe":true,"listChanged":true}}}},"jsonrpc":"2.0","id":1}
+[2025-10-11T20:37:43.349Z] Successfully imported @xenova/transformers.
+[2025-10-11T20:37:43.350Z] Initializing embedding model Xenova/all-MiniLM-L6-v2...
+[2025-10-11T20:37:43.360Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+Error calling OpenRouter API: { error: { message: 'No auth credentials found', code: 401 } }
+{"result":{"content":[{"type":"text","text":"Agent execution failed: Cannot read properties of undefined (reading 'substring')"}],"isError":true},"jsonrpc":"2.0","id":2}
+[2025-10-11T20:37:45.682Z] PGLite vector extension enabled
+[2025-10-11T20:37:45.689Z] PGLite reports table created or verified
+[2025-10-11T20:37:45.708Z] BM25/vector index tables created or verified
+[2025-10-11T20:37:45.715Z] Job tables created or verified
+[2025-10-11T20:37:45.718Z] mcp_sessions table created or verified
+[2025-10-11T20:37:45.721Z] usage_counters table created or verified
+[2025-10-11T20:37:45.725Z] PGLite indexes created or verified
+[2025-10-11T20:37:46.654Z] PGLite vector extension enabled
+[2025-10-11T20:37:46.659Z] PGLite reports table created or verified
+[2025-10-11T20:37:46.676Z] BM25/vector index tables created or verified
+[2025-10-11T20:37:46.684Z] Job tables created or verified
+[2025-10-11T20:37:46.687Z] mcp_sessions table created or verified
+[2025-10-11T20:37:46.690Z] usage_counters table created or verified
+[2025-10-11T20:37:46.694Z] PGLite indexes created or verified
+[2025-10-11T20:37:47.620Z] PGLite vector extension enabled
+[2025-10-11T20:37:47.625Z] PGLite reports table created or verified
+[2025-10-11T20:37:47.640Z] BM25/vector index tables created or verified
+[2025-10-11T20:37:47.648Z] Job tables created or verified
+[2025-10-11T20:37:47.650Z] mcp_sessions table created or verified
+[2025-10-11T20:37:47.653Z] usage_counters table created or verified
+[2025-10-11T20:37:47.657Z] PGLite indexes created or verified
+[2025-10-11T20:37:47.833Z] Embedding model initialized successfully.

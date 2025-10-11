@@ -1488,7 +1488,9 @@ const TOOL_CATALOG = [
   { name: 'date_time', description: "Current date/time. format: 'iso'|'rfc'|'epoch' (aka 'unix'); accepts freeform iso/rfc/epoch too." },
   { name: 'calc', description: 'Evaluate math: +,-,*,/,^,(), decimals. Accepts freeform expression or {expr}.' },
   { name: 'list_tools', description: 'Show all available tools with parameters.' },
-  { name: 'search_tools', description: 'Find tools by semantic search. Requires query parameter.' }
+  { name: 'search_tools', description: 'Find tools by semantic search. Requires query parameter.' },
+  { name: 'browser_inference_request', description: 'Request a client (browser) to perform LLM inference. Returns a confirmation that the request was sent.' },
+  { name: 'browser_inference_result', description: 'Internal tool for receiving LLM inference results from a browser client.' }
 ];
 
 function summarizeParamsForTool(name) {
@@ -1524,6 +1526,8 @@ function summarizeParamsForTool(name) {
     case 'search_tools': return ['query', 'limit?'];
     case 'date_time': return ['format?'];
     case 'get_server_status': return [];
+    case 'browser_inference_request': return ['model', 'prompt', 'options?'];
+    case 'browser_inference_result': return ['model', 'result'];
     default: return [];
   }
 }
@@ -1682,6 +1686,60 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
   const { ZeroAgent } = require('../agents/zeroAgent');
   const agent = params.__zeroInstance || new ZeroAgent();
 
+  // Build request object that ZeroAgent.execute expects
+  const request = {
+    query: params.query,
+    action: params.action || 'research',
+    costPreference: params.costPreference || 'low',
+    audienceLevel: params.audienceLevel,
+    outputFormat: params.outputFormat,
+    includeSources: params.includeSources,
+    images: params.images,
+    textDocuments: params.textDocuments,
+    structuredData: params.structuredData,
+    inputEmbeddings: params.inputEmbeddings
+  };
+
+  // If async=true (default), submit as job and return job_id immediately
+  if (params.async !== false) {
+    try {
+      const jobId = await dbClient.createJob({
+        operation: 'agent',
+        params: request,
+        status: 'queued'
+      });
+
+      // Execute agent in background
+      setImmediate(async () => {
+        try {
+          await dbClient.setJobStatus(jobId, 'running');
+          
+          const onEvent = async (type, payload) => {
+            await dbClient.appendJobEvent(jobId, type, payload || {});
+          };
+
+          const result = await agent.execute(request, { job_id: jobId }, onEvent);
+          
+          await dbClient.setJobStatus(jobId, 'succeeded', {
+            synthesis: result.synthesis,
+            reportId: result.metadata?.reportId,
+            duration_ms: result.metadata?.duration_ms
+          });
+        } catch (error) {
+          await dbClient.setJobStatus(jobId, 'failed', { error: error.message });
+        }
+      });
+
+      return { job_id: jobId, status: 'queued' };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Failed to submit job: ${error.message}` }],
+        isError: true
+      };
+    }
+  }
+
+  // Synchronous execution (async=false)
   const onEvent = async (type, payload) => {
     if (mcpExchange && typeof mcpExchange.sendProgress === 'function') {
       const value = { type, ...payload };
@@ -1690,7 +1748,7 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
   };
 
   try {
-    const result = await agent.execute(params, { job_id: requestId }, onEvent);
+    const result = await agent.execute(request, { job_id: requestId }, onEvent);
     
     // Final result should be a structured object
     return {
@@ -1740,6 +1798,58 @@ async function pingTool(params) {
   }
 }
 
+// Schemas for new browser inference tools
+const browserInferenceRequestSchema = z.object({
+  model: z.string().describe("The name of the local model to use for inference (e.g., 'qwen', 'utopia')."),
+  prompt: z.string().min(1).describe("The input prompt for the model."),
+  options: z.record(z.any()).optional().describe("Optional inference options for the model."),
+  _mcpExchange: z.any().optional().describe("Internal MCP exchange context for progress reporting"),
+  _requestId: z.string().optional().describe("Internal request ID for logging")
+}).describe("Request the client to perform an LLM inference using a local browser-based model.");
+
+const browserInferenceResultSchema = z.object({
+  model: z.string().describe("The name of the model that performed the inference."),
+  result: z.any().describe("The inference result from the browser-based model."),
+  _requestId: z.string().optional().describe("Internal request ID for logging")
+}).describe("Receive inference results from a client-side browser-based LLM.");
+
+// Implementation for browser_inference_request tool
+async function runBrowserInference(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { model, prompt, options } = params;
+  console.error(`[${new Date().toISOString()}] [${requestId}] runBrowserInference: Requesting client inference for model ${model} with prompt "${prompt.substring(0, 50)}..."`);
+
+  if (!mcpExchange || typeof mcpExchange.sendEvent !== 'function') {
+    throw new Error(`[${requestId}] Cannot initiate browser inference: No MCP exchange or sendEvent function available.`);
+  }
+
+  // Send a specific event to the client to trigger browser-side inference
+  mcpExchange.sendEvent('browser.inference.request', {
+    model,
+    prompt,
+    options,
+    requestId // Pass requestId so client can echo it back
+  });
+
+  return JSON.stringify({ status: 'request_sent', model, requestId });
+}
+
+// Implementation for browser_inference_result tool
+async function handleBrowserInferenceResult(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { model, result } = params;
+  console.error(`[${new Date().toISOString()}] [${requestId}] handleBrowserInferenceResult: Received inference result from model ${model}.`);
+
+  // Here, you would typically process the result, e.g., store it,
+  // feed it to another agent, or forward it to the original requester.
+  // For now, we'll just log and return an acknowledgment.
+
+  // Example: If this was part of an ongoing job, you might append to job events
+  if (requestId && requestId.startsWith('job_')) {
+    await dbClient.appendJobEvent(requestId, 'browser_inference_completed', { model, result });
+  }
+
+  return JSON.stringify({ status: 'result_received', model, result, requestId });
+}
+
 module.exports = {
   // Schemas
   conductResearchSchema,
@@ -1774,6 +1884,10 @@ module.exports = {
   dateTimeSchema,
   calcSchema,
   retrieveSchema,
+  
+  // New browser inference schemas
+  browserInferenceRequestSchema,
+  browserInferenceResultSchema,
   
   // Functions
   conductResearch,
@@ -1812,5 +1926,9 @@ module.exports = {
   agentSchema,
   agentTool,
   pingSchema,
-  pingTool
+  pingTool,
+
+  // New browser inference functions
+  runBrowserInference,
+  handleBrowserInferenceResult
 };

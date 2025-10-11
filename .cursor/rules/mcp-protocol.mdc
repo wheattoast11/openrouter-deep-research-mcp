@@ -1,0 +1,150 @@
+---
+globs: src/server/wsTransport.js,src/server/mcpStreamableHttp.js,src/server/mcpServer.js
+description: MCP protocol v2.2 compliance rules and version negotiation
+---
+
+# MCP Protocol v2.2 Compliance
+
+## Supported Protocol Versions
+
+Configured in [config.js](mdc:config.js):
+- Minimum: `2024-11-05`
+- Recommended: `2025-03-26`
+- Latest: `2025-06-18` (June 2025 draft)
+
+## Version Negotiation
+
+### WebSocket ([src/server/wsTransport.js](mdc:src/server/wsTransport.js))
+
+On `initialize` request:
+```javascript
+const negotiatedVersion = negotiateProtocolVersion(
+  message.params?.protocolVersion
+);
+
+if (!negotiatedVersion) {
+  this.send({
+    jsonrpc: '2.0',
+    id: message.id,
+    error: {
+      code: -32600,
+      message: `Unsupported protocol version`,
+      data: { supported: config.mcp.supportedVersions }
+    }
+  });
+  this.ws.close(1002, 'Unsupported protocol version');
+  return;
+}
+```
+
+### HTTP ([src/server/mcpStreamableHttp.js](mdc:src/server/mcpStreamableHttp.js))
+
+Require `MCP-Protocol-Version` header:
+```javascript
+const protocolVersion = req.headers['mcp-protocol-version'];
+const supported = config.mcp.supportedVersions;
+
+if (!supported.includes(protocolVersion)) {
+  return res.status(400).json({
+    jsonrpc: '2.0',
+    error: {
+      code: -32600,
+      message: `Unsupported MCP-Protocol-Version: ${protocolVersion}`,
+      data: { supported }
+    }
+  });
+}
+```
+
+## Capability Advertisement
+
+**Must include explicit capability flags** (2025 spec requirement):
+
+```javascript
+const server = new McpServer({
+  name: config.server.name,
+  version: config.server.version,
+  capabilities: {
+    tools: { list: true, call: true },
+    prompts: { list: true, get: true, listChanged: true },
+    resources: { list: true, read: true, subscribe: true, listChanged: true }
+  }
+});
+```
+
+Return same structure in `initialize` response on all transports.
+
+## JSON-RPC Rules
+
+1. **No batch requests**: Always reject arrays
+   ```javascript
+   if (Array.isArray(message)) {
+     return this.send({
+       jsonrpc: '2.0',
+       error: { code: -32600, message: 'Batch requests are not supported.' },
+       id: null
+     });
+   }
+   ```
+
+2. **Single message per request**: HTTP and WebSocket enforce this
+
+3. **Error codes**: Use standard JSON-RPC codes
+   - `-32600`: Invalid Request
+   - `-32601`: Method not found
+   - `-32602`: Invalid params
+   - `-32001`: Insufficient scope (custom)
+
+## Session Management (HTTP Only)
+
+1. After `initialize`, client receives `Mcp-Session-Id` header
+2. Client must include `Mcp-Session-Id` on subsequent requests
+3. Sessions stored in `mcp_sessions` table with TTL
+4. Periodic cleanup via `scheduleHttpSessionCleanup()` in [src/utils/dbClient.js](mdc:src/utils/dbClient.js)
+
+## Structured Tool Outputs (2025 spec)
+
+Tool results **must** include both `content` array and optional structured data:
+
+```javascript
+return {
+  content: [
+    { type: 'text', text: 'Human-readable summary' },
+    { type: 'resource', uri: 'mcp://jobs/123', name: 'Job' }
+  ],
+  // Optional structured data for programmatic access
+  structuredContent: {
+    job_id: '123',
+    status: 'succeeded'
+  }
+};
+```
+
+Format applied automatically by `formatToolResult` in [src/server/mcpServer.js](mdc:src/server/mcpServer.js).
+
+## Re-initialization
+
+Prevent re-init on same connection:
+```javascript
+if (this.initialized) {
+  this.send({
+    jsonrpc: '2.0',
+    id: message.id,
+    error: { 
+      code: -32600, 
+      message: 'Already initialized' 
+    }
+  });
+  return;
+}
+```
+
+## Transport URLs
+
+Advertise in `/.well-known/mcp-server`:
+```javascript
+transports: [
+  { type: 'websocket', path: '/mcp/ws' },
+  { type: 'http_streamable', path: '/mcp' }
+]
+```

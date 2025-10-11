@@ -1,0 +1,172 @@
+---
+globs: tests/*.js,tests/*.spec.js
+description: Testing standards and patterns for MCP server
+---
+
+# Testing Standards
+
+## Test Structure
+
+All tests in [tests/](mdc:tests/) directory using Node.js `assert` module.
+
+### Test Categories
+
+1. **MCP SDK Compatibility** - [tests/mcp-sdk-compatibility.spec.js](mdc:tests/mcp-sdk-compatibility.spec.js)
+   - Tool registration and listing
+   - Parameter normalization
+   - Capability advertisement
+
+2. **Async Lifecycle** - [tests/mcp-async-lifecycle.spec.js](mdc:tests/mcp-async-lifecycle.spec.js)
+   - Job submission → status → result
+   - Event streaming and cursors
+   - Cancellation
+
+3. **OAuth/Authorization** - [tests/mcp-oauth-authz.spec.js](mdc:tests/mcp-oauth-authz.spec.js)
+   - JWT validation (success/failure)
+   - Scope enforcement
+   - WWW-Authenticate challenges
+
+4. **Structured Outputs** - [tests/mcp-structured-output.spec.js](mdc:tests/mcp-structured-output.spec.js)
+   - Tool result format compliance
+   - Resource links in responses
+   - Content array structure
+
+5. **Protocol Compliance** - [tests/mcp-matrix.spec.js](mdc:tests/mcp-matrix.spec.js)
+   - Version negotiation (WS + HTTP)
+   - Batch rejection
+   - Initialize flow
+   - Session management (HTTP)
+
+## Test Server Pattern
+
+Spawn ephemeral server instance per test:
+
+```javascript
+async function spawnServer(env, port) {
+  const child = spawn(process.execPath, [SERVER_ENTRY], {
+    cwd: PROJECT_ROOT,
+    env: {
+      ...process.env,
+      ...env,
+      SERVER_PORT: String(port),
+      LOG_LEVEL: 'warn'
+    },
+    stdio: ['ignore', 'ignore', 'inherit']
+  });
+
+  // Wait for health check
+  const url = `http://127.0.0.1:${port}/about`;
+  const start = Date.now();
+  while (Date.now() - start < 15000) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        return {
+          child,
+          async stop() {
+            child.kill('SIGTERM');
+            await new Promise(r => child.once('exit', r));
+          }
+        };
+      }
+    } catch (_) {}
+    await delay(300);
+  }
+  throw new Error('Server failed to start');
+}
+```
+
+## WebSocket Test Pattern
+
+```javascript
+const ws = new WebSocket(`ws://127.0.0.1:${PORT}/mcp/ws?token=${TOKEN}`);
+
+const sendRequest = (method, params) => {
+  const id = Date.now();
+  ws.send(JSON.stringify({
+    jsonrpc: '2.0',
+    method,
+    params,
+    id
+  }));
+  return new Promise((resolve, reject) => {
+    const handler = (msg) => {
+      const data = JSON.parse(msg.toString());
+      if (data.id === id) {
+        ws.off('message', handler);
+        resolve(data);
+      }
+    };
+    ws.on('message', handler);
+  });
+};
+
+// Initialize
+const initResp = await sendRequest('initialize', {
+  protocolVersion: '2025-03-26',
+  capabilities: {},
+  clientInfo: { name: 'test-client', version: '1.0.0' }
+});
+
+assert.strictEqual(initResp.result.protocolVersion, '2025-03-26');
+```
+
+## HTTP Test Pattern
+
+```javascript
+const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${TOKEN}`,
+    'MCP-Protocol-Version': '2025-03-26'
+  },
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'tools/list',
+    id: 1
+  })
+});
+
+const payload = await res.json();
+assert.ok(Array.isArray(payload.result.tools));
+```
+
+## Assertions
+
+Use descriptive assertion messages:
+```javascript
+assert.strictEqual(actual, expected, 'Job status should be succeeded');
+assert.ok(condition, 'Resource links must be present in response');
+```
+
+## Test Environment Variables
+
+Override for tests:
+- `SERVER_PORT` - Unique port per test to avoid conflicts
+- `LOG_LEVEL=warn` - Reduce noise
+- `ALLOW_NO_API_KEY=true` - Skip auth for basic tests
+- `MODE=AGENT` or `MODE=ALL` - Control tool exposure
+
+## Parallel Execution
+
+Tests should be independent and parallelizable. Use unique ports (38501-38510 range).
+
+## Mock Data
+
+For OAuth tests, generate mock JWTs:
+```javascript
+const jwt = require('jsonwebtoken');
+const token = jwt.sign(
+  { sub: 'user123', aud: 'mcp-server', scope: 'mcp:tools:list' },
+  PRIVATE_KEY,
+  { algorithm: 'RS256' }
+);
+```
+
+## Coverage Goals
+
+- Protocol compliance: 100% of MCP spec requirements
+- Auth/authz: All scope combinations
+- Job lifecycle: All state transitions
+- Error cases: Invalid inputs, missing auth, insufficient scope

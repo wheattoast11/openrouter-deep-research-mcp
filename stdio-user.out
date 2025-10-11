@@ -1,0 +1,34 @@
+[2025-10-11T20:32:05.622Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:32:06.470Z] In-memory cache initialized with TTL: 3600s, max keys: 100
+[2025-10-11T20:32:06.487Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:32:06.487Z] Waiting 499ms before retrying DB initialization (last attempt 1ms ago)
+(node:28820) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+{"result":{"protocolVersion":"2025-03-26","capabilities":{"prompts":{"listChanged":true},"completions":{},"resources":{"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"openrouter_agents","version":"2.1.1-beta","capabilities":{"tools":{"list":true,"call":true},"prompts":{"list":true,"get":true,"listChanged":true},"resources":{"list":true,"read":true,"subscribe":true,"listChanged":true}}}},"jsonrpc":"2.0","id":1}
+{"result":{"content":[{"type":"text","text":"{\n  \"pong\": true,\n  \"time\": \"2025-10-11T20:32:06.512Z\"\n}"}],"structuredContent":{"pong":true,"time":"2025-10-11T20:32:06.512Z"}},"jsonrpc":"2.0","id":2}
+{"result":{"content":[{"type":"text","text":"planningAgent.PlanningAgent is not a constructor"}],"isError":true},"jsonrpc":"2.0","id":3}
+[2025-10-11T20:32:06.680Z] Successfully imported @xenova/transformers.
+[2025-10-11T20:32:06.680Z] Initializing embedding model Xenova/all-MiniLM-L6-v2...
+[2025-10-11T20:32:06.960Z] Embedding model initialized successfully.
+[2025-10-11T20:32:08.438Z] PGLite vector extension enabled
+[2025-10-11T20:32:08.444Z] PGLite reports table created or verified
+[2025-10-11T20:32:08.461Z] BM25/vector index tables created or verified
+[2025-10-11T20:32:08.470Z] Job tables created or verified
+[2025-10-11T20:32:08.473Z] mcp_sessions table created or verified
+[2025-10-11T20:32:08.476Z] usage_counters table created or verified
+[2025-10-11T20:32:08.480Z] PGLite indexes created or verified
+[2025-10-11T20:32:08.482Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:32:09.582Z] PGLite vector extension enabled
+[2025-10-11T20:32:09.597Z] PGLite reports table created or verified
+[2025-10-11T20:32:09.627Z] BM25/vector index tables created or verified
+[2025-10-11T20:32:09.647Z] Job tables created or verified
+[2025-10-11T20:32:09.653Z] mcp_sessions table created or verified
+[2025-10-11T20:32:09.658Z] usage_counters table created or verified
+[2025-10-11T20:32:09.665Z] PGLite indexes created or verified
+[2025-10-11T20:32:10.872Z] PGLite vector extension enabled
+[2025-10-11T20:32:10.879Z] PGLite reports table created or verified
+[2025-10-11T20:32:10.911Z] BM25/vector index tables created or verified
+[2025-10-11T20:32:10.926Z] Job tables created or verified
+[2025-10-11T20:32:10.932Z] mcp_sessions table created or verified
+[2025-10-11T20:32:10.938Z] usage_counters table created or verified
+[2025-10-11T20:32:10.946Z] PGLite indexes created or verified

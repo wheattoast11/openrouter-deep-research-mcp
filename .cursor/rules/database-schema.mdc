@@ -1,0 +1,141 @@
+---
+globs: src/utils/dbClient.js,sql/*.sql
+description: PGlite database schema and operations
+---
+
+# Database Schema and Operations
+
+## Core Tables
+
+Defined in [src/utils/dbClient.js](mdc:src/utils/dbClient.js):
+
+### 1. `research_reports`
+Research artifacts with vector embeddings:
+- `id` (TEXT PRIMARY KEY)
+- `query` (TEXT)
+- `content` (TEXT)
+- `created_at` (TIMESTAMP)
+- `embedding` (VECTOR(768)) - Gemini embedding
+- `metadata` (JSONB) - Cost, model, sources, rating
+
+### 2. `job_queue`
+Async job state:
+- `job_id` (TEXT PRIMARY KEY)
+- `operation` (TEXT) - 'research', 'follow_up', etc.
+- `params` (JSONB) - Input parameters
+- `status` (TEXT) - 'queued', 'running', 'succeeded', 'failed', 'cancelled'
+- `result` (JSONB) - Final output (when succeeded)
+- `created_at`, `started_at`, `completed_at` (TIMESTAMP)
+
+### 3. `job_events`
+Event stream for each job:
+- `event_id` (TEXT PRIMARY KEY)
+- `job_id` (TEXT FOREIGN KEY)
+- `event_type` (TEXT) - 'progress', 'intermediate', 'status_change', 'error'
+- `event_data` (JSONB)
+- `timestamp` (TIMESTAMP)
+- Index on `(job_id, timestamp)` for efficient queries
+
+### 4. `mcp_sessions`
+HTTP session state:
+- `session_id` (TEXT PRIMARY KEY)
+- `created_at`, `last_activity` (TIMESTAMP)
+- `data` (JSONB) - Session metadata
+- TTL cleanup via `cleanupExpiredHttpSessions()`
+
+### 5. `entity_cache`
+Knowledge graph entities:
+- `entity_id` (TEXT PRIMARY KEY)
+- `entity_type`, `label` (TEXT)
+- `properties` (JSONB)
+- `embedding` (VECTOR(768))
+- `created_at`, `updated_at` (TIMESTAMP)
+
+### 6. `entity_relations`
+Knowledge graph edges:
+- `source_id`, `target_id`, `relation_type` (TEXT)
+- `properties` (JSONB)
+- `created_at` (TIMESTAMP)
+- Composite primary key on `(source_id, target_id, relation_type)`
+
+### 7. `search_cache`
+Hybrid search results cache:
+- `cache_key` (TEXT PRIMARY KEY) - Hash of query+params
+- `results` (JSONB)
+- `created_at` (TIMESTAMP)
+- TTL: 1 hour
+
+## Common Operations
+
+### Job Lifecycle
+```javascript
+// Create
+const jobId = await dbClient.createJob({ operation, params, status: 'queued' });
+
+// Update status
+await dbClient.setJobStatus(jobId, 'running', { startTime: Date.now() });
+
+// Append event
+await dbClient.appendJobEvent(jobId, { type: 'progress', message: '...' });
+
+// Get status
+const status = await dbClient.getJobStatus(jobId);
+
+// Get events (resumable)
+const events = await dbClient.getJobEvents(jobId, { since_event_id: '...' });
+```
+
+### Research Reports
+```javascript
+// Save with embedding
+await dbClient.saveResearchReport({
+  query: 'question',
+  content: 'answer',
+  embedding: [0.1, 0.2, ...], // 768-dim
+  metadata: { cost, model, sources, rating }
+});
+
+// Similarity search
+const similar = await dbClient.findReportsBySimilarity(queryEmbedding, limit);
+
+// Text search
+const results = await dbClient.findReportsByQuery('keyword');
+```
+
+### Session Management
+```javascript
+// Create HTTP session
+const sessionId = await dbClient.createHttpSession();
+
+// Touch to extend TTL
+await dbClient.touchHttpSession(sessionId);
+
+// Cleanup expired
+await dbClient.cleanupExpiredHttpSessions();
+```
+
+## Vector Search
+
+Uses PGLite pgvector extension:
+- Embedding dimension: **768** (Gemini embedding model)
+- Distance metric: Cosine similarity (`<=>` operator)
+- Index: `ivfflat` on embeddings for large datasets
+
+## Migrations
+
+SQL migrations in [sql/migrations/](mdc:sql/migrations/):
+- `001_add_job_queue.sql`
+- `002_vector_dimension_768.sql`
+
+Run via migration scripts in [src/utils/](mdc:src/utils/).
+
+## TTL and Cleanup
+
+Schedule periodic cleanup on server start:
+```javascript
+scheduleHttpSessionCleanup(); // Every 10 minutes by default
+```
+
+Configure via:
+- `MCP_SESSION_TIMEOUT_SECONDS` (default: 3600)
+- `MCP_SESSION_CLEANUP_INTERVAL_SECONDS` (default: 600)

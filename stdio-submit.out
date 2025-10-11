@@ -1,0 +1,33 @@
+[2025-10-11T20:53:45.173Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:53:46.003Z] In-memory cache initialized with TTL: 3600s, max keys: 100
+[2025-10-11T20:53:46.016Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:53:46.017Z] Waiting 499ms before retrying DB initialization (last attempt 1ms ago)
+(node:35848) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+{"result":{"protocolVersion":"2025-03-26","capabilities":{"prompts":{"listChanged":true},"completions":{},"resources":{"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"openrouter_agents","version":"2.1.1-beta","capabilities":{"tools":{"list":true,"call":true},"prompts":{"list":true,"get":true,"listChanged":true},"resources":{"list":true,"read":true,"subscribe":true,"listChanged":true}}}},"jsonrpc":"2.0","id":1}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"MCP error -32602: Tool submit_research not found"}}
+[2025-10-11T20:53:46.229Z] Successfully imported @xenova/transformers.
+[2025-10-11T20:53:46.230Z] Initializing embedding model Xenova/all-MiniLM-L6-v2...
+[2025-10-11T20:53:46.464Z] Embedding model initialized successfully.
+[2025-10-11T20:53:47.898Z] PGLite vector extension enabled
+[2025-10-11T20:53:47.904Z] PGLite reports table created or verified
+[2025-10-11T20:53:47.921Z] BM25/vector index tables created or verified
+[2025-10-11T20:53:47.928Z] Job tables created or verified
+[2025-10-11T20:53:47.930Z] mcp_sessions table created or verified
+[2025-10-11T20:53:47.932Z] usage_counters table created or verified
+[2025-10-11T20:53:47.937Z] PGLite indexes created or verified
+[2025-10-11T20:53:47.943Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-11T20:53:48.892Z] PGLite vector extension enabled
+[2025-10-11T20:53:48.897Z] PGLite reports table created or verified
+[2025-10-11T20:53:48.912Z] BM25/vector index tables created or verified
+[2025-10-11T20:53:48.920Z] Job tables created or verified
+[2025-10-11T20:53:48.923Z] mcp_sessions table created or verified
+[2025-10-11T20:53:48.925Z] usage_counters table created or verified
+[2025-10-11T20:53:48.930Z] PGLite indexes created or verified
+[2025-10-11T20:53:49.896Z] PGLite vector extension enabled
+[2025-10-11T20:53:49.901Z] PGLite reports table created or verified
+[2025-10-11T20:53:49.919Z] BM25/vector index tables created or verified
+[2025-10-11T20:53:49.926Z] Job tables created or verified
+[2025-10-11T20:53:49.929Z] mcp_sessions table created or verified
+[2025-10-11T20:53:49.932Z] usage_counters table created or verified
+[2025-10-11T20:53:49.936Z] PGLite indexes created or verified

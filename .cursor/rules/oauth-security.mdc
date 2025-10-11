@@ -1,0 +1,93 @@
+---
+globs: src/server/oauthResourceServer.js,src/server/mcpServer.js,src/server/wsTransport.js,src/server/mcpStreamableHttp.js
+description: OAuth 2.1 Resource Server implementation and scope enforcement
+---
+
+# OAuth 2.1 Resource Server and Security
+
+## Authentication Flow
+
+All protected endpoints use JWT Bearer tokens validated via JWKS:
+
+1. **HTTP Middleware**: `createAuthMiddleware()` from [src/server/oauthResourceServer.js](mdc:src/server/oauthResourceServer.js)
+2. **WebSocket Auth**: Token via `Authorization` header or `?token=` query parameter during upgrade
+3. **Fallback**: `ALLOW_NO_API_KEY=true` bypasses auth (dev only)
+
+## Scope Enforcement
+
+### Method-to-Scope Mapping
+
+Defined in `config.auth.scopes.scopeMap` ([config.js](mdc:config.js)):
+
+```javascript
+scopeMap: {
+  'tools/list': ['mcp:tools:list'],
+  'tools/call': ['mcp:tools:call'],
+  'resources/list': ['mcp:resources:list'],
+  'resources/read': ['mcp:resources:read'],
+  'prompts/list': ['mcp:prompts:list'],
+  'prompts/get': ['mcp:prompts:get']
+}
+```
+
+### Enforcement Pattern
+
+In HTTP transport ([src/server/mcpStreamableHttp.js](mdc:src/server/mcpStreamableHttp.js)):
+
+```javascript
+const ensureScopes = (method, overrideScopes) => {
+  const required = Array.isArray(overrideScopes) 
+    ? overrideScopes 
+    : getScopesForMethod(method) || [];
+  
+  if (userScopes.includes('*')) return; // Wildcard grants all
+  
+  const missing = required.filter(scope => !userScopes.includes(scope));
+  if (missing.length > 0) {
+    // Return 403 with WWW-Authenticate challenge
+  }
+};
+```
+
+In WebSocket transport ([src/server/wsTransport.js](mdc:src/server/wsTransport.js)):
+
+```javascript
+function enforceScopes(required, userScopes = []) {
+  if (userScopes.includes('*')) return;
+  const missing = required.filter(scope => !userScopes.includes(scope));
+  if (missing.length > 0) {
+    const err = new Error('Forbidden: Insufficient scope');
+    err.code = -32001;
+    err.missingScopes = missing;
+    throw err; // Close WebSocket with 4403
+  }
+}
+```
+
+## WWW-Authenticate Challenges
+
+Always include in 401/403 responses:
+
+```javascript
+res.setHeader('WWW-Authenticate', 
+  `Bearer realm="${config.server.name}", ` +
+  `error="insufficient_scope", ` +
+  `scope="${requiredScopes.join(' ')}", ` +
+  `resource_metadata="${config.server.publicUrl}/.well-known/oauth-protected-resource"`
+);
+```
+
+## Discovery Endpoints
+
+- `/.well-known/mcp-server` - Server capabilities and transport URLs
+- `/.well-known/oauth-protected-resource` - OAuth metadata (RFC 8414)
+
+Implemented in [src/server/wellKnown.js](mdc:src/server/wellKnown.js).
+
+## Environment Variables
+
+Required for production OAuth:
+- `AUTH_JWKS_URL` - JWKS endpoint for JWT validation
+- `AUTH_EXPECTED_AUD` - Expected audience claim
+- `AUTH_ISSUER_URL` - Expected issuer (optional)
+- `PUBLIC_URL` - Server's public URL for discovery

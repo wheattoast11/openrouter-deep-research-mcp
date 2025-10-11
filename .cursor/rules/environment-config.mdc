@@ -1,0 +1,136 @@
+---
+globs: config.js,env.example,.env
+description: Environment configuration and required variables
+---
+
+# Environment Configuration
+
+Configuration centralized in [config.js](mdc:config.js), loading from environment variables.
+
+## Required Variables (Production)
+
+### Server
+- `SERVER_PORT` - HTTP server port (default: 3002)
+- `PUBLIC_URL` - Public-facing URL for discovery (e.g., `https://api.example.com`)
+- `SERVER_NAME` - Server name (default: "OpenRouter Research Agents")
+- `SERVER_VERSION` - Version string (default: from package.json)
+
+### Authentication
+- `AUTH_JWKS_URL` - JWKS endpoint for JWT validation
+- `AUTH_EXPECTED_AUD` - Expected audience claim (e.g., "mcp-server")
+- `AUTH_ISSUER_URL` - Expected issuer URL (optional but recommended)
+- `AUTH_SCOPES_MINIMAL` - Comma-separated minimal scopes
+
+### API Keys
+- `OPENROUTER_API_KEY` - OpenRouter API key for LLM calls
+- `PERPLEXITY_API_KEY` - Perplexity API key (optional, for web search)
+- `GOOGLE_API_KEY` - Google API key for Gemini embeddings
+
+### Database
+- `DB_PATH` - Path to PGlite database directory (default: `./researchAgentDB`)
+
+## Optional Variables
+
+### MCP Protocol
+- `MCP_PROTOCOL_VERSION` - Default protocol version (default: `2025-03-26`)
+- `MCP_SUPPORTED_VERSIONS` - Comma-separated list (default: `2024-11-05,2025-03-26,2025-06-18`)
+- `MCP_SESSION_TIMEOUT_SECONDS` - HTTP session TTL (default: 3600)
+- `MCP_SESSION_CLEANUP_INTERVAL_SECONDS` - Cleanup interval (default: 600)
+- `MCP_ENABLE_PROMPTS` - Enable prompts feature (default: true)
+- `MCP_ENABLE_RESOURCES` - Enable resources feature (default: true)
+
+### Mode and Features
+- `MODE` - Tool exposure mode: `AGENT`|`MANUAL`|`ALL` (default: `ALL`)
+- `ALLOW_NO_API_KEY` - Allow requests without auth (dev only, default: false)
+- `LOG_LEVEL` - Logging verbosity: `error`|`warn`|`info`|`debug` (default: `info`)
+
+### Research Configuration
+- `RESEARCH_PARALLELISM` - Max parallel research workers (default: 3)
+- `RESEARCH_DEFAULT_COST_PREFERENCE` - Cost preference: `low`|`medium`|`high` (default: `low`)
+
+### Rate Limiting
+- `RATE_LIMIT_WINDOW_MS` - Rate limit window (default: 60000)
+- `RATE_LIMIT_MAX_REQUESTS` - Max requests per window (default: 100)
+
+### OAuth Scopes (Advanced)
+- `AUTH_SCOPE_MAP_JSON` - JSON string overriding method→scope mapping
+
+## Configuration Structure
+
+```javascript
+// config.js exports:
+module.exports = {
+  server: {
+    port: Number,
+    publicUrl: String,
+    name: String,
+    version: String
+  },
+  auth: {
+    jwksUrl: String,
+    expectedAud: String,
+    issuerUrl: String,
+    scopes: {
+      minimal: Array<String>,
+      scopeMap: Object
+    },
+    allowNoApiKey: Boolean
+  },
+  mcp: {
+    features: {
+      prompts: Boolean,
+      resources: Boolean
+    },
+    protocolVersion: String,
+    supportedVersions: Array<String>,
+    sessionTimeoutSeconds: Number
+  },
+  features: {
+    knowledgeGraph: Boolean,
+    scheduling: Boolean,
+    resourceSubscriptions: Boolean,
+    promptSubscriptions: Boolean
+  },
+  models: {
+    defaultCost: String,
+    costPreference: {
+      low: Array<String>,
+      medium: Array<String>,
+      high: Array<String>
+    }
+  }
+};
+```
+
+## Environment File Template
+
+See [env.example](mdc:env.example) for full template.
+
+## Validation
+
+Config validation happens at startup in [config.js](mdc:config.js):
+- Warns for missing optional vars
+- Throws error for missing required vars in production
+- Provides sensible defaults for development
+
+## Cursor MCP Integration
+
+For Cursor IDE integration, reference env vars in [.cursor/mcp.json](mdc:.cursor/mcp.json):
+
+```json
+{
+  "mcpServers": {
+    "openrouterai-research-agents": {
+      "command": "node",
+      "args": ["src/server/mcpServer.js", "--stdio"],
+      "env": {
+        "OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}",
+        "GOOGLE_API_KEY": "${env:GOOGLE_API_KEY}",
+        "MODE": "AGENT"
+      }
+    }
+  }
+}
+```
+
+**Never commit plaintext API keys** in mcp.json - always use `${env:VAR}` references.
