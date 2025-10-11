@@ -11,6 +11,8 @@ const { createAuthMiddleware, requireScopes, getScopesForMethod } = require('./o
 const elicitationManager = require('./elicitation');
 const { zodToJsonSchema } = require('zod-to-json-schema');
 const { McpError, ErrorCode } = require('@modelcontextprotocol/sdk/types.js');
+const { registerPrompts } = require('./mcpPrompts');
+const { registerResources } = require('./mcpResources');
 const { 
   // Schemas
   conductResearchSchema,
@@ -823,14 +825,18 @@ registerNormalizedTool('search_tools', searchToolsSchema, searchToolsTool);
 registerNormalizedTool('date_time', dateTimeSchema, dateTimeTool);
 registerNormalizedTool('calc', calcSchema, calcTool);
 registerNormalizedTool('elicitation_response', z.object({ elicitationId: z.string(), data: z.any() }), async (params) => {
-  const { elicitationId, data } = params;
-  const resolved = elicitationManager.resolve(elicitationId, data);
+    const { elicitationId, data } = params;
+    const resolved = elicitationManager.resolve(elicitationId, data);
   return { success: resolved };
 });
 registerNormalizedTool('browser_inference_request', browserInferenceRequestSchema, runBrowserInference);
 registerNormalizedTool('browser_inference_result', browserInferenceResultSchema, handleBrowserInferenceResult);
- 
- // Set up transports based on environment
+
+// Register MCP Prompts and Resources
+registerPrompts(server);
+registerResources(server);
+
+// Set up transports based on environment
  const setupTransports = async () => {
   let lastSseTransport = null; // Variable to hold the last SSE transport
   const sseConnections = new Map(); // Map to store active SSE connections
@@ -866,7 +872,7 @@ registerNormalizedTool('browser_inference_result', browserInferenceResultSchema,
   const authenticate = createAuthMiddleware();
 
   scheduleHttpSessionCleanup();
-
+ 
   console.error(`Starting MCP server with HTTP/SSE transport on port ${port}`); // Use error
   if (config.auth.jwksUrl) {
     console.error(`[${new Date().toISOString()}] OAuth2/JWT auth ENABLED (JWKS=${jwksUrl}, aud=${expectedAudience}).`);
