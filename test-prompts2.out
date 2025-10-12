@@ -1,0 +1,15 @@
+[2025-10-12T06:18:19.252Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-12T06:18:24.367Z] In-memory cache initialized with TTL: 3600s, max keys: 100
+[2025-10-12T06:18:24.471Z] Registering MCP prompts...
+[2025-10-12T06:18:24.502Z] Registered 6 MCP prompts
+[2025-10-12T06:18:24.503Z] Registered 9 MCP resources
+[2025-10-12T06:18:24.516Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-12T06:18:24.516Z] Waiting 499ms before retrying DB initialization (last attempt 1ms ago)
+(node:78744) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"field.isOptional is not a function"}}
+{"result":{"protocolVersion":"2025-03-26","capabilities":{"resources":{"listChanged":true},"completions":{},"tools":{"listChanged":true},"prompts":{"listChanged":true}},"serverInfo":{"name":"openrouter_agents","version":"2.1.1-beta","capabilities":{"tools":{"list":true,"call":true},"prompts":{"list":true,"get":true,"listChanged":true},"resources":{"list":true,"read":true,"subscribe":true,"listChanged":true}}}},"jsonrpc":"2.0","id":1}
+{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"keyValidator._parse is not a function"}}
+[2025-10-12T06:18:25.036Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-12T06:18:30.692Z] Successfully imported @xenova/transformers.
+[2025-10-12T06:18:30.692Z] Initializing embedding model Xenova/all-MiniLM-L6-v2...

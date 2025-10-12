@@ -48,12 +48,9 @@ const continuousQueryArgs = z.object({
 function registerPrompts(server) {
   console.error(`[${new Date().toISOString()}] Registering MCP prompts...`);
   
-  // 1. Planning Prompt
-  server.registerPrompt('planning_prompt', {
-    title: 'Multi-Agent Research Planning',
-    description: 'Generate an optimal multi-agent research plan for a complex query',
-    argsSchema: planningPromptArgs
-  }, async (args) => {
+  // 1. Planning Prompt  
+  server.prompt('planning_prompt', 'Generate an optimal multi-agent research plan for a complex query', async (extra) => {
+    const args = extra?.arguments || {};
     const { query, domain = 'general', complexity = 'moderate', maxAgents = 7 } = args;
     
     if (!query) {
@@ -82,11 +79,8 @@ function registerPrompts(server) {
   });
 
   // 2. Synthesis Prompt
-  server.registerPrompt('synthesis_prompt', {
-    title: 'Ensemble Result Synthesis',
-    description: 'Synthesize multiple research results into a coherent report with citations',
-    argsSchema: synthesisPromptArgs
-  }, async (args) => {
+  server.prompt('synthesis_prompt', 'Synthesize multiple research results into a coherent report with citations', async (extra) => {
+    const args = extra?.arguments || {};
     const { results, format = 'report', includeSources = true } = args;
     
     if (!results || !Array.isArray(results) || results.length === 0) {
@@ -126,11 +120,8 @@ function registerPrompts(server) {
   });
 
   // 3. Research Workflow Prompt
-  server.registerPrompt('research_workflow_prompt', {
-    title: 'Complete Research Workflow Guide',
-    description: 'Step-by-step workflow template for different research task types',
-    argsSchema: workflowPromptArgs
-  }, async (args) => {
+  server.prompt('research_workflow_prompt', 'Step-by-step workflow template for different research task types', async (extra) => {
+    const args = extra?.arguments || {};
     const { taskType, context = '' } = args;
     
     const workflows = {
@@ -188,11 +179,8 @@ function registerPrompts(server) {
   });
 
   // 4. Summarize and Learn
-  server.registerPrompt('summarize_and_learn', {
-    title: 'URL Fetching + Knowledge Extraction',
-    description: 'Fetch a URL, extract key information, and index for future retrieval',
-    argsSchema: summarizeLearnArgs
-  }, async (args) => {
+  server.prompt('summarize_and_learn', 'Fetch a URL, extract key information, and index for future retrieval', async (extra) => {
+    const args = extra?.arguments || {};
     const { url, focus = '' } = args;
     
     const prompt = `Fetch and analyze the content at: ${url}
@@ -224,11 +212,8 @@ Provide a structured summary with: title, url, key_points (array), summary (stri
   });
 
   // 5. Daily Briefing
-  server.registerPrompt('daily_briefing', {
-    title: 'KB Activity + Schedules Summary',
-    description: 'Generate a daily briefing of knowledge base activity and scheduled actions',
-    argsSchema: dailyBriefingArgs
-  }, async (args) => {
+  server.prompt('daily_briefing', 'Generate a daily briefing of knowledge base activity and scheduled actions', async (extra) => {
+    const args = extra?.arguments || {};
     const { scope = 'all', since } = args;
     const sinceText = since || 'last 24 hours';
     
@@ -262,11 +247,8 @@ Format as a concise executive briefing with key metrics and highlights.`;
   });
 
   // 6. Continuous Query
-  server.registerPrompt('continuous_query', {
-    title: 'Cron-Scheduled Monitoring',
-    description: 'Set up continuous monitoring of a research topic with scheduled execution',
-    argsSchema: continuousQueryArgs
-  }, async (args) => {
+  server.prompt('continuous_query', 'Set up continuous monitoring of a research topic with scheduled execution', async (extra) => {
+    const args = extra?.arguments || {};
     const { query, schedule, notify } = args;
     
     const prompt = `Configure continuous monitoring for the following research query:
