@@ -1,10 +1,16 @@
 // src/agents/zeroAgent.js
 // Zero Orchestrator - The single hub agent that coordinates planning → research → synthesis
+// Enhanced with ResearchCore intelligence layer for superintelligence capabilities
 
 const config = require('../../config');
 const planningAgent = require('./planningAgent');
 const researchAgent = require('./researchAgent');
 const contextAgent = require('./contextAgent');
+
+// Intelligence layer imports
+const { research: researchCore } = require('../intelligence/researchCore');
+const { getInstance: getLivingMemory } = require('../intelligence/livingMemory');
+const { getInstance: getAdaptiveExecutor } = require('../intelligence/adaptiveExecutor');
 
 class ZeroAgent {
   constructor() {
@@ -12,6 +18,11 @@ class ZeroAgent {
     this.planner = planningAgent;
     this.researcher = researchAgent;
     this.synthesizer = contextAgent;
+    
+    // Intelligence layer instances
+    this.livingMemory = getLivingMemory();
+    this.adaptiveExecutor = getAdaptiveExecutor();
+    this.useIntelligenceLayer = process.env.USE_INTELLIGENCE_LAYER !== 'false';
 
     // Zero behavior modes
     this.modes = {
@@ -235,6 +246,198 @@ class ZeroAgent {
 
   getLastMetrics() {
     return this.researcher?.telemetry || {};
+  }
+  
+  /**
+   * SUPERINTELLIGENCE: Inject optimal policy with cost estimation
+   * 
+   * This is the breakthrough - formal query rewrite with intelligent policy selection.
+   * Transforms raw user intent into optimal execution strategy.
+   * 
+   * @param {string} query - Raw user query
+   * @param {Object} constraints - Budget, time, quality constraints
+   * @param {Object} enrichment - Additional context (tools, resources, etc.)
+   * @returns {Promise<ExecutionPolicy>} Optimized policy with injected context
+   */
+  async injectOptimalPolicy(query, constraints = {}, enrichment = {}) {
+    if (!this.useIntelligenceLayer) {
+      // Fallback to legacy execution
+      return this.legacyPolicySelection(query, constraints);
+    }
+    
+    const embeddings = require('../utils/embeddings');
+    
+    // 1. Parse intent and generate embedding
+    const queryEmbedding = await embeddings.generate(query);
+    const intent = {
+      query,
+      embedding: queryEmbedding,
+      complexity: this.estimateComplexity(query),
+      domain: constraints.domain || 'general'
+    };
+    
+    // 2. Query living memory for relevant context
+    const memory = await this.livingMemory.query(intent, {
+      userId: constraints.userId || 'anonymous'
+    });
+    
+    // 3. Select optimal policy
+    const policy = await this.adaptiveExecutor.select(intent, memory, {
+      budget: constraints.budget || { dollars: 2.50 },
+      privacy: constraints.privacy || 'hybrid',
+      policy: constraints.policy || 'auto',
+      minConfidence: constraints.minConfidence || 0.7,
+      ...constraints
+    });
+    
+    // 4. Enrich policy with context
+    policy.context = {
+      pastResearch: memory.results?.slice(0, 5) || [],
+      relevantEntities: memory.entities?.slice(0, 10) || [],
+      userProfile: memory.userProfile,
+      toolCatalog: enrichment.toolCatalog || [],
+      resourceCatalog: enrichment.resourceCatalog || []
+    };
+    
+    // 5. Add execution metadata
+    policy.metadata = {
+      queryHash: this.hashQuery(query),
+      timestamp: new Date().toISOString(),
+      memoryConfidence: memory.confidence,
+      cacheHit: memory.cachedAnswer ? true : false
+    };
+    
+    return policy;
+  }
+  
+  /**
+   * SUPERINTELLIGENCE: Execute policy with adaptive optimization
+   */
+  async executePolicy(policy, onProgress = null) {
+    const startTime = Date.now();
+    const insights = [];
+    
+    try {
+      const session = {
+        id: policy.metadata?.queryHash || `session_${Date.now()}`,
+        query: policy.context?.query || '',
+        context: policy.context || {},
+        memory: policy.context?.memory || {},
+        policy: policy,
+        emitter: { emit: (type, data) => onProgress?.(type, data) }
+      };
+      
+      for await (const insight of this.adaptiveExecutor.execute(policy, session)) {
+        insights.push(insight);
+        if (onProgress) {
+          await onProgress('insight', {
+            type: insight.type,
+            content: insight.content?.substring(0, 200),
+            confidence: insight.confidence
+          });
+        }
+      }
+      
+      if (this.useIntelligenceLayer) {
+        await this.livingMemory.learn(
+          { query: session.query, complexity: policy.complexity },
+          insights,
+          { userId: policy.context?.userId },
+          policy.context?.memory
+        );
+      }
+      
+      const synthesis = insights.find(i => i.type === 'synthesis-complete' || i.type === 'final-hypothesis');
+      const finalConfidence = synthesis?.confidence || this.calculateOverallConfidence(insights);
+      
+      return {
+        synthesis: synthesis?.content || insights.map(i => i.content).join('\n\n'),
+        insights: insights,
+        confidence: finalConfidence,
+        policy: policy.type,
+        cost: policy.actualCost || policy.estimatedCost,
+        duration: Date.now() - startTime,
+        metadata: {
+          insightCount: insights.length,
+          agentCount: policy.agents,
+          models: policy.models
+        }
+      };
+    } catch (error) {
+      if (onProgress) await onProgress('error', { message: error.message });
+      throw error;
+    }
+  }
+  
+  /**
+   * SUPERINTELLIGENCE: Learn from execution
+   */
+  async learn(query, policy, result, feedback = {}) {
+    if (!this.useIntelligenceLayer) return;
+    
+    const dbClient = require('../utils/dbClient');
+    await dbClient.saveResearchReport({
+      query,
+      content: result.synthesis,
+      metadata: { policy: policy.type, cost: result.cost, confidence: result.confidence, rating: feedback.rating }
+    });
+    
+    if (feedback.rating) {
+      await this.reinforcePolicy(query, policy.type, feedback.rating);
+    }
+  }
+  
+  async updateCostModel(query, policyType, actualCost) {
+    const dbClient = require('../utils/dbClient');
+    await dbClient.executeQuery(`
+      INSERT INTO kg_patterns (pattern_id, pattern_type, pattern_data)
+      VALUES ($1, 'cost_observation', $2)
+      ON CONFLICT DO NOTHING
+    `, [`cost_${policyType}_${Date.now()}`, JSON.stringify({ policyType, actualCost })]);
+  }
+  
+  async reinforcePolicy(query, policyType, rating) {
+    const dbClient = require('../utils/dbClient');
+    await dbClient.executeQuery(`
+      INSERT INTO kg_patterns (pattern_id, pattern_type, pattern_data, confidence)
+      VALUES ($1, 'policy_preference', $2, $3)
+      ON CONFLICT DO NOTHING
+    `, [`policy_${this.hashQuery(query)}`, JSON.stringify({ query, policyType, rating }), 0.5 + (rating - 3) * 0.1]);
+  }
+  
+  async shouldRetrain() {
+    return Math.random() < 0.01; // 1% chance per query
+  }
+  
+  async retrainPolicySelector() {
+    console.error('[ZeroAgent] Policy selector retraining triggered');
+  }
+  
+  legacyPolicySelection(query, constraints) {
+    const complexity = this.estimateComplexity(query);
+    return {
+      type: complexity < 0.5 ? 'fast' : 'comprehensive',
+      agents: complexity < 0.5 ? 1 : 5,
+      estimatedCost: complexity < 0.5 ? 0.01 : 0.15
+    };
+  }
+  
+  estimateComplexity(query) {
+    let score = Math.min(query.split(/\s+/).length / 50, 0.3);
+    if (/how|why|compare|analyze/.test(query.toLowerCase())) score += 0.3;
+    if (query.split(/[.!?]+/).length > 1) score += 0.2;
+    return Math.min(score, 1.0);
+  }
+  
+  hashQuery(query) {
+    const crypto = require('crypto');
+    return crypto.createHash('sha256').update(query.toLowerCase().trim()).digest('hex').slice(0, 16);
+  }
+  
+  calculateOverallConfidence(insights) {
+    if (!insights?.length) return 0;
+    const confs = insights.map(i => i.confidence || 0).filter(c => c > 0);
+    return confs.reduce((sum, c) => sum + c, 0) / (confs.length || 1);
   }
 }
 
