@@ -1490,7 +1490,8 @@ const TOOL_CATALOG = [
   { name: 'list_tools', description: 'Show all available tools with parameters.' },
   { name: 'search_tools', description: 'Find tools by semantic search. Requires query parameter.' },
   { name: 'browser_inference_request', description: 'Request a client (browser) to perform LLM inference. Returns a confirmation that the request was sent.' },
-  { name: 'browser_inference_result', description: 'Internal tool for receiving LLM inference results from a browser client.' }
+  { name: 'browser_inference_result', description: 'Internal tool for receiving LLM inference results from a browser client.' },
+  { name: 'local_inference', description: 'Run inference using server-side GGUF models. Supports Qwen->Utopia logit pipeline.' }
 ];
 
 function summarizeParamsForTool(name) {
@@ -1528,6 +1529,7 @@ function summarizeParamsForTool(name) {
     case 'get_server_status': return [];
     case 'browser_inference_request': return ['model', 'prompt', 'options?'];
     case 'browser_inference_result': return ['model', 'result'];
+    case 'local_inference': return ['modelId', 'prompt', 'pipeline?', 'options?'];
     default: return [];
   }
 }
@@ -1813,6 +1815,19 @@ const browserInferenceResultSchema = z.object({
   _requestId: z.string().optional().describe("Internal request ID for logging")
 }).describe("Receive inference results from a client-side browser-based LLM.");
 
+// Schema for local inference tool (server-side GGUF models)
+const localInferenceSchema = z.object({
+  modelId: z.string().describe("The ID of the local model to use (as configured in LOCAL_MODEL_IDS)."),
+  prompt: z.string().min(1).describe("The input prompt for the model."),
+  pipeline: z.boolean().optional().describe("If true, use Qwen->Utopia logit pipeline (requires two models configured)."),
+  options: z.object({
+    maxTokens: z.number().int().positive().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    topP: z.number().min(0).max(1).optional()
+  }).optional().describe("Inference options"),
+  _requestId: z.string().optional().describe("Internal request ID for logging")
+}).describe("Run inference using server-side GGUF models loaded at startup.");
+
 // Implementation for browser_inference_request tool
 async function runBrowserInference(params, mcpExchange = null, requestId = 'unknown-req') {
   const { model, prompt, options } = params;
@@ -1848,6 +1863,52 @@ async function handleBrowserInferenceResult(params, mcpExchange = null, requestI
   }
 
   return JSON.stringify({ status: 'result_received', model, result, requestId });
+}
+
+// Implementation for local_inference tool (server-side GGUF models)
+async function runLocalInference(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { modelId, prompt, pipeline, options } = params;
+  
+  try {
+    const localModelManager = require('../utils/localModelManager');
+    
+    if (!localModelManager.isReady()) {
+      throw new Error('Local models not available. Ensure LOCAL_MODELS_ENABLED=true and models are configured.');
+    }
+
+    console.error(`[${new Date().toISOString()}] [${requestId}] runLocalInference: Running inference with ${modelId}${pipeline ? ' (pipeline mode)' : ''}...`);
+
+    let result;
+    if (pipeline) {
+      // Use Qwen->Utopia logit pipeline
+      const modelIds = localModelManager.getLoadedModels();
+      if (modelIds.length < 2) {
+        throw new Error('Pipeline mode requires at least 2 models to be loaded.');
+      }
+      
+      // Assume first model is Qwen, second is Utopia (or allow explicit configuration)
+      const qwenId = modelIds.find(id => id.toLowerCase().includes('qwen')) || modelIds[0];
+      const utopiaId = modelIds.find(id => id.toLowerCase().includes('utopia')) || modelIds[1];
+      
+      result = await localModelManager.runLogitPipeline(qwenId, utopiaId, prompt, options);
+    } else {
+      // Standard single-model inference
+      result = await localModelManager.runInference(modelId, prompt, options);
+    }
+
+    console.error(`[${new Date().toISOString()}] [${requestId}] runLocalInference: Inference completed.`);
+    
+    return JSON.stringify({
+      modelId,
+      pipeline: !!pipeline,
+      result,
+      timestamp: new Date().toISOString()
+    }, null, 2);
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [${requestId}] runLocalInference: Error:`, error);
+    throw new Error(`[${requestId}] Local inference failed: ${error.message}`);
+  }
 }
 
 module.exports = {
@@ -1888,6 +1949,7 @@ module.exports = {
   // New browser inference schemas
   browserInferenceRequestSchema,
   browserInferenceResultSchema,
+  localInferenceSchema,
   
   // Functions
   conductResearch,
@@ -1930,5 +1992,6 @@ module.exports = {
 
   // New browser inference functions
   runBrowserInference,
-  handleBrowserInferenceResult
+  handleBrowserInferenceResult,
+  runLocalInference
 };

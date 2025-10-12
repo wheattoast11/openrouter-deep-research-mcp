@@ -6,7 +6,6 @@ import KnowledgeGraph from './components/KnowledgeGraph'
 import JobPanel from './components/JobPanel'
 import ToolPanel from './components/ToolPanel'
 import ElicitationModal from './components/ElicitationModal'
-import { llamaCppClient } from './utils/LlamaCpp'
 
 function App() {
   const [ws, setWs] = useState(null)
@@ -14,7 +13,6 @@ function App() {
   const [events, setEvents] = useState([])
   const [agentStatus, setAgentStatus] = useState('disconnected')
   const [isCollapsed, setIsCollapsed] = useState(false)
-  const [localModelsReady, setLocalModelsReady] = useState(false)
 
   // Job streams and tool outputs
   const [activeJobs, setActiveJobs] = useState(new Map())
@@ -30,43 +28,6 @@ function App() {
     const wsUrl = `ws://localhost:3008/mcp/ws?token=${token}`
     
     const websocket = new WebSocket(wsUrl)
-
-    // Initialize LlamaCpp client and load models
-    llamaCppClient.on('initialized', () => {
-      console.log('LlamaCpp client initialized. Loading models...')
-      // Assuming models are in the 'public' folder or accessible paths
-      llamaCppClient.loadModel('qwen', 'models/Qwen3-4B-Thinking-2507-Esper3.1-i1-GGUF/Qwen3-4B-Thinking-2507-Esper3.1-i1-GGUF.gguf')
-      llamaCppClient.loadModel('utopia', 'models/utopia-atomic/utopia-atomic-q2_k.gguf')
-    })
-
-    llamaCppClient.on('model_loaded', ({ modelId }) => {
-      console.log(`${modelId} model loaded.`)
-      if (modelId === 'utopia') { // Assuming utopia is the last model to load for readiness
-        setLocalModelsReady(true)
-        addEvent({ type: 'system', text: 'Local LLMs (Qwen3, Utopia) ready for browser inference.' })
-      }
-    })
-
-    llamaCppClient.on('inference_result', ({ modelToUse, output }) => {
-      console.log(`Inference result from ${modelToUse}:`, output)
-      // Send local inference results back to the MCP server
-      if (ws && connected) {
-        ws.send(JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'tools/call',
-          params: {
-            name: 'browser_inference_result',
-            arguments: { model: modelToUse, result: output }
-          },
-          id: Date.now()
-        }))
-      }
-    })
-
-    llamaCppClient.on('error', (error) => {
-      console.error('LlamaCpp client error:', error)
-      addEvent({ type: 'error', text: `Local LLM Error: ${error.message}` })
-    })
     
     websocket.onopen = () => {
       console.log('WebSocket connected')
@@ -167,16 +128,6 @@ function App() {
           case 'elicitation/request':
             setElicitationRequest(message.payload)
             break
-          case 'browser.inference.request':
-            if (localModelsReady) {
-              const { prompt, model, options } = message.payload
-              console.log(`MCP server requested browser inference with ${model}: ${prompt}`)
-              llamaCppClient.runInference(prompt, model, options)
-            } else {
-              console.warn('MCP server requested browser inference, but local models are not ready.')
-              // Optionally send an error back to the server
-            }
-            break
           case 'job.result':
             const resultText = typeof message.payload.result === 'object' 
               ? JSON.stringify(message.payload.result, null, 2) 
@@ -211,7 +162,6 @@ function App() {
         }
       } catch (error) {
         console.error('Error parsing message:', error)
-        addEvent({ type: 'error', text: `WebSocket Error: ${error.message}` })
       }
     }
     
@@ -268,31 +218,13 @@ function App() {
           payload: { new_goal: goal }
         }))
         addEvent({ type: 'user', text: `Steering: ${goal}` })
-      } else if (command.startsWith('/context')) {
+        } else if (command.startsWith('/context')) {
         const info = command.slice(8).trim()
         ws.send(JSON.stringify({
           type: 'agent.provide_context',
           payload: { new_information: info }
         }))
         addEvent({ type: 'user', text: `Context: ${info}` })
-      } else if (command.startsWith('/browser-infer')) {
-        const parts = command.slice(15).trim().split(' ')
-        const model = parts[0]
-        const prompt = parts.slice(1).join(' ')
-        if (model && prompt) {
-          addEvent({ type: 'user', text: `Browser inference request: Model=${model}, Prompt='${prompt}'` })
-          ws.send(JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'tools/call',
-            params: {
-              name: 'browser_inference_request',
-              arguments: { model, prompt, options: {} }
-            },
-            id: Date.now()
-          }))
-        } else {
-          addEvent({ type: 'error', text: 'Usage: /browser-infer <model_name> <prompt>' })
-        }
       } else {
         // Default: send as JSON-RPC tool call
         ws.send(JSON.stringify({

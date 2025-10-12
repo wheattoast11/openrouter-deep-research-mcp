@@ -114,6 +114,13 @@ const config = {
   // Configuration for where to save full research reports
   reportOutputPath: process.env.REPORT_OUTPUT_PATH || './research_outputs/',
 
+  // Local models configuration
+  localModels: {
+    enabled: process.env.LOCAL_MODELS_ENABLED === 'true',
+    modelIds: process.env.LOCAL_MODEL_IDS ? process.env.LOCAL_MODEL_IDS.split(',').map(s => s.trim()) : [],
+    downloadPath: process.env.LOCAL_MODELS_DOWNLOAD_PATH || './models'
+  },
+
   // Feature flags for v2.1 (safe defaults)
   features: {
     // Core v2.1 features (enabled by default)

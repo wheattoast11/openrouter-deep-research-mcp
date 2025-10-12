@@ -54,32 +54,28 @@ function registerPrompts(server) {
   }, async (args) => {
     const { query, domain = 'general', complexity = 'moderate', maxAgents = 7 } = args;
     
-    const basePrompt = `You are a research planning agent. Your task is to decompose the following research query into optimal sub-queries for parallel execution by multiple specialized agents.
-
-**Research Query**: ${query}
-**Domain**: ${domain}
-**Complexity**: ${complexity}
-**Max Agents**: ${maxAgents}
-
-Provide a structured plan with:
-1. **Sub-queries**: Break down the main query into ${maxAgents} or fewer specific research questions
-2. **Agent roles**: Assign a specialized role to each sub-query (e.g., "technical expert", "market analyst")
-3. **Dependencies**: Identify any sequential dependencies between sub-queries
-4. **Success criteria**: Define what constitutes a complete answer
-
-Format your plan as structured JSON with keys: sub_queries (array), agent_roles (array), dependencies (array), criteria (string).`;
-
+    if (!query) {
+      return {
+        description: 'Planning prompt requires a query parameter',
+        messages: [{ role: 'assistant', content: { type: 'text', text: 'Please provide a query parameter to generate a research plan.' } }]
+      };
+    }
+    
+    // Actually execute the planning agent
+    const planningAgent = require('../agents/planningAgent');
+    const planResult = await planningAgent.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
+    
     return {
+      description: `Multi-agent research plan for: "${query}"`,
       messages: [
         {
-          role: 'user',
+          role: 'assistant',
           content: {
             type: 'text',
-            text: basePrompt
+            text: planResult
           }
         }
-      ],
-      description: `Research planning for: "${query}"`
+      ]
     };
   });
 
@@ -91,32 +87,39 @@ Format your plan as structured JSON with keys: sub_queries (array), agent_roles 
   }, async (args) => {
     const { results, format = 'report', includeSources = true } = args;
     
-    const resultsText = results.map((r, i) => `**Result ${i+1}**:\n${JSON.stringify(r, null, 2)}`).join('\n\n');
+    if (!results || !Array.isArray(results) || results.length === 0) {
+      return {
+        description: 'Synthesis prompt requires results array',
+        messages: [{ role: 'assistant', content: { type: 'text', text: 'Please provide research results to synthesize.' } }]
+      };
+    }
     
-    const prompt = `You are a synthesis agent. Your task is to integrate the following research results into a cohesive, well-structured ${format}.
-
-${resultsText}
-
-Requirements:
-- Identify consensus views and contradictions
-- Highlight unique insights from each result
-- Organize information logically
-${includeSources ? '- Include citations and source URLs' : '- Focus on content without citations'}
-- Provide a critical assessment of completeness
-
-Output format: ${format}`;
-
+    // Actually execute the synthesis agent
+    const contextAgent = require('../agents/contextAgent');
+    let synthesisResult = '';
+    
+    // Stream synthesis (accumulate chunks)
+    for await (const chunk of contextAgent.contextualizeResultsStream(
+      'Synthesis request',
+      results,
+      [],
+      { includeSources, outputFormat: format, audienceLevel: 'intermediate' },
+      'prompt'
+    )) {
+      if (chunk.content) synthesisResult += chunk.content;
+    }
+    
     return {
+      description: `Synthesized ${results.length} research results into ${format}`,
       messages: [
         {
-          role: 'user',
+          role: 'assistant',
           content: {
             type: 'text',
-            text: prompt
+            text: synthesisResult || 'Synthesis completed successfully.'
           }
         }
-      ],
-      description: `Synthesizing ${results.length} research results into ${format}`
+      ]
     };
   });
 

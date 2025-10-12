@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
+    "@huggingface/hub": "^2.6.11",
     "@modelcontextprotocol/sdk": "1.17.4",
     "@terminals-tech/core": "^0.1.1",
     "@terminals-tech/embeddings": "^0.1.0",
@@ -77,6 +78,7 @@
     "jsdom": "^23.0.1",
     "node-cache": "^5.1.2",
     "node-fetch": "^2.7.0",
+    "node-llama-cpp": "^3.14.0",
     "tar": "^6.2.1",
     "zod": "^3.22.4"
   },

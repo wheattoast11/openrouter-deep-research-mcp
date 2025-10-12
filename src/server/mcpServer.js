@@ -51,6 +51,7 @@ const {
   executeSqlSchema,
   browserInferenceRequestSchema,
   browserInferenceResultSchema,
+  localInferenceSchema,
   
   // Functions
   conductResearch,
@@ -89,7 +90,8 @@ const {
   agentTool,
   pingTool,
   runBrowserInference,
-  handleBrowserInferenceResult
+  handleBrowserInferenceResult,
+  runLocalInference
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 const { scheduleHttpSessionCleanup } = require('../utils/dbClient');
@@ -115,7 +117,7 @@ const MANUAL_SET = new Set([
   'research','conduct_research','submit_research','research_follow_up',
   'retrieve','search','query',
   'get_report','get_report_content','history','list_research_history',
-  'browser_inference_request','browser_inference_result'
+  'browser_inference_request','browser_inference_result','local_inference'
 ]);
 function shouldExpose(name) {
   if (ALWAYS_ON.has(name)) return true;
@@ -164,6 +166,7 @@ const TOOL_DESCRIPTIONS = {
   calc: 'Evaluate arithmetic expressions safely.',
   browser_inference_request: 'Request a client (browser) to perform LLM inference.',
   browser_inference_result: 'Handle LLM inference results received from a client (browser).',
+  local_inference: 'Run inference using server-side GGUF models with optional Qwen->Utopia pipeline.'
 };
 
 function stripMetaArguments(params) {
@@ -455,128 +458,7 @@ function normalizeParamsForTool(toolName, params) {
   }
 }
 
-// Register prompts using latest MCP spec with proper protocol handlers
-if (config.mcp?.features?.prompts) {
-  const prompts = new Map([
-    ['planning_prompt', {
-      name: 'planning_prompt',
-      description: 'Generate sophisticated multi-agent research plan using advanced XML tagging and domain-aware query decomposition',
-      arguments: [
-        { name: 'query', description: 'Research query to decompose into specialized sub-queries', required: true },
-        { name: 'domain', description: 'Primary domain: general, technical, reasoning, search, creative', required: false },
-        { name: 'complexity', description: 'Query complexity: simple, moderate, complex', required: false },
-        { name: 'maxAgents', description: 'Maximum number of research agents (1-10)', required: false }
-      ]
-    }],
-    ['synthesis_prompt', {
-      name: 'synthesis_prompt', 
-      description: 'Synthesize ensemble research results with rigorous citation framework and confidence scoring',
-      arguments: [
-        { name: 'query', description: 'Original research query for synthesis context', required: true },
-        { name: 'results', description: 'JSON string of research results to synthesize', required: true },
-        { name: 'outputFormat', description: 'Output format: report, briefing, bullet_points', required: false },
-        { name: 'audienceLevel', description: 'Target audience: beginner, intermediate, expert', required: false }
-      ]
-    }],
-    ['research_workflow_prompt', {
-      name: 'research_workflow_prompt',
-      description: 'Complete research workflow: planning → parallel execution → synthesis with quality controls',
-      arguments: [
-        { name: 'topic', description: 'Research topic or question', required: true },
-        { name: 'costBudget', description: 'Cost preference: low, high', required: false },
-        { name: 'async', description: 'Use async job processing: true, false', required: false }
-      ]
-    }]
-  ]);
-
-  server.setPromptRequestHandlers({
-    list: async () => ({ prompts: Array.from(prompts.values()) }),
-    get: async (request) => {
-      const prompt = prompts.get(request.params.name);
-      if (!prompt) throw new Error(`Prompt not found: ${request.params.name}`);
-      
-      const { query, domain, complexity, maxAgents, results, outputFormat, audienceLevel, topic, costBudget, async } = request.params.arguments || {};
-      
-      switch (request.params.name) {
-        case 'planning_prompt':
-          if (!query) {
-            return {
-              description: prompt.description,
-              messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Please provide a query parameter to generate a research plan.' }] }]
-            };
-          }
-    const p = require('../agents/planningAgent');
-          const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
-          return { 
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: planResult }] }]
-          };
-          
-        case 'synthesis_prompt':
-    const c = require('../agents/contextAgent');
-          let parsedResults = [];
-          try {
-            parsedResults = results ? JSON.parse(results) : [];
-          } catch (e) {
-            parsedResults = [];
-          }
-          let synthesisResult = '';
-          for await (const ch of c.contextualizeResultsStream(query, parsedResults, [], { 
-            includeSources: true, 
-            outputFormat: outputFormat || 'report',
-            audienceLevel: audienceLevel || 'intermediate'
-          }, 'prompt')) {
-            if (ch.content) synthesisResult += ch.content;
-          }
-          return { 
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: synthesisResult }] }]
-          };
-          
-        case 'research_workflow_prompt':
-          const safeTopic = topic || '[your_topic]';
-          const workflowGuide = `
-# Research Workflow for: ${safeTopic}
-
-## 1. Planning Phase
-\`\`\`mcp
-planning_prompt { "query": "${safeTopic}", "domain": "auto-detect", "complexity": "auto-assess" }
-\`\`\`
-
-## 2. Research Execution
-${async === 'true' ? `
-\`\`\`mcp
-submit_research { "query": "${safeTopic}", "costPreference": "${costBudget || 'low'}" }
-get_job_status { "job_id": "[returned_job_id]" }
-\`\`\`
-` : `
-\`\`\`mcp
-conduct_research { "query": "${safeTopic}", "costPreference": "${costBudget || 'low'}" }
-\`\`\`
-`}
-
-## 3. Quality Assurance
-\`\`\`mcp
-get_past_research { "query": "${safeTopic}", "limit": 5 }
-search { "q": "${safeTopic}", "scope": "reports" }
-\`\`\`
-
-## 4. Follow-up Analysis
-\`\`\`mcp
-research_follow_up { "originalQuery": "${safeTopic}", "followUpQuestion": "[your_specific_question]" }
-\`\`\`
-          `;
-          return {
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: workflowGuide }] }]
-          };
-          
-        default:
-          throw new Error(`Unknown prompt: ${request.params.name}`);
-      }
-    }
-  });
-}
+// NOTE: Prompts are now registered via registerPrompts() in mcpPrompts.js (loaded after tools)
 
 // Register resources using latest MCP spec with proper protocol handlers and URI templates
 if (config.mcp?.features?.resources) {
@@ -831,6 +713,20 @@ registerNormalizedTool('elicitation_response', z.object({ elicitationId: z.strin
 });
 registerNormalizedTool('browser_inference_request', browserInferenceRequestSchema, runBrowserInference);
 registerNormalizedTool('browser_inference_result', browserInferenceResultSchema, handleBrowserInferenceResult);
+registerNormalizedTool('local_inference', localInferenceSchema, runLocalInference);
+
+// Initialize local model manager at startup
+(async function initializeLocalModels() {
+  try {
+    if (config.localModels?.enabled) {
+      const localModelManager = require('../utils/localModelManager');
+      await localModelManager.initialize();
+      console.error(`[${new Date().toISOString()}] Local models initialized: ${localModelManager.getLoadedModels().join(', ')}`);
+    }
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Failed to initialize local models:`, error);
+  }
+})();
 
 // Register MCP Prompts and Resources
 registerPrompts(server);
