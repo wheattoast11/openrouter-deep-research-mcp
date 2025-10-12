@@ -1,0 +1,37 @@
+[2025-10-12T06:19:56.916Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-12T06:19:59.406Z] In-memory cache initialized with TTL: 3600s, max keys: 100
+[2025-10-12T06:19:59.440Z] Registering MCP prompts...
+[2025-10-12T06:19:59.443Z] Registered 6 MCP prompts
+[2025-10-12T06:19:59.445Z] Registered 9 MCP resources
+[2025-10-12T06:19:59.448Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-12T06:19:59.449Z] Waiting 499ms before retrying DB initialization (last attempt 1ms ago)
+(node:15496) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+{"result":{"protocolVersion":"2025-03-26","capabilities":{"resources":{"listChanged":true},"completions":{},"tools":{"listChanged":true},"prompts":{"listChanged":true}},"serverInfo":{"name":"openrouter_agents","version":"2.1.1-beta","capabilities":{"tools":{"list":true,"call":true},"prompts":{"list":true,"get":true,"listChanged":true},"resources":{"list":true,"read":true,"subscribe":true,"listChanged":true}}}},"jsonrpc":"2.0","id":1}
+{"result":{"prompts":[{"name":"planning_prompt","description":"Generate an optimal multi-agent research plan for a complex query"},{"name":"synthesis_prompt","description":"Synthesize multiple research results into a coherent report with citations"},{"name":"research_workflow_prompt","description":"Step-by-step workflow template for different research task types"},{"name":"summarize_and_learn","description":"Fetch a URL, extract key information, and index for future retrieval"},{"name":"daily_briefing","description":"Generate a daily briefing of knowledge base activity and scheduled actions"},{"name":"continuous_query","description":"Set up continuous monitoring of a research topic with scheduled execution"}]},"jsonrpc":"2.0","id":2}
+{"result":{"description":"Planning prompt requires a query parameter","messages":[{"role":"assistant","content":{"type":"text","text":"Please provide a query parameter to generate a research plan."}}]},"jsonrpc":"2.0","id":3}
+[2025-10-12T06:20:00.130Z] Successfully imported @xenova/transformers.
+[2025-10-12T06:20:00.131Z] Initializing embedding model Xenova/all-MiniLM-L6-v2...
+[2025-10-12T06:20:00.155Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
+[2025-10-12T06:20:03.000Z] PGLite vector extension enabled
+[2025-10-12T06:20:03.023Z] PGLite reports table created or verified
+[2025-10-12T06:20:03.069Z] BM25/vector index tables created or verified
+[2025-10-12T06:20:03.086Z] Job tables created or verified
+[2025-10-12T06:20:03.093Z] mcp_sessions table created or verified
+[2025-10-12T06:20:03.101Z] usage_counters table created or verified
+[2025-10-12T06:20:03.116Z] PGLite indexes created or verified
+[2025-10-12T06:20:04.556Z] PGLite vector extension enabled
+[2025-10-12T06:20:04.562Z] PGLite reports table created or verified
+[2025-10-12T06:20:04.579Z] BM25/vector index tables created or verified
+[2025-10-12T06:20:04.587Z] Job tables created or verified
+[2025-10-12T06:20:04.590Z] mcp_sessions table created or verified
+[2025-10-12T06:20:04.593Z] usage_counters table created or verified
+[2025-10-12T06:20:04.597Z] PGLite indexes created or verified
+[2025-10-12T06:20:04.838Z] Embedding model initialized successfully.
+[2025-10-12T06:20:05.980Z] PGLite vector extension enabled
+[2025-10-12T06:20:05.992Z] PGLite reports table created or verified
+[2025-10-12T06:20:06.016Z] BM25/vector index tables created or verified
+[2025-10-12T06:20:06.028Z] Job tables created or verified
+[2025-10-12T06:20:06.033Z] mcp_sessions table created or verified
+[2025-10-12T06:20:06.038Z] usage_counters table created or verified
+[2025-10-12T06:20:06.045Z] PGLite indexes created or verified

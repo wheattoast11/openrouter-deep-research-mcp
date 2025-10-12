@@ -13,3 +13,25 @@
 [2025-10-12T06:18:25.036Z] Initializing PGLite with Storage: File (C:\Users\tdesa\Documents\ai_projects\openrouter-agents\researchAgentDB)
 [2025-10-12T06:18:30.692Z] Successfully imported @xenova/transformers.
 [2025-10-12T06:18:30.692Z] Initializing embedding model Xenova/all-MiniLM-L6-v2...
+[2025-10-12T06:18:33.444Z] PGLite vector extension enabled
+[2025-10-12T06:18:33.453Z] PGLite reports table created or verified
+[2025-10-12T06:18:33.473Z] BM25/vector index tables created or verified
+[2025-10-12T06:18:33.480Z] Job tables created or verified
+[2025-10-12T06:18:33.483Z] mcp_sessions table created or verified
+[2025-10-12T06:18:33.485Z] usage_counters table created or verified
+[2025-10-12T06:18:33.490Z] PGLite indexes created or verified
+[2025-10-12T06:18:34.348Z] PGLite vector extension enabled
+[2025-10-12T06:18:34.354Z] PGLite reports table created or verified
+[2025-10-12T06:18:34.370Z] BM25/vector index tables created or verified
+[2025-10-12T06:18:34.378Z] Job tables created or verified
+[2025-10-12T06:18:34.381Z] mcp_sessions table created or verified
+[2025-10-12T06:18:34.384Z] usage_counters table created or verified
+[2025-10-12T06:18:34.388Z] PGLite indexes created or verified
+[2025-10-12T06:18:35.459Z] PGLite vector extension enabled
+[2025-10-12T06:18:35.465Z] PGLite reports table created or verified
+[2025-10-12T06:18:35.482Z] BM25/vector index tables created or verified
+[2025-10-12T06:18:35.490Z] Job tables created or verified
+[2025-10-12T06:18:35.494Z] mcp_sessions table created or verified
+[2025-10-12T06:18:35.498Z] usage_counters table created or verified
+[2025-10-12T06:18:35.502Z] PGLite indexes created or verified
+[2025-10-12T06:18:40.587Z] Embedding model initialized successfully.
