@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}
+{"jsonrpc":"2.0","method":"prompts/list","id":2}
+{"jsonrpc":"2.0","method":"prompts/get","params":{"name":"planning_prompt","arguments":{"query":"Test planning query"}},"id":3}
+

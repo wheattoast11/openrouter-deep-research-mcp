@@ -6,39 +6,39 @@ const config = require('../../config');
  * Exposes 6 prompt templates for various research workflows
  */
 
-// Schemas for prompt arguments
+// Schemas for prompt arguments - using plain Zod objects with shape property
 const planningPromptArgs = z.object({
   query: z.string().describe('Research query to plan'),
-  domain: z.string().optional().describe('Domain context (technical, business, academic)'),
-  complexity: z.enum(['simple', 'moderate', 'complex']).optional().describe('Query complexity level'),
-  maxAgents: z.number().int().min(1).max(10).optional().describe('Max parallel research agents')
+  domain: z.string().describe('Domain context (technical, business, academic)').optional(),
+  complexity: z.enum(['simple', 'moderate', 'complex']).describe('Query complexity level').optional(),
+  maxAgents: z.number().int().min(1).max(10).describe('Max parallel research agents').optional()
 });
 
 const synthesisPromptArgs = z.object({
   results: z.array(z.any()).describe('Research results to synthesize'),
-  format: z.enum(['report', 'briefing', 'bullet_points']).optional().describe('Output format'),
-  includeSources: z.boolean().optional().describe('Include source citations')
+  format: z.enum(['report', 'briefing', 'bullet_points']).describe('Output format').optional(),
+  includeSources: z.boolean().describe('Include source citations').optional()
 });
 
 const workflowPromptArgs = z.object({
   taskType: z.enum(['research', 'analysis', 'comparison', 'trend_tracking']).describe('Workflow type'),
-  context: z.string().optional().describe('Additional context')
+  context: z.string().describe('Additional context').optional()
 });
 
 const summarizeLearnArgs = z.object({
   url: z.string().url().describe('URL to fetch and summarize'),
-  focus: z.string().optional().describe('Specific aspect to focus on')
+  focus: z.string().describe('Specific aspect to focus on').optional()
 });
 
 const dailyBriefingArgs = z.object({
-  scope: z.enum(['reports', 'jobs', 'all']).optional().describe('Briefing scope'),
-  since: z.string().optional().describe('ISO datetime to start from')
+  scope: z.enum(['reports', 'jobs', 'all']).describe('Briefing scope').optional(),
+  since: z.string().describe('ISO datetime to start from').optional()
 });
 
 const continuousQueryArgs = z.object({
   query: z.string().describe('Query to monitor'),
   schedule: z.string().describe('Cron expression for monitoring frequency'),
-  notify: z.string().url().optional().describe('Webhook URL for notifications')
+  notify: z.string().url().describe('Webhook URL for notifications').optional()
 });
 
 /**
