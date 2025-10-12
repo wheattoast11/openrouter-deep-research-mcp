@@ -46,6 +46,8 @@ const continuousQueryArgs = z.object({
  * @param {McpServer} server - MCP server instance
  */
 function registerPrompts(server) {
+  console.error(`[${new Date().toISOString()}] Registering MCP prompts...`);
+  
   // 1. Planning Prompt
   server.registerPrompt('planning_prompt', {
     title: 'Multi-Agent Research Planning',
