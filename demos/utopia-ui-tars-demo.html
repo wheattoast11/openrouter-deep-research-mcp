@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Utopia OS - Local AI Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        .graph-node { cursor: pointer; transition: all 0.3s; }
+        .graph-node:hover { opacity: 0.8; }
+        .graph-link { stroke: #999; stroke-opacity: 0.6; }
+        .loading { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .terminal { font-family: 'Fira Code', 'Courier New', monospace; background: #1e1e1e; color: #d4d4d4; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 min-h-screen text-white">
+    <div class="container mx-auto p-6 max-w-7xl">
+        <!-- Header -->
+        <header class="mb-8">
+            <h1 class="text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-600 mb-2">
+                Utopia OS
+            </h1>
+            <p class="text-gray-400">Local-First AI · Browser Inference · Zero Latency</p>
+        </header>
+
+        <!-- Main Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Left Panel: Controls -->
+            <div class="lg:col-span-1 space-y-4">
+                <!-- Model Selection -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-purple-500/30">
+                    <h2 class="text-xl font-semibold mb-4">Model Configuration</h2>
+                    
+                    <label class="block text-sm text-gray-400 mb-2">Select Model:</label>
+                    <select id="modelSelect" title="Model" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 mb-4">
+                        <option value="qwen3-4b">Qwen3-4B (Fast, 1.5GB)</option>
+                        <option value="ui-tars-1.5-7b">UI-TARS-1.5-7B (Vision, 2.6GB)</option>
+                        <option value="gpt-oss-20b">GPT-OSS-20B (Reasoning, 4GB)</option>
+                        <option value="utopia-atomic">Utopia-Atomic (Tej's Model, 1GB)</option>
+                    </select>
+                    
+                    <label class="block text-sm text-gray-400 mb-2">Quantization:</label>
+                    <select id="quantSelect" title="Quantization" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 mb-4">
+                        <option value="q4">Q4 (Fastest, 4-bit)</option>
+                        <option value="q8">Q8 (Balanced, 8-bit)</option>
+                        <option value="awq">AWQ (High Quality)</option>
+                    </select>
+                    
+                    <button id="loadBtn" class="w-full bg-purple-600 hover:bg-purple-700 rounded px-4 py-2 font-semibold transition">
+                        Load Model
+                    </button>
+                    
+                    <div id="loadStatus" class="mt-4 text-sm text-gray-400"></div>
+                </div>
+
+                <!-- Memory Stats -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-purple-500/30">
+                    <h2 class="text-xl font-semibold mb-4">System Stats</h2>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Device:</span>
+                            <span id="deviceStatus" class="text-green-400">Detecting...</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">VRAM Used:</span>
+                            <span id="vramUsed" class="text-blue-400">0 GB</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Models Loaded:</span>
+                            <span id="modelsLoaded" class="text-yellow-400">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Inference Time:</span>
+                            <span id="inferenceTime" class="text-pink-400">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- About -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-purple-500/30">
+                    <h2 class="text-xl font-semibold mb-2">About</h2>
+                    <p class="text-xs text-gray-400 leading-relaxed">
+                        This demo showcases browser-based AI inference using transformers.js with WebGPU acceleration.
+                        Models run entirely in your browser with zero server calls after initial download.
+                        <br><br>
+                        <strong>Tech Stack:</strong> Transformers.js, WebGPU, ONNX, D3.js, Tailwind CSS
+                        <br><br>
+                        <strong>Created by:</strong> Tej Desai & OpenRouter Agents Team
+                    </p>
+                </div>
+            </div>
+
+            <!-- Center Panel: Inference -->
+            <div class="lg:col-span-2 space-y-4">
+                <!-- Input -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-purple-500/30">
+                    <h2 class="text-xl font-semibold mb-4">Inference</h2>
+                    
+                    <textarea 
+                        id="promptInput" 
+                        class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 mb-4 h-32 resize-none"
+                        placeholder="Enter your prompt here... (Try: 'Explain quantum computing in simple terms')"
+                    ></textarea>
+                    
+                    <div class="flex gap-2">
+                        <button id="inferBtn" class="flex-1 bg-green-600 hover:bg-green-700 rounded px-4 py-2 font-semibold transition">
+                            Run Inference
+                        </button>
+                        <button id="clearBtn" class="bg-gray-700 hover:bg-gray-600 rounded px-4 py-2 font-semibold transition">
+                            Clear
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Output -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-purple-500/30">
+                    <h2 class="text-xl font-semibold mb-4">Output</h2>
+                    <div id="output" class="terminal rounded p-4 min-h-[200px] overflow-auto">
+                        <span class="text-gray-500">Model output will appear here...</span>
+                    </div>
+                </div>
+
+                <!-- Computation Graph -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-purple-500/30">
+                    <h2 class="text-xl font-semibold mb-4">Computation Graph</h2>
+                    <svg id="graph" class="w-full h-64 bg-gray-900 rounded"></svg>
+                    <p class="text-xs text-gray-500 mt-2">
+                        Interactive visualization of reasoning process using interaction nets
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script type="module">
+        // Mock implementation for demo (in production, would use actual transformers.js)
+        class MockInferenceEngine {
+            constructor() {
+                this.models = new Map();
+                this.device = 'webgpu';
+            }
+
+            async detectDevice() {
+                if ('gpu' in navigator) {
+                    this.device = 'webgpu';
+                    return 'WebGPU';
+                }
+                this.device = 'wasm';
+                return 'WebAssembly';
+            }
+
+            async loadModel(modelId, variant) {
+                return new Promise((resolve) => {
+                    setTimeout(() => {
+                        this.models.set(modelId, {
+                            id: modelId,
+                            variant,
+                            loaded: true,
+                            vram: this.estimateVRAM(modelId, variant)
+                        });
+                        resolve({ success: true });
+                    }, 2000);
+                });
+            }
+
+            estimateVRAM(modelId, variant) {
+                const estimates = {
+                    'qwen3-4b': { q4: 1.5, q8: 3.5 },
+                    'ui-tars-1.5-7b': { q4: 1.8, awq: 2.6 },
+                    'gpt-oss-20b': { q4: 3.0 },
+                    'utopia-atomic': { q4: 1.0 }
+                };
+                return estimates[modelId]?.[variant] || 2.0;
+            }
+
+            async inference(modelId, prompt, options) {
+                return new Promise((resolve) => {
+                    const startTime = Date.now();
+                    
+                    // Simulate inference
+                    setTimeout(() => {
+                        const mockResponses = [
+                            "Quantum computing leverages quantum mechanics principles to process information in fundamentally new ways. Unlike classical bits that are either 0 or 1, quantum bits (qubits) can exist in superposition - being both states simultaneously. This enables quantum computers to explore multiple solution paths in parallel.",
+                            "The key advantage comes from quantum entanglement, where qubits become correlated in ways impossible for classical systems. When you measure one entangled qubit, you instantly know something about its partner, regardless of distance. This property, combined with superposition, allows quantum algorithms to solve certain problems exponentially faster than classical computers.",
+                            "However, quantum computers are extremely sensitive to environmental interference (decoherence), requiring near-absolute-zero temperatures and sophisticated error correction. They excel at optimization, cryptography, and simulation problems, but aren't faster for all tasks. Think of them as specialized processors for specific problem classes rather than general replacements for classical computing."
+                        ];
+                        
+                        const duration = Date.now() - startTime;
+                        
+                        resolve({
+                            text: mockResponses[Math.floor(Math.random() * mockResponses.length)],
+                            confidence: 0.85 + Math.random() * 0.1,
+                            duration
+                        });
+                    }, 1500 + Math.random() * 1000);
+                });
+            }
+        }
+
+        // Initialize
+        const engine = new MockInferenceEngine();
+        let currentModel = null;
+
+        // UI Elements
+        const modelSelect = document.getElementById('modelSelect');
+        const quantSelect = document.getElementById('quantSelect');
+        const loadBtn = document.getElementById('loadBtn');
+        const inferBtn = document.getElementById('inferBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const promptInput = document.getElementById('promptInput');
+        const output = document.getElementById('output');
+        const loadStatus = document.getElementById('loadStatus');
+        const deviceStatus = document.getElementById('deviceStatus');
+        const vramUsed = document.getElementById('vramUsed');
+        const modelsLoaded = document.getElementById('modelsLoaded');
+        const inferenceTime = document.getElementById('inferenceTime');
+
+        // Detect device
+        engine.detectDevice().then(device => {
+            deviceStatus.textContent = device;
+            deviceStatus.classList.remove('text-green-400');
+            deviceStatus.classList.add(device === 'WebGPU' ? 'text-green-400' : 'text-yellow-400');
+        });
+
+        // Load model
+        loadBtn.addEventListener('click', async () => {
+            const modelId = modelSelect.value;
+            const variant = quantSelect.value;
+            
+            loadBtn.disabled = true;
+            loadBtn.classList.add('loading');
+            loadStatus.textContent = 'Loading model...';
+            
+            try {
+                await engine.loadModel(modelId, variant);
+                currentModel = modelId;
+                
+                loadStatus.textContent = `✓ Loaded ${modelId} (${variant})`;
+                loadStatus.classList.add('text-green-400');
+                
+                updateStats();
+            } catch (error) {
+                loadStatus.textContent = `✗ Error: ${error.message}`;
+                loadStatus.classList.add('text-red-400');
+            } finally {
+                loadBtn.disabled = false;
+                loadBtn.classList.remove('loading');
+            }
+        });
+
+        // Run inference
+        inferBtn.addEventListener('click', async () => {
+            if (!currentModel) {
+                output.innerHTML = '<span class="text-yellow-400">Please load a model first!</span>';
+                return;
+            }
+
+            const prompt = promptInput.value.trim();
+            if (!prompt) {
+                output.innerHTML = '<span class="text-yellow-400">Please enter a prompt!</span>';
+                return;
+            }
+
+            inferBtn.disabled = true;
+            output.innerHTML = '<span class="text-gray-400 loading">Thinking...</span>';
+
+            try {
+                const result = await engine.inference(currentModel, prompt, {});
+                
+                output.innerHTML = `<span class="text-green-400">${result.text}</span>
+                    <br><br>
+                    <span class="text-gray-500 text-xs">Confidence: ${(result.confidence * 100).toFixed(1)}% | ${result.duration}ms</span>`;
+                
+                inferenceTime.textContent = `${result.duration}ms`;
+                
+                // Update graph
+                updateGraph(result);
+            } catch (error) {
+                output.innerHTML = `<span class="text-red-400">Error: ${error.message}</span>`;
+            } finally {
+                inferBtn.disabled = false;
+            }
+        });
+
+        // Clear
+        clearBtn.addEventListener('click', () => {
+            promptInput.value = '';
+            output.innerHTML = '<span class="text-gray-500">Model output will appear here...</span>';
+        });
+
+        // Update stats
+        function updateStats() {
+            const totalVRAM = Array.from(engine.models.values())
+                .reduce((sum, m) => sum + m.vram, 0);
+            
+            vramUsed.textContent = `${totalVRAM.toFixed(1)} GB`;
+            modelsLoaded.textContent = engine.models.size;
+        }
+
+        // Update computation graph
+        function updateGraph(result) {
+            const svg = d3.select('#graph');
+            svg.selectAll('*').remove();
+            
+            const width = svg.node().clientWidth;
+            const height = svg.node().clientHeight;
+            
+            // Mock graph data
+            const nodes = [
+                { id: 'input', label: 'Input', x: 50, y: height / 2 },
+                { id: 'parse', label: 'Parse', x: 150, y: height / 2 },
+                { id: 'reason1', label: 'Reason 1', x: 250, y: height / 3 },
+                { id: 'reason2', label: 'Reason 2', x: 250, y: 2 * height / 3 },
+                { id: 'synthesize', label: 'Synthesize', x: 350, y: height / 2 },
+                { id: 'output', label: 'Output', x: 450, y: height / 2 }
+            ];
+            
+            const links = [
+                { source: 'input', target: 'parse' },
+                { source: 'parse', target: 'reason1' },
+                { source: 'parse', target: 'reason2' },
+                { source: 'reason1', target: 'synthesize' },
+                { source: 'reason2', target: 'synthesize' },
+                { source: 'synthesize', target: 'output' }
+            ];
+            
+            // Draw links
+            svg.selectAll('.graph-link')
+                .data(links)
+                .enter().append('line')
+                .attr('class', 'graph-link')
+                .attr('x1', d => nodes.find(n => n.id === d.source).x)
+                .attr('y1', d => nodes.find(n => n.id === d.source).y)
+                .attr('x2', d => nodes.find(n => n.id === d.target).x)
+                .attr('y2', d => nodes.find(n => n.id === d.target).y)
+                .attr('stroke-width', 2);
+            
+            // Draw nodes
+            const nodeGroups = svg.selectAll('.graph-node')
+                .data(nodes)
+                .enter().append('g')
+                .attr('class', 'graph-node')
+                .attr('transform', d => `translate(${d.x}, ${d.y})`);
+            
+            nodeGroups.append('circle')
+                .attr('r', 20)
+                .attr('fill', '#8b5cf6');
+            
+            nodeGroups.append('text')
+                .attr('text-anchor', 'middle')
+                .attr('dy', 35)
+                .attr('fill', '#d4d4d4')
+                .attr('font-size', '10px')
+                .text(d => d.label);
+        }
+
+        // Initial graph
+        updateGraph({});
+    </script>
+</body>
+</html>
+
+

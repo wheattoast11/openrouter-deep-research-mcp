@@ -6,6 +6,10 @@ import KnowledgeGraph from './components/KnowledgeGraph'
 import JobPanel from './components/JobPanel'
 import ToolPanel from './components/ToolPanel'
 import ElicitationModal from './components/ElicitationModal'
+import CognitiveSubstrate from './components/CognitiveSubstrate'
+import TracesPanel from './components/TracesPanel'
+import ModelSelector from './components/ModelSelector'
+import { setRemoteForwarder, updateStackMode } from './client/ContextGateway'
 
 function App() {
   const [ws, setWs] = useState(null)
@@ -13,6 +17,10 @@ function App() {
   const [events, setEvents] = useState([])
   const [agentStatus, setAgentStatus] = useState('disconnected')
   const [isCollapsed, setIsCollapsed] = useState(false)
+  // Env-gated private mode and initial stack mode
+  const isPrivate = (import.meta.env.VITE_PRIVATE_AGENT === '1')
+  const initialMode = (isPrivate && String(import.meta.env.VITE_STACK_MODE || '').toLowerCase() === 'local') ? 'local' : 'remote'
+  const [viewMode, setViewMode] = useState(initialMode) // 'remote' | 'local'
 
   // Job streams and tool outputs
   const [activeJobs, setActiveJobs] = useState(new Map())
@@ -21,11 +29,15 @@ function App() {
   const [showJobPanel, setShowJobPanel] = useState(false)
   const [showToolPanel, setShowToolPanel] = useState(false)
   const [elicitationRequest, setElicitationRequest] = useState(null)
+  const [showTraces, setShowTraces] = useState(false)
 
   useEffect(() => {
     // Auto-connect to WebSocket on mount
     const token = new URLSearchParams(window.location.search).get('token') || 'demo'
-    const wsUrl = `ws://localhost:3008/mcp/ws?token=${token}`
+    const host = import.meta.env.VITE_SERVER_HOST || window.location.hostname
+    const port = import.meta.env.VITE_SERVER_PORT || '3009'
+    const proto = (window.location.protocol === 'https:') ? 'wss' : 'ws'
+    const wsUrl = `${proto}://${host}:${port}/mcp/ws?token=${token}`
     
     const websocket = new WebSocket(wsUrl)
     
@@ -33,6 +45,7 @@ function App() {
       console.log('WebSocket connected')
       setConnected(true)
       setAgentStatus('idle')
+      setRemoteForwarder((msg) => websocket.send(msg))
     }
     
     websocket.onmessage = (event) => {
@@ -66,99 +79,7 @@ function App() {
           case 'temporal.briefing_generated':
             addEvent({ type: 'briefing', text: 'Daily briefing ready', data: message.payload })
             break
-          case 'job.started':
-            setActiveJobs(prev => new Map(prev).set(message.payload.job_id, {
-              id: message.payload.job_id,
-              status: 'running',
-              startTime: new Date().toISOString(),
-              events: []
-            }))
-            setJobStreams(prev => new Map(prev).set(message.payload.job_id, []))
-            addEvent({ type: 'agent', text: `Job ${message.payload.job_id} started`, data: message.payload })
-            break
-          case 'job.events':
-            // Update job streams with new events
-            message.payload.events.forEach(event => {
-              setJobStreams(prev => {
-                const newStreams = new Map(prev)
-                const stream = newStreams.get(message.payload.jobId) || []
-                stream.push({
-                  timestamp: new Date().toISOString(),
-                  type: event.type,
-                  data: event.data
-                })
-                newStreams.set(message.payload.jobId, stream)
-                return newStreams
-              })
-            })
-            addEvent({ type: 'agent', text: `Job ${message.payload.jobId}: ${message.payload.events.length} events`, data: message.payload })
-            break
-          case 'tool.started':
-            setToolOutputs(prev => new Map(prev).set(message.payload.tool_id, {
-              id: message.payload.tool_id,
-              name: message.payload.tool_name,
-              status: 'running',
-              startTime: new Date().toISOString(),
-              output: ''
-            }))
-            break
-          case 'tool.delta':
-            setToolOutputs(prev => {
-              const newOutputs = new Map(prev)
-              const current = newOutputs.get(message.payload.tool_id)
-              if (current) {
-                current.output += message.payload.delta
-                current.lastUpdate = new Date().toISOString()
-              }
-              return newOutputs
-            })
-            break
-          case 'tool.completed':
-            setToolOutputs(prev => {
-              const newOutputs = new Map(prev)
-              const current = newOutputs.get(message.payload.tool_id)
-              if (current) {
-                current.status = 'completed'
-                current.endTime = new Date().toISOString()
-                current.finalOutput = message.payload.result
-              }
-              return newOutputs
-            })
-            break
-          case 'elicitation/request':
-            setElicitationRequest(message.payload)
-            break
-          case 'job.result':
-            const resultText = typeof message.payload.result === 'object' 
-              ? JSON.stringify(message.payload.result, null, 2) 
-              : message.payload.result
-            
-            const eventData = { 
-              type: message.payload.status === 'failed' ? 'error' : 'agent', 
-              text: resultText 
-            }
-
-            if (message.payload.result && message.payload.result.resources) {
-              eventData.resources = message.payload.result.resources
-            }
-
-            addEvent(eventData)
-
-            // Update job status
-            setActiveJobs(prev => {
-              const newJobs = new Map(prev)
-              const job = newJobs.get(message.payload.job_id)
-              if (job) {
-                job.status = message.payload.status
-                job.endTime = new Date().toISOString()
-              }
-              return newJobs
-            })
-
-            setAgentStatus('idle')
-            break
-          default:
-            addEvent({ type: 'raw', text: message.type, data: message })
+          // no default
         }
       } catch (error) {
         console.error('Error parsing message:', error)
@@ -175,6 +96,7 @@ function App() {
       console.log('WebSocket closed')
       setConnected(false)
       setAgentStatus('disconnected')
+      setRemoteForwarder(null)
     }
     
     setWs(websocket)
@@ -183,6 +105,10 @@ function App() {
       websocket.close()
     }
   }, [])
+
+  useEffect(() => {
+    updateStackMode(viewMode)
+  }, [viewMode])
 
   const addEvent = (event) => {
     setEvents(prev => [...prev, { ...event, id: Date.now(), timestamp: new Date().toISOString() }])
@@ -257,6 +183,37 @@ function App() {
           <span className="text-xs text-terminal-muted">v2.0</span>
         </div>
         <div className="flex items-center gap-4">
+          {/* Mode Toggle (env-gated) */}
+          {isPrivate && (
+            <button
+              onClick={() => setViewMode(viewMode === 'remote' ? 'local' : 'remote')}
+              className={`px-3 py-1 text-xs rounded transition-colors ${
+                viewMode === 'local'
+                  ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+                  : 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
+              }`}
+              title={viewMode === 'remote' ? 'Switch to Local Zero Agent' : 'Switch to Remote Server'}
+            >
+              {viewMode === 'remote' ? '🌐 Server' : '🧠 Local'}
+            </button>
+          )}
+          {isPrivate && viewMode === 'local' && (
+            <ModelSelector />
+          )}
+          {isPrivate && (
+            <button
+              onClick={() => setShowTraces(!showTraces)}
+              className={`px-3 py-1 text-xs rounded transition-colors ${
+                showTraces
+                  ? 'bg-terminal-accent text-terminal-bg'
+                  : 'bg-terminal-bg/50 text-terminal-muted hover:text-terminal-text'
+              }`}
+              title="Traces"
+            >
+              Traces
+            </button>
+          )}
+          
           <AgentStatus status={agentStatus} connected={connected} />
 
           {/* Panel Toggle Buttons */}
@@ -296,46 +253,54 @@ function App() {
 
       {/* Main Content */}
       {!isCollapsed && (
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 p-4 overflow-hidden">
-          {/* Left: Event Stream */}
-          <div className="lg:col-span-2">
-            <EventStream events={events} />
-          </div>
+        <>
+          {viewMode === 'remote' ? (
+            <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 p-4 overflow-hidden">
+              {/* Left: Event Stream */}
+              <div className="lg:col-span-2">
+                <EventStream events={events} />
+              </div>
 
-          {/* Right: Knowledge Graph & Tools */}
-          <div className="flex flex-col gap-4">
-            <KnowledgeGraph wsconnected={connected} />
-            
-            {/* Quick Actions */}
-            <div className="glass rounded-lg p-4">
-              <h3 className="text-sm font-semibold mb-2 text-terminal-muted">Quick Actions</h3>
-              <div className="flex flex-col gap-2 text-xs">
-                <button
-                  onClick={() => sendCommand('/steer Focus on recent developments')}
-                  className="px-3 py-1.5 bg-terminal-accent/20 hover:bg-terminal-accent/30 rounded transition-colors text-left"
-                >
-                  🎯 Steer Agent
-                </button>
-                <button
-                  onClick={() => sendCommand('Generate daily briefing')}
-                  className="px-3 py-1.5 bg-terminal-accent/20 hover:bg-terminal-accent/30 rounded transition-colors text-left"
-                >
-                  📊 Daily Briefing
-                </button>
-                <button
-                  onClick={() => sendCommand('What are the latest updates?')}
-                  className="px-3 py-1.5 bg-terminal-accent/20 hover:bg-terminal-accent/30 rounded transition-colors text-left"
-                >
-                  🔍 Recent Updates
-                </button>
+              {/* Right: Knowledge Graph & Tools */}
+              <div className="flex flex-col gap-4">
+                <KnowledgeGraph wsconnected={connected} />
+                
+                {/* Quick Actions */}
+                <div className="glass rounded-lg p-4">
+                  <h3 className="text-sm font-semibold mb-2 text-terminal-muted">Quick Actions</h3>
+                  <div className="flex flex-col gap-2 text-xs">
+                    <button
+                      onClick={() => sendCommand('/steer Focus on recent developments')}
+                      className="px-3 py-1.5 bg-terminal-accent/20 hover:bg-terminal-accent/30 rounded transition-colors text-left"
+                    >
+                      🎯 Steer Agent
+                    </button>
+                    <button
+                      onClick={() => sendCommand('Generate daily briefing')}
+                      className="px-3 py-1.5 bg-terminal-accent/20 hover:bg-terminal-accent/30 rounded transition-colors text-left"
+                    >
+                      📊 Daily Briefing
+                    </button>
+                    <button
+                      onClick={() => sendCommand('What are the latest updates?')}
+                      className="px-3 py-1.5 bg-terminal-accent/20 hover:bg-terminal-accent/30 rounded transition-colors text-left"
+                    >
+                      🔍 Recent Updates
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          ) : (
+            <div className="flex-1 w-full h-full">
+              <CognitiveSubstrate />
+            </div>
+          )}
+        </>
       )}
 
-      {/* Command Bar (Always Visible) */}
-      <CommandBar onCommand={sendCommand} connected={connected} />
+      {/* Command Bar (Only in Remote Mode) */}
+      {viewMode === 'remote' && <CommandBar onCommand={sendCommand} connected={connected} />}
 
       {/* Panels */}
       {showJobPanel && (
@@ -350,6 +315,9 @@ function App() {
           toolOutputs={toolOutputs}
           onClose={() => setShowToolPanel(false)}
         />
+      )}
+      {isPrivate && showTraces && (
+        <TracesPanel onClose={() => setShowTraces(false)} />
       )}
 
       {/* Elicitation Modal */}

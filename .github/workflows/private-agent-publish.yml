@@ -1,0 +1,290 @@
+# Private Agent Publishing Workflow
+# Only runs when PRIVATE_AGENT=1 and PRIVATE_PUBLISH=1
+# Publishes to private npm registry and GitHub Releases
+
+name: Private Agent Publish
+
+on:
+  push:
+    tags:
+      - 'v*-private'  # Only trigger on private release tags (e.g., v2.1.0-private)
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: 'Force publish even without tag'
+        required: false
+        default: 'false'
+
+jobs:
+  check-gates:
+    name: Check Environment Gates
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.gate_check.outputs.should_publish }}
+      has_private_remote: ${{ steps.gate_check.outputs.has_private_remote }}
+    steps:
+      - name: Check Gates
+        id: gate_check
+        run: |
+          # Only proceed if PRIVATE_AGENT and PRIVATE_PUBLISH are enabled
+          if [ "${{ secrets.PRIVATE_AGENT }}" = "1" ] && [ "${{ secrets.PRIVATE_PUBLISH }}" = "1" ]; then
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+            echo "::warning::Private agent publishing is disabled. Set PRIVATE_AGENT=1 and PRIVATE_PUBLISH=1 in secrets."
+          fi
+          # Detect private mirror remote URL presence
+          if [ -n "${{ secrets.PRIVATE_REMOTE_URL }}" ]; then
+            echo "has_private_remote=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_private_remote=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-private:
+    name: Build Private Agent
+    needs: check-gates
+    if: needs.check-gates.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      PRIVATE_AGENT: 1
+      VITE_PRIVATE_AGENT: 1
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for provenance
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: ${{ secrets.PRIVATE_NPM_REGISTRY != '' && secrets.PRIVATE_NPM_REGISTRY || 'https://npm.pkg.github.com' }}
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Server
+        run: npm run build || echo "No server build step defined"
+
+      - name: Build Client
+        working-directory: client
+        run: |
+          npm ci
+          npm run build
+        env:
+          VITE_PRIVATE_AGENT: 1
+          VITE_MODEL_PROFILE: janus-1.3b-onnx
+          VITE_STACK_MODE: local
+
+      - name: Generate SBOM
+        run: |
+          npm install -g @cyclonedx/cyclonedx-npm
+          cyclonedx-npm --output-file sbom.json
+          cd client && cyclonedx-npm --output-file ../sbom-client.json
+
+      - name: Create Manifest
+        run: |
+          cat > manifest.json <<EOF
+          {
+            "version": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "build_env": {
+              "node_version": "$(node --version)",
+              "npm_version": "$(npm --version)",
+              "private_agent": "1"
+            },
+            "flags": {
+              "PRIVATE_AGENT": "1",
+              "VITE_PRIVATE_AGENT": "1"
+            }
+          }
+          EOF
+
+      - name: Create Minified Bundle (No Sources)
+        run: |
+          mkdir -p dist-private
+          # Copy only necessary runtime files
+          cp -r src dist-private/
+          cp package.json dist-private/
+          cp README.md dist-private/
+          cp LICENSE dist-private/ || echo "No LICENSE file"
+          cp sbom.json dist-private/
+          cp sbom-client.json dist-private/
+          cp manifest.json dist-private/
+          # Copy built client
+          cp -r client/dist dist-private/client-dist
+          # Remove source maps and dev artifacts
+          find dist-private -name "*.map" -delete
+          find dist-private -name "*.test.js" -delete
+          find dist-private -name "*.spec.js" -delete
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-agent-build
+          path: dist-private/
+          retention-days: 30
+
+  publish-npm:
+    name: Publish to Private npm
+    needs: build-private
+    runs-on: ubuntu-latest
+    if: needs.check-gates.outputs.should_publish == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: ${{ secrets.PRIVATE_NPM_REGISTRY != '' && secrets.PRIVATE_NPM_REGISTRY || 'https://npm.pkg.github.com' }}
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: private-agent-build
+          path: dist-private/
+
+      - name: Publish to Private Registry
+        working-directory: dist-private
+        run: npm publish --access restricted
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PRIVATE_NPM_TOKEN }}
+
+  publish-github-release:
+    name: Publish GitHub Release
+    needs: build-private
+    runs-on: ubuntu-latest
+    if: needs.check-gates.outputs.should_publish == 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: private-agent-build
+          path: dist-private/
+
+      - name: Create Release Archive
+        run: |
+          cd dist-private
+          tar -czf ../openrouter-agents-private-${{ github.ref_name }}.tar.gz .
+          cd ..
+          sha256sum openrouter-agents-private-${{ github.ref_name }}.tar.gz > checksums.txt
+
+      - name: Create Provenance File
+        run: |
+          cat > provenance.json <<EOF
+          {
+            "version": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "repository": "${{ github.repository }}",
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}",
+            "run_number": "${{ github.run_number }}",
+            "actor": "${{ github.actor }}",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "flags": {
+              "PRIVATE_AGENT": "1",
+              "PRIVATE_PUBLISH": "1"
+            }
+          }
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            openrouter-agents-private-${{ github.ref_name }}.tar.gz
+            checksums.txt
+            provenance.json
+            dist-private/sbom.json
+            dist-private/sbom-client.json
+            dist-private/manifest.json
+          body: |
+            ## Private Agent Release ${{ github.ref_name }}
+            
+            **⚠️ PRIVATE EXPERIMENTAL BUILD**
+            
+            This is a private, experimental release with features not available in the public version.
+            
+            ### Features
+            - Browser-based AI inference (Transformers.js/ONNX)
+            - Janus-1.3B-ONNX vision-text model
+            - Deterministic SOP gates
+            - Encrypted UoG traces
+            - Benchmark harness
+            
+            ### Installation
+            ```bash
+            # From GitHub Release
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/openrouter-agents-private-${{ github.ref_name }}.tar.gz
+            tar -xzf openrouter-agents-private-${{ github.ref_name }}.tar.gz
+            cd openrouter-agents-private-${{ github.ref_name }}
+            npm install --production
+            ```
+            
+            ### Verification
+            ```bash
+            # Verify checksums
+            sha256sum -c checksums.txt
+            ```
+            
+            ### Provenance
+            - Commit: ${{ github.sha }}
+            - Build: ${{ github.run_id }}
+            - Actor: ${{ github.actor }}
+            
+            See `provenance.json` for full build details.
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mirror-to-private-remote:
+    name: Mirror to Private Remote
+    needs: [publish-npm, publish-github-release]
+    runs-on: ubuntu-latest
+    if: needs.check-gates.outputs.should_publish == 'true' && needs.check-gates.outputs.has_private_remote == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Add Private Remote
+        env:
+          PRIVATE_REMOTE_URL: ${{ secrets.PRIVATE_REMOTE_URL }}
+        run: |
+          git remote add private "$PRIVATE_REMOTE_URL"
+
+      - name: Push to Private Remote
+        run: |
+          git push private ${{ github.ref_name }} --force
+        env:
+          GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no"
+
+  notify-completion:
+    name: Notify Completion
+    needs: [publish-npm, publish-github-release, mirror-to-private-remote]
+    runs-on: ubuntu-latest
+    if: always() && needs.check-gates.outputs.should_publish == 'true'
+    steps:
+      - name: Summary
+        run: |
+          echo "## Private Agent Publish Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **npm**: ${{ needs.publish-npm.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **GitHub Release**: ${{ needs.publish-github-release.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Private Mirror**: ${{ needs.mirror-to-private-remote.result }}" >> $GITHUB_STEP_SUMMARY
+

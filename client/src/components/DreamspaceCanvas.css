@@ -1,0 +1,331 @@
+/* client/src/components/DreamspaceCanvas.css */
+/**
+ * Dreamspace Canvas Styles
+ * Soft gradients, pulsing glows, and smooth animations
+ */
+
+:root {
+  /* Color System */
+  --color-idle: #6b7280;
+  --color-intent: #8b5cf6;
+  --color-memory: #ec4899;
+  --color-policy: #3b82f6;
+  --color-discovery: #8b5cf6;
+  --color-research: #3b82f6;
+  --color-synthesis: #14b8a6;
+  --color-complete: #10b981;
+  --color-error: #ef4444;
+  
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  /* Transitions */
+  --transition-fast: 0.15s ease;
+  --transition-medium: 0.3s ease;
+  --transition-slow: 0.6s ease;
+  
+  /* Shadows */
+  --shadow-sm: 0 2px 4px rgba(0,0,0,0.1);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
+  --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+  
+  /* Background */
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  
+  /* Text */
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #94a3b8;
+}
+
+/* Root Container */
+.dreamspace-root {
+  width: 100vw;
+  height: 100vh;
+  background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Connection Status */
+.connection-status {
+  position: absolute;
+  top: var(--spacing-md);
+  right: var(--spacing-md);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 20px;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  font-size: 12px;
+  color: var(--text-secondary);
+  z-index: 1000;
+}
+
+.connection-status.connected .status-dot {
+  background: var(--color-complete);
+  box-shadow: 0 0 10px var(--color-complete);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.connection-status.disconnected .status-dot {
+  background: var(--color-error);
+  animation: blink 1s ease-in-out infinite;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: all var(--transition-medium);
+}
+
+/* Phase Indicator */
+.phase-indicator {
+  position: absolute;
+  top: var(--spacing-md);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-xl);
+  background: rgba(15, 23, 42, 0.9);
+  border-radius: 30px;
+  -webkit-backdrop-filter: blur(15px);
+  backdrop-filter: blur(15px);
+  z-index: 999;
+}
+
+.phase-glow {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.phase-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.query-preview {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  max-width: 400px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Main Canvas Container */
+.dreamspace-canvas {
+  width: 100%;
+  height: 100%;
+  padding: var(--spacing-xl);
+  padding-top: 80px; /* Space for phase indicator */
+}
+
+/* Grid Layout */
+.dreamspace-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: 1fr 200px;
+  gap: var(--spacing-md);
+  height: 100%;
+  width: 100%;
+}
+
+/* Panes */
+.pane {
+  background: rgba(30, 41, 59, 0.6);
+  border-radius: 16px;
+  padding: var(--spacing-lg);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow-y: auto;
+  transition: all var(--transition-medium);
+}
+
+.pane:hover {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.left-pane {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.center-pane {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.right-pane {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.bottom-pane {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+/* Floating Progress */
+.floating-progress {
+  position: absolute;
+  bottom: 220px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 400px;
+  height: 4px;
+  background: rgba(51, 65, 85, 0.5);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-synthesis) 0%, var(--color-complete) 100%);
+  transition: width 0.3s ease;
+  box-shadow: 0 0 10px var(--color-synthesis);
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+/* Animations */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.1);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 10px currentColor;
+  }
+  50% {
+    box-shadow: 0 0 20px currentColor;
+  }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scrollbar Styling */
+.pane::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pane::-webkit-scrollbar-track {
+  background: rgba(51, 65, 85, 0.2);
+  border-radius: 3px;
+}
+
+.pane::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 3px;
+  transition: background var(--transition-fast);
+}
+
+.pane::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+/* Responsive Adjustments */
+@media (max-width: 1400px) {
+  .dreamspace-grid {
+    grid-template-columns: 240px 1fr 280px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .dreamspace-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: 60px 1fr 250px 200px;
+  }
+  
+  .left-pane {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  
+  .center-pane {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  
+  .right-pane {
+    grid-column: 1;
+    grid-row: 3;
+  }
+  
+  .bottom-pane {
+    grid-column: 1;
+    grid-row: 4;
+  }
+}
+
+/* Loading State */
+.dreamspace-root.loading {
+  animation: fade-in 0.6s ease;
+}
+
+/* Error State */
+.dreamspace-root.error {
+  background: linear-gradient(135deg, #1e293b 0%, #44403c 100%);
+}
+
+/* Complete State */
+.dreamspace-root.complete .dreamspace-canvas {
+  animation: completion-celebration 1s ease;
+}
+
+@keyframes completion-celebration {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+

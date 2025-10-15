@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase-Lock Viz</title>
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0b1220;color:#e5e7eb}
+    main{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding:12px}
+    .card{background:#0f172a;border:1px solid #1f2a44;border-radius:14px;overflow:hidden}
+    .title{padding:10px 12px;font-weight:600;border-bottom:1px solid #1f2a44;background:#0b1224}
+    .pane{padding:10px;min-height:40vh;white-space:pre-wrap;font-family:ui-monospace,monospace}
+    .bar{height:10px;background:#1f2937;border-radius:999px;margin:10px}
+    .bar>div{height:10px;background:#22c55e;border-radius:999px;width:0%}
+    .chip{background:#1f2937;border:1px solid #374151;padding:2px 8px;border-radius:999px;font-size:12px;color:#cbd5e1;margin:0 6px}
+  </style>
+</head>
+<body>
+  <header style="padding:10px 12px">
+    <span class="chip">Run</span><input id="run" placeholder="run_id" style="width:240px">
+    <button id="go">Connect</button>
+    <span class="chip" id="status">idle</span>
+  </header>
+  <div class="bar"><div id="coh"></div></div>
+  <main>
+    <section class="card"><div class="title">Client A</div><div class="pane" id="a"></div></section>
+    <section class="card"><div class="title">Server</div><div class="pane" id="s"></div></section>
+    <section class="card"><div class="title">Client B</div><div class="pane" id="b"></div></section>
+  </main>
+  <script>
+    const a=document.getElementById('a'), s=document.getElementById('s'), b=document.getElementById('b');
+    const coh=document.getElementById('coh'), status=document.getElementById('status');
+    function append(el, line){ el.textContent += line + '\n'; el.scrollTop = el.scrollHeight; }
+    function setCoh(v){ const clamped=Math.max(0,Math.min(1,Number(v)||0)); coh.style.width=(clamped*100)+'%'; }
+    document.getElementById('go').onclick=()=>{
+      const id=document.getElementById('run').value.trim(); if(!id){ alert('enter run id'); return; }
+      const es=new EventSource('/platform/runs/'+id+'/events/stream');
+      status.textContent='connecting…';
+      es.addEventListener('open', e=>{ status.textContent='open'; });
+      es.addEventListener('message', e=>{ try{ const d=JSON.parse(e.data); append(s,JSON.stringify(d)); setCoh((d.meta&&d.meta.coherence)||0.85);}catch(_){} });
+      es.addEventListener('complete', e=>{ status.textContent='complete'; es.close(); });
+      es.onerror=()=>{ status.textContent='error'; };
+      // Simulate client panes mirroring
+      let t=0; const sim=setInterval(()=>{ t+=1; append(a,'tick '+t); append(b,'tick '+t); if(t>20) clearInterval(sim); }, 500);
+    };
+  </script>
+</body>
+</html>
+

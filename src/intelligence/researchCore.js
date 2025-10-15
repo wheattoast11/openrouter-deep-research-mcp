@@ -207,18 +207,31 @@ async function loadDefaultDependencies() {
   if (defaultDeps) return defaultDeps;
   
   // Lazy load to avoid circular deps
-  const intentParser = require('./intentParser');
-  const memoryQuerier = require('./memoryQuerier');
-  const policySelector = require('./policySelector');
-  const policyExecutor = require('./policyExecutor');
-  const memoryUpdater = require('./memoryUpdater');
+  const intentParser = require('../core/intentParser');
+  const livingMemory = require('./livingMemory');
+  const adaptiveExecutor = require('./adaptiveExecutor');
+  
+  // Create memory instance
+  const memoryInstance = new livingMemory.LivingMemory();
+  await memoryInstance.initialize();
+  
+  // Create executor instance using singleton
+  const executorInstance = adaptiveExecutor.getInstance();
   
   defaultDeps = {
-    parseIntent: intentParser.parse,
-    queryMemory: memoryQuerier.query,
-    selectPolicy: policySelector.select,
-    executePolicy: policyExecutor.execute,
-    updateMemory: memoryUpdater.update
+    parseIntent: intentParser.parseIntent,
+    queryMemory: async (intent, context) => {
+      return await memoryInstance.query(intent, context);
+    },
+    selectPolicy: async (intent, memory, context) => {
+      return await executorInstance.select(intent, memory, context);
+    },
+    executePolicy: async (policy, intent, context) => {
+      return await executorInstance.execute(policy, intent, context);
+    },
+    updateMemory: async (insights, context) => {
+      return await memoryInstance.learn(insights, context);
+    }
   };
   
   return defaultDeps;

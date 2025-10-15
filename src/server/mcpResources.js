@@ -270,7 +270,7 @@ const deepDive = await research_follow_up({
       let jobs = { queued: 0, running: 0, succeeded: 0, failed: 0, canceled: 0 };
       try {
         const jobRows = await dbClient.executeQuery(
-          `SELECT status, COUNT(*) AS n FROM job_queue GROUP BY status`, 
+          `SELECT status, COUNT(*) AS n FROM jobs GROUP BY status`, 
           []
         );
         jobRows.forEach(row => {
@@ -373,7 +373,36 @@ const deepDive = await research_follow_up({
     };
   });
 
-  console.error(`[${new Date().toISOString()}] Registered ${9} MCP resources`);
+  // 10. Benchmark Runs (Dynamic)
+  server.registerResource('Benchmark Runs', 'mcp://benchmarks/runs', {
+    title: 'Recent Benchmark Runs',
+    description: 'Most recent benchmark runs with status and basic stats',
+    mimeType: 'application/json'
+  }, async () => {
+    try {
+      const rows = await dbClient.executeQuery(
+        `SELECT id, started_at, finished_at, mode, engine FROM benchmark_runs ORDER BY started_at DESC LIMIT 20`,
+        []
+      );
+      return {
+        contents: [{
+          uri: 'mcp://benchmarks/runs',
+          mimeType: 'application/json',
+          text: JSON.stringify({ timestamp: new Date().toISOString(), runs: rows }, null, 2)
+        }]
+      };
+    } catch (error) {
+      return {
+        contents: [{
+          uri: 'mcp://benchmarks/runs',
+          mimeType: 'application/json',
+          text: JSON.stringify({ error: error.message }, null, 2)
+        }]
+      };
+    }
+  });
+
+  console.error(`[${new Date().toISOString()}] Registered ${10} MCP resources`);
 }
 
 module.exports = { registerResources };

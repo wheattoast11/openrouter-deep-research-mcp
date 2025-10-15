@@ -12,6 +12,7 @@ Inspired by the Terminals.tech aesthetic: **ultra-minimal, collapsible, lightwei
 - 💬 **Event Stream**: See agent thoughts, status updates, and proactive suggestions
 - 🎯 **Agent Steering**: Dynamically adjust agent focus mid-task
 - 📊 **Quick Actions**: Pre-defined commands for common workflows
+- 🌌 **Local Zero Agent**: Browser-based AI with real-time cognitive visualization
 
 ## Quick Start
 
@@ -25,7 +26,11 @@ Open `http://localhost:5173?token=YOUR_TOKEN`
 
 ## Usage
 
-### Commands
+### Mode Switching
+
+Toggle between **Server Mode** (🌐) and **Local Mode** (🧠) using the mode switcher in the header.
+
+#### Server Mode (Remote MCP Server)
 
 Type in the command bar:
 
@@ -33,16 +38,32 @@ Type in the command bar:
 - **Steering**: `/steer Focus on security implications`
 - **Context**: `/context User prefers detailed analysis`
 
-### Quick Actions
-
 Click the quick action buttons for instant commands:
 - 🎯 Steer Agent
 - 📊 Daily Briefing
 - 🔍 Recent Updates
 
-### Knowledge Graph
+Query the knowledge graph by typing an entity name (e.g., "PGlite") and clicking "Query".
 
-Type an entity name (e.g., "PGlite") and click "Query" to explore relationships.
+#### Local Mode (Cognitive Substrate)
+
+The **Local Zero Agent** is a fully browser-based AI system that runs independently of the remote MCP server.
+
+**Features**:
+- Real-time particle visualization reflecting AI cognitive state
+- Multi-agent architecture (Planner + Synthesizer)
+- Entropy, coherence, and phase-lock metrics
+- Powered by Transformers.js and WebGPU
+- No server dependency - runs entirely in your browser
+
+**How it works**:
+1. Enter a query in the input field
+2. Watch the particle manifold shift from high-entropy (chaotic) to low-entropy (coherent) as agents think
+3. The Planner breaks down your request into steps
+4. The Synthesizer creates a comprehensive response
+5. All inference happens locally using a 0.5B parameter model
+
+This demonstrates the "realizability proof" - the system proves its own capabilities through direct execution.
 
 ## Integration
 

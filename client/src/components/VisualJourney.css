@@ -1,0 +1,216 @@
+/* client/src/components/VisualJourney.css */
+
+.visual-journey {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.journey-title {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  margin: 0 0 16px 0;
+}
+
+/* Empty State */
+.journey-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-tertiary);
+}
+
+.journey-empty .empty-icon {
+  font-size: 40px;
+  opacity: 0.5;
+}
+
+.journey-empty .empty-text {
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Timeline */
+.journey-timeline {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Screenshot Card */
+.screenshot-card {
+  background: rgba(30, 41, 59, 0.6);
+  border-radius: 8px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  animation: fade-in 0.3s ease;
+}
+
+.screenshot-card:hover {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: scale(1.02);
+}
+
+.screenshot-card.current {
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.screenshot-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.screenshot-number {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.screenshot-action {
+  font-size: 9px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.screenshot-url {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Screenshot Preview */
+.screenshot-preview {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.screenshot-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.2s ease;
+}
+
+.screenshot-card:hover .screenshot-image {
+  transform: scale(1.05);
+}
+
+.screenshot-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  opacity: 0.3;
+}
+
+.screenshot-description {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.screenshot-timestamp {
+  font-size: 9px;
+  color: var(--text-tertiary);
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.screenshot-data-badge {
+  font-size: 9px;
+  padding: 3px 6px;
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border-radius: 4px;
+  display: inline-block;
+  margin-top: 6px;
+  font-weight: 600;
+}
+
+/* Journey Stats */
+.journey-stats {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0 0 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: auto;
+}
+
+.stat-item {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.stat-active {
+  color: #3b82f6;
+  font-weight: 600;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Animations */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Scrollbar */
+.journey-timeline::-webkit-scrollbar {
+  width: 4px;
+}
+
+.journey-timeline::-webkit-scrollbar-track {
+  background: rgba(51, 65, 85, 0.2);
+}
+
+.journey-timeline::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 2px;
+}
+
+.journey-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+
+
+

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebContainers MCP Client (Stub)</title>
+  <style>body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0b1220;color:#e5e7eb} pre{white-space:pre-wrap}</style>
+</head>
+<body>
+  <main style="padding:12px">
+    <h3>WebContainers MCP Client (Concept)</h3>
+    <p>This page would boot a WebContainer, spawn a Node MCP client, and connect to <code>/mcp/ws</code> or streamable <code>/mcp</code>. Sandbox and deterministic seeds applied.</p>
+    <pre id="log"></pre>
+  </main>
+  <script>
+    const log=document.getElementById('log');
+    function println(s){ log.textContent += s + '\n'; }
+    println('Stub: integrate @webcontainer/api and run a Node client in-browser.');
+  </script>
+</body>
+</html>
+

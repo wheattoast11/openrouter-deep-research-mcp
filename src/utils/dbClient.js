@@ -35,20 +35,37 @@ const MAX_RETRIES = config.database.maxRetryAttempts;
 // Base delay for exponential backoff (in ms)
 const BASE_RETRY_DELAY = config.database.retryDelayBaseMs;
 
-// Async IIFE to load the ES Module and initialize embedder
+// Modified IIFE to only import transformers, actual embedder init is now part of initializeDbAndEmbedder
+// This ensures pipeline and cos_sim are available when initializeDbAndEmbedder is called.
 (async () => {
   try {
     const transformers = await import('@xenova/transformers');
     pipeline = transformers.pipeline;
     cos_sim = transformers.cos_sim;
-    process.stderr.write(`[${new Date().toISOString()}] Successfully imported @xenova/transformers.\n`); // Use stderr
-    // Now initialize the embedder since the pipeline function is available
-    await initializeEmbedder();
+    process.stderr.write(`[${new Date().toISOString()}] Successfully imported @xenova/transformers (pre-load for embedder).\n`);
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Failed to dynamically import @xenova/transformers:`, err);
-    // pipeline and cos_sim will remain undefined
+    console.error(`[${new Date().toISOString()}] Failed to dynamically import @xenova/transformers during pre-load:`, err);
   }
 })();
+
+/**
+ * Orchestrates the full initialization of the database and embedder.
+ * Ensures all necessary components are ready before the server starts.
+ * @returns {Promise<boolean>} True if successful, false otherwise.
+ */
+async function initializeDbAndEmbedder() {
+  process.stderr.write(`[${new Date().toISOString()}] Starting database and embedder initialization...\n`);
+  // Ensure embedder is initialized (already handled by IIFE, but good to ensure readiness)
+  if (!module.exports.isEmbedderReady()) {
+    await initializeEmbedder(); // This will also handle transformers import if not already done
+  }
+  // Ensure database is initialized
+  if (!module.exports.isDbInitialized()) {
+    await initDB();
+  }
+  process.stderr.write(`[${new Date().toISOString()}] Database and embedder initialization complete. DB Initialized: ${module.exports.isDbInitialized()}, Embedder Ready: ${module.exports.isEmbedderReady()}\n`);
+  return module.exports.isDbInitialized() && module.exports.isEmbedderReady();
+}
 
 // Function to calculate cosine similarity (using library function)
 function calculateCosineSimilarity(vecA, vecB) {
@@ -306,6 +323,39 @@ async function initDB() {
     await db.query(`CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);`);
     process.stderr.write(`[${new Date().toISOString()}] Job tables created or verified\n`);
 
+    // App Platform API v0 tables: graphs, runs, events
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS platform_graphs (
+        id TEXT PRIMARY KEY,
+        graph JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS platform_runs (
+        id TEXT PRIMARY KEY,
+        graph_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        params JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ
+      );
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS platform_events (
+        id SERIAL PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        ts TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        phase TEXT,
+        event_type TEXT NOT NULL,
+        payload JSONB
+      );
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_platform_events_run ON platform_events(run_id, id);`);
+    process.stderr.write(`[${new Date().toISOString()}] Platform API tables created or verified\n`);
+
     // MCP HTTP session store
     await db.query(`
       CREATE TABLE IF NOT EXISTS mcp_sessions (
@@ -318,6 +368,58 @@ async function initDB() {
       );
     `);
     process.stderr.write(`[${new Date().toISOString()}] mcp_sessions table created or verified\n`);
+
+    // Benchmark persistence (runs, measurements, traces, stack configs)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS benchmark_runs (
+        id TEXT PRIMARY KEY,
+        started_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        finished_at TIMESTAMPTZ,
+        scenario JSONB,
+        model_profile JSONB,
+        stack_config JSONB,
+        mode TEXT,
+        engine TEXT,
+        notes TEXT
+      );
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS benchmark_measurements (
+        id SERIAL PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        iteration INTEGER NOT NULL,
+        ttft_ms INTEGER,
+        tok_s REAL,
+        latency_p95 REAL,
+        mem_peak_mb REAL,
+        quality_score REAL,
+        cost_usd REAL,
+        raw JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_benchmark_measurements_run ON benchmark_measurements(run_id);`);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS compliance_traces (
+        id SERIAL PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        mcp_version TEXT,
+        oauth_scopes JSONB,
+        tools JSONB,
+        resources JSONB,
+        logs JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS stack_configs (
+        id TEXT PRIMARY KEY,
+        config JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    process.stderr.write(`[${new Date().toISOString()}] Benchmark and tracing tables created or verified\n`);
 
     // Usage counters to track interactions with docs/reports
     await db.query(`
@@ -929,6 +1031,20 @@ module.exports = {
   findReportsBySimilarity,
   listRecentReports,
   getReportById, // Export the new function
+  // Platform API
+  upsertPlatformGraph,
+  getPlatformGraph,
+  createPlatformRun,
+  getPlatformRun,
+  appendPlatformEvent,
+  listPlatformEvents,
+  // Benchmark API
+  createBenchmarkRun,
+  finishBenchmarkRun,
+  insertMeasurement,
+  insertComplianceTrace,
+  saveStackConfig,
+  getStackConfig,
   // Export status variables for the status tool
   isEmbedderReady: () => isEmbedderReady,
   isDbInitialized: () => dbInitialized,
@@ -1002,6 +1118,138 @@ async function cleanupExpiredHttpSessions() {
   }, 'cleanupExpiredHttpSessions', 0);
 }
 
+
+// --- Benchmark persistence helpers ---
+async function createBenchmarkRun({ id, scenario, modelProfile, stackConfig, mode, engine, notes }) {
+  const runId = id || `bench_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  await executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO benchmark_runs (id, scenario, model_profile, stack_config, mode, engine, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7);`,
+      [runId, JSON.stringify(scenario||{}), JSON.stringify(modelProfile||{}), JSON.stringify(stackConfig||{}), mode||null, engine||null, notes||null]
+    );
+  }, 'createBenchmarkRun', null);
+  return runId;
+}
+
+async function finishBenchmarkRun(runId) {
+  return executeWithRetry(async () => {
+    await db.query(`UPDATE benchmark_runs SET finished_at = NOW() WHERE id = $1;`, [runId]);
+    return true;
+  }, 'finishBenchmarkRun', false);
+}
+
+async function insertMeasurement(runId, { iteration, ttft_ms, tok_s, latency_p95, mem_peak_mb, quality_score, cost_usd, raw }) {
+  return executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO benchmark_measurements (run_id, iteration, ttft_ms, tok_s, latency_p95, mem_peak_mb, quality_score, cost_usd, raw)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9);`,
+      [runId, Number(iteration)||0, ttft_ms||null, tok_s||null, latency_p95||null, mem_peak_mb||null, quality_score||null, cost_usd||null, JSON.stringify(raw||{})]
+    );
+    return true;
+  }, 'insertMeasurement', false);
+}
+
+async function insertComplianceTrace(runId, trace) {
+  return executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO compliance_traces (run_id, mcp_version, oauth_scopes, tools, resources, logs)
+       VALUES ($1,$2,$3,$4,$5,$6);`,
+      [runId, trace?.mcp_version||null, JSON.stringify(trace?.oauth_scopes||[]), JSON.stringify(trace?.tools||[]), JSON.stringify(trace?.resources||[]), JSON.stringify(trace?.logs||[])]
+    );
+    return true;
+  }, 'insertComplianceTrace', false);
+}
+
+async function saveStackConfig(id, cfg) {
+  return executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO stack_configs (id, config, created_at, updated_at)
+       VALUES ($1,$2,NOW(),NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [id, JSON.stringify(cfg||{})]
+    );
+    return true;
+  }, 'saveStackConfig', false);
+}
+
+async function getStackConfig(id) {
+  return executeWithRetry(async () => {
+    const r = await db.query(`SELECT id, config, created_at, updated_at FROM stack_configs WHERE id = $1;`, [id]);
+    const row = r.rows[0] || null;
+    if (!row) return null;
+    return { id: row.id, config: (typeof row.config === 'string' ? JSON.parse(row.config) : row.config), created_at: row.created_at, updated_at: row.updated_at };
+  }, 'getStackConfig', null);
+}
+
+// --- Platform API helpers ---
+async function upsertPlatformGraph(id, graph) {
+  const graphId = id || `graph_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  await executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO platform_graphs (id, graph, created_at, updated_at)
+       VALUES ($1,$2,NOW(),NOW())
+       ON CONFLICT (id) DO UPDATE SET graph = EXCLUDED.graph, updated_at = NOW();`,
+      [graphId, JSON.stringify(graph || {})]
+    );
+  }, 'upsertPlatformGraph', null);
+  return graphId;
+}
+
+async function getPlatformGraph(id) {
+  return executeWithRetry(async () => {
+    const r = await db.query(`SELECT id, graph, created_at, updated_at FROM platform_graphs WHERE id = $1;`, [id]);
+    const row = r.rows[0] || null;
+    if (!row) return null;
+    return { id: row.id, graph: (typeof row.graph === 'string' ? JSON.parse(row.graph) : row.graph), created_at: row.created_at, updated_at: row.updated_at };
+  }, 'getPlatformGraph', null);
+}
+
+async function createPlatformRun(graphId, params = {}) {
+  const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  await executeWithRetry(async () => {
+    await db.query(
+      `INSERT INTO platform_runs (id, graph_id, status, params, created_at)
+       VALUES ($1,$2,'pending',$3,NOW());`,
+      [runId, graphId, JSON.stringify(params || {})]
+    );
+  }, 'createPlatformRun', null);
+  return runId;
+}
+
+async function getPlatformRun(id) {
+  return executeWithRetry(async () => {
+    const r = await db.query(`SELECT * FROM platform_runs WHERE id = $1;`, [id]);
+    const row = r.rows[0] || null;
+    if (!row) return null;
+    return { ...row, params: typeof row.params === 'string' ? JSON.parse(row.params) : row.params };
+  }, 'getPlatformRun', null);
+}
+
+async function appendPlatformEvent(runId, event_type, payload = {}, phase = null) {
+  return executeWithRetry(async () => {
+    const r = await db.query(
+      `INSERT INTO platform_events (run_id, phase, event_type, payload)
+       VALUES ($1,$2,$3,$4) RETURNING id, ts;`,
+      [runId, phase, event_type, JSON.stringify(payload || {})]
+    );
+    return r.rows[0];
+  }, 'appendPlatformEvent', null);
+}
+
+async function listPlatformEvents(runId, afterId = 0, limit = 200) {
+  return executeWithRetry(async () => {
+    const r = await db.query(
+      `SELECT id, run_id, ts, phase, event_type, payload
+       FROM platform_events
+       WHERE run_id = $1 AND id > $2
+       ORDER BY id ASC
+       LIMIT $3;`,
+      [runId, Number(afterId) || 0, limit]
+    );
+    return r.rows;
+  }, 'listPlatformEvents', []);
+}
 
 // Function to retrieve a single report by its ID
 async function getReportById(reportId) {
@@ -1237,3 +1485,4 @@ async function scheduleHttpSessionCleanup() {
 }
 
 module.exports.scheduleHttpSessionCleanup = scheduleHttpSessionCleanup;
+module.exports.initializeDbAndEmbedder = initializeDbAndEmbedder; // Export the new initialization orchestrator

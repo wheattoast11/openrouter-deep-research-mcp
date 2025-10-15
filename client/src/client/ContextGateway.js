@@ -1,4 +1,5 @@
 const listeners = new Map();
+let remoteForward = null; // optional forwarder (ws)
 
 function emit(type, detail) {
   const subs = listeners.get(type);
@@ -6,6 +7,10 @@ function emit(type, detail) {
   for (const fn of subs) {
     try { fn(detail); } catch (e) { /* noop */ }
   }
+}
+
+export function setRemoteForwarder(sendFn) {
+  remoteForward = typeof sendFn === 'function' ? sendFn : null;
 }
 
 export function on(type, fn) {
@@ -46,5 +51,19 @@ export function updateMetrics(partial) {
 }
 
 export function trace(event) {
-  emit('trace:emit', { ...event, t: Date.now() });
+  const payload = { ...event, t: Date.now() };
+  // local listeners
+  emit('trace:emit', payload);
+  // remote forwarding when in remote mode and forwarder present
+  try {
+    if (GatewayState.stackMode !== 'local' && remoteForward) {
+      const req = {
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: { name: 'trace.log', arguments: { event: payload } },
+        id: Date.now()
+      };
+      remoteForward(JSON.stringify(req));
+    }
+  } catch (_) {}
 }

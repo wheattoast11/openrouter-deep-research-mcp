@@ -9,7 +9,6 @@
  */
 
 const dbClient = require('../utils/dbClient');
-const embeddings = require('../utils/embeddings');
 
 class LivingMemory {
   constructor(options = {}) {
@@ -122,7 +121,7 @@ class LivingMemory {
   async query(intent, context = {}) {
     await this.initialize();
     
-    const queryEmbedding = intent.embedding || await embeddings.generate(intent.query);
+    const queryEmbedding = intent.embedding || await dbClient.generateEmbedding(intent.query);
     
     // 1. Vector search for similar past research
     const similarReports = await dbClient.findReportsBySimilarity(queryEmbedding, 10);
@@ -279,7 +278,7 @@ class LivingMemory {
    */
   async upsertEntity(entity) {
     const entityId = this.generateEntityId(entity.name, entity.type);
-    const embedding = await embeddings.generate(entity.name);
+    const embedding = await dbClient.generateEmbedding(entity.name);
     
     // Check if exists
     const existing = await dbClient.executeQuery(
@@ -505,7 +504,7 @@ class LivingMemory {
     const profile = await this.getUserProfile(userId);
     
     // Update cognitive embedding (running average)
-    const queryEmbed = intent.embedding || await embeddings.generate(intent.query);
+    const queryEmbed = intent.embedding || await dbClient.generateEmbedding(intent.query);
     const currentEmbed = profile.cognitive_embedding;
     const queryCount = profile.query_count || 0;
     

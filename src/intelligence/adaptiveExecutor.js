@@ -7,13 +7,14 @@
  * @module intelligence/adaptiveExecutor
  */
 
-const { BoundedExecutor } = require('@terminals-tech/core');
+// Polyfill: @terminals-tech/core@0.1.1 doesn't export BoundedExecutor yet
+const { BoundedExecutor } = require('../utils/BoundedExecutor');
 const config = require('../../config');
 
 class AdaptiveExecutor {
   constructor(options = {}) {
     this.maxParallelism = options.maxParallelism || 10;
-    this.executor = new BoundedExecutor(this.maxParallelism);
+    this.executor = new BoundedExecutor({ maxConcurrency: this.maxParallelism });
     this.costTracking = { total: 0, byPolicy: {} };
   }
   
@@ -53,19 +54,37 @@ class AdaptiveExecutor {
       };
     }
     
-    // Strategy 2: Local-Only (<500ms, $0)
-    // Privacy mode or simple query
-    if (privacy === 'local-only' || (complexity < 0.4 && privacy === 'hybrid')) {
+    // Strategy 2: Local Browser Inference (<500ms, $0)
+    // Privacy mode or simple query with local inference enabled
+    if (privacy === 'local-only' || (complexity < 0.4 && config.localInference?.enabled)) {
       return {
-        type: 'local-only',
+        type: 'local-browser-inference',
         strategy: 'Use local browser model for quick inference',
         agents: 1,
-        models: ['qwen3-4b', 'utopia-atomic'],
+        models: [config.localInference?.defaultModel || 'qwen3-4b', 'utopia-atomic'],
         estimatedCost: 0,
         estimatedTime: 500,
         estimatedTokens: 2000,
         confidence: 0.65,
+        device: config.localInference?.device || 'webgpu',
         reasoning: `Local inference (privacy: ${privacy}, complexity: ${Math.round(complexity * 100)}%)`
+      };
+    }
+    
+    // Strategy 2b: Local-Only Fallback (when local inference available but not forced)
+    // Simple queries that don't need cloud resources
+    if (complexity < 0.3 && config.localInference?.enabled) {
+      return {
+        type: 'local-browser-inference',
+        strategy: 'Use local browser model for simple query',
+        agents: 1,
+        models: [config.localInference?.defaultModel || 'qwen3-4b'],
+        estimatedCost: 0,
+        estimatedTime: 800,
+        estimatedTokens: 1500,
+        confidence: 0.60,
+        device: config.localInference?.device || 'webgpu',
+        reasoning: `Simple query, use local model (complexity: ${Math.round(complexity * 100)}%)`
       };
     }
     

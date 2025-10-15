@@ -1,0 +1,184 @@
+/* client/src/components/ContextContainer.css */
+/**
+ * Context-Aware Container Animations
+ * Soft gradients, pulsing glows, smooth state transitions
+ */
+
+.context-container {
+  position: relative;
+  transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Animated Glow Background */
+.context-glow {
+  position: absolute;
+  inset: -10px;
+  background: radial-gradient(
+    circle at 50% 50%,
+    var(--phase-color) 0%,
+    transparent 70%
+  );
+  opacity: calc(var(--pulse-intensity) * 0.3);
+  filter: blur(20px);
+  animation: pulse-glow 2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.context-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* Phase-Based Styling */
+.context-container[data-phase="idle"] {
+  border-color: rgba(107, 114, 128, 0.3);
+}
+
+.context-container[data-phase="intent"] {
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 0 var(--glow-radius) rgba(139, 92, 246, 0.3);
+}
+
+.context-container[data-phase="memory"] {
+  border-color: rgba(236, 72, 153, 0.5);
+  box-shadow: 0 0 var(--glow-radius) rgba(236, 72, 153, 0.3);
+}
+
+.context-container[data-phase="policy"] {
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 var(--glow-radius) rgba(59, 130, 246, 0.3);
+}
+
+.context-container[data-phase="discovery"],
+.context-container[data-phase="research"] {
+  border-color: rgba(59, 130, 246, 0.6);
+  box-shadow: 0 0 var(--glow-radius) rgba(59, 130, 246, 0.4);
+  animation: research-pulse 1.5s ease-in-out infinite;
+}
+
+.context-container[data-phase="synthesis"] {
+  border-color: rgba(20, 184, 166, 0.6);
+  box-shadow: 0 0 var(--glow-radius) rgba(20, 184, 166, 0.4);
+  animation: synthesis-shimmer 2s linear infinite;
+}
+
+.context-container[data-phase="complete"] {
+  border-color: rgba(16, 185, 129, 0.7);
+  box-shadow: 0 0 var(--glow-radius) rgba(16, 185, 129, 0.5);
+  animation: completion-fade 3s ease forwards;
+}
+
+.context-container[data-phase="error"] {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow: 0 0 var(--glow-radius) rgba(239, 68, 68, 0.4);
+  animation: error-shake 0.5s ease;
+}
+
+/* Confidence-Based Opacity */
+.context-container[data-confidence-level="low"] {
+  opacity: 0.7;
+}
+
+.context-container[data-confidence-level="medium"] {
+  opacity: 0.85;
+}
+
+.context-container[data-confidence-level="high"] {
+  opacity: 1;
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: calc(var(--pulse-intensity) * 0.3);
+    transform: scale(1);
+  }
+  50% {
+    opacity: calc(var(--pulse-intensity) * 0.5);
+    transform: scale(1.05);
+  }
+}
+
+@keyframes research-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 var(--glow-radius) var(--phase-color);
+  }
+  50% {
+    transform: scale(1.01);
+    box-shadow: 0 0 calc(var(--glow-radius) * 1.5) var(--phase-color);
+  }
+}
+
+@keyframes synthesis-shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.context-container[data-phase="synthesis"]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(20, 184, 166, 0.1) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: synthesis-shimmer 2s linear infinite;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+@keyframes completion-fade {
+  0% {
+    box-shadow: 0 0 var(--glow-radius) rgba(16, 185, 129, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 calc(var(--glow-radius) * 2) rgba(16, 185, 129, 0.8);
+  }
+  100% {
+    box-shadow: 0 0 var(--glow-radius) rgba(16, 185, 129, 0.3);
+  }
+}
+
+@keyframes error-shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+  20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+
+/* Hover Effects */
+.context-container:hover .context-glow {
+  opacity: calc(var(--pulse-intensity) * 0.5);
+  filter: blur(25px);
+}
+
+/* Focus State */
+.context-container:focus-within {
+  outline: 2px solid var(--phase-color);
+  outline-offset: 2px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  .context-container,
+  .context-glow,
+  .context-container[data-phase="synthesis"]::before {
+    animation: none !important;
+  }
+  
+  .context-container {
+    transition: none;
+  }
+}
+
+
+
+

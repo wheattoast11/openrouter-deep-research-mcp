@@ -24,6 +24,16 @@ const config = {
     planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4")
       .split(',').map(s=>s.trim()).filter(Boolean),
     useDynamicCatalog: process.env.USE_DYNAMIC_CATALOG === 'true',
+    
+    // Computer Use models
+    computerUse: {
+      primary: process.env.COMPUTER_USE_MODEL || "google/gemini-2.5-computer-use-preview-10-2025",
+      vision: process.env.VISION_MODEL || "google/gemini-2.5-pro-latest",
+      speed: process.env.SPEED_MODEL || "google/gemini-2.5-flash-latest",
+      temperature: parseFloat(process.env.COMPUTER_USE_TEMPERATURE) || 0.15, // Low for determinism
+      maxActions: parseInt(process.env.COMPUTER_USE_MAX_ACTIONS, 10) || 20
+    },
+    
     // Define models with domain strengths
     // Accept either JSON array of objects or CSV of model ids in env vars
     highCost: process.env.HIGH_COST_MODELS ? 
@@ -37,7 +47,8 @@ const config = {
       })(process.env.HIGH_COST_MODELS) : [
         { name: "x-ai/grok-4", domains: ["reasoning", "technical", "general", "creative"] },
         { name: "openai/gpt-5-chat", domains: ["reasoning", "technical", "general"] },
-        { name: "google/gemini-2.5-pro", domains: ["reasoning", "technical", "general"] },
+        { name: "google/gemini-2.5-pro", domains: ["reasoning", "technical", "general", "vision"] },
+        { name: "google/gemini-2.5-computer-use-preview-10-2025", domains: ["computer-use", "vision", "action-generation"] },
         { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] },
         { name: "qwen/qwen3-coder", domains: ["coding", "editing", "technical"] },
         { name: "qwen/qwen3-235b-a22b-2507", domains: ["general", "reasoning", "technical", "coding"] }
@@ -56,7 +67,8 @@ const config = {
         { name: "openai/gpt-oss-120b", domains: ["general", "reasoning", "search"] },
         { name: "inception/mercury", domains: ["general", "creative", "technical"] },
         { name: "baidu/ernie-4.5-vl-424b-a47b", domains: ["general", "creative"] },
-        { name: "google/gemini-2.5-flash", domains: ["coding", "editing", "technical"] }
+        { name: "google/gemini-2.5-flash", domains: ["coding", "editing", "technical", "speed"] },
+        { name: "google/gemini-2.5-flash-latest", domains: ["coding", "editing", "technical", "speed"] }
       ],
     // Define a tier for potentially simpler tasks (adjust models as needed)
     veryLowCost: process.env.VERY_LOW_COST_MODELS ?
@@ -221,6 +233,48 @@ const config = {
         primaryWeight: 1.0,
         altWeight: 0.0
       }
+    }
+  },
+
+  // Local Browser Inference Configuration
+  localInference: {
+    enabled: process.env.LOCAL_INFERENCE_ENABLED === 'true',
+    
+    // Default model for local inference
+    defaultModel: process.env.LOCAL_INFERENCE_MODEL || 'qwen3-4b',
+    
+    // Device preference
+    device: process.env.LOCAL_INFERENCE_DEVICE || 'webgpu', // 'webgpu' | 'wasm' | 'cpu'
+    
+    // Model loading strategy
+    loadingStrategy: process.env.LOCAL_LOADING_STRATEGY || 'lazy', // 'eager' | 'lazy' | 'streaming'
+    
+    // Memory limits
+    maxVRAM: parseFloat(process.env.LOCAL_MAX_VRAM) || 4.0, // GB
+    maxRAM: parseFloat(process.env.LOCAL_MAX_RAM) || 8.0, // GB
+    
+    // Performance settings
+    maxConcurrentInference: parseInt(process.env.LOCAL_MAX_CONCURRENT, 10) || 3,
+    inferenceTimeout: parseInt(process.env.LOCAL_INFERENCE_TIMEOUT, 10) || 30000, // ms
+    
+    // Sparse MoE settings
+    moe: {
+      lazyExpertLoading: process.env.LOCAL_MOE_LAZY_EXPERTS !== 'false',
+      expertCacheSize: parseInt(process.env.LOCAL_MOE_CACHE_SIZE, 10) || 8
+    },
+    
+    // Quantization preferences
+    preferredQuantization: process.env.LOCAL_PREFERRED_QUANT || 'q4', // 'q4' | 'q8' | 'awq' | 'gguf'
+    
+    // Fallback to cloud when local fails
+    fallbackToCloud: process.env.LOCAL_FALLBACK_CLOUD !== 'false',
+    
+    // Task-specific model routing
+    taskModels: {
+      vision: process.env.LOCAL_VISION_MODEL || 'ui-tars-1.5-7b',
+      reasoning: process.env.LOCAL_REASONING_MODEL || 'gpt-oss-20b',
+      coding: process.env.LOCAL_CODING_MODEL || 'qwen3-4b',
+      general: process.env.LOCAL_GENERAL_MODEL || 'qwen3-4b'
     }
   }
 };

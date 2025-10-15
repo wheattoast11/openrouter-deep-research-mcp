@@ -111,7 +111,7 @@ const server = new McpServer({
 
 // MODE-based tool exposure
 const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
-const ALWAYS_ON = new Set(['ping','get_server_status','job_status','get_job_status','cancel_job']);
+const ALWAYS_ON = new Set(['ping','get_server_status','job_status','get_job_status','get_job_result','cancel_job']);
 const AGENT_ONLY = new Set(['agent']);
 const MANUAL_SET = new Set([
   'research','conduct_research','submit_research','research_follow_up',
@@ -312,6 +312,41 @@ function registerSessionStream(sessionId, transport, transportType = 'ws') {
 function releaseSessionStream(sessionId) {
   if (!sessionId) return;
   sessionStreams.delete(sessionId);
+}
+
+// Register Benchmark & Stack tools (MCP draft utilities)
+try {
+  const tools = require('./tools');
+  registerNormalizedTool('benchmark.run', tools.benchmarkRunSchema, tools.benchmarkRunTool, {
+    title: 'Benchmark Run',
+    description: 'Start a benchmark run for a given scenario/model/stack and return run_id.'
+  });
+  registerNormalizedTool('benchmark.measure', tools.benchmarkMeasureSchema, tools.benchmarkMeasureTool, {
+    title: 'Benchmark Measure',
+    description: 'Insert a measurement into an existing benchmark run.'
+  });
+  registerNormalizedTool('benchmark.finish', tools.benchmarkFinishSchema, tools.benchmarkFinishTool, {
+    title: 'Benchmark Finish',
+    description: 'Mark a benchmark run as finished.'
+  });
+  registerNormalizedTool('benchmark.trace', tools.traceSchema, tools.benchmarkTraceTool, {
+    title: 'Benchmark Compliance Trace',
+    description: 'Persist MCP compliance/security trace for a benchmark run.'
+  });
+  registerNormalizedTool('model.catalog', tools.modelCatalogSchema, tools.modelCatalogTool, {
+    title: 'Model Catalog',
+    description: 'List known models and refresh catalog.'
+  });
+  registerNormalizedTool('model.set', tools.modelSetSchema, tools.modelSetTool, {
+    title: 'Set Model',
+    description: 'Set active modelProfileId in current stack config.'
+  });
+  registerNormalizedTool('stack.configure', tools.stackConfigureSchema, tools.stackConfigureTool, {
+    title: 'Configure Stack',
+    description: 'Save a secure stack configuration for runtime switching.'
+  });
+} catch (e) {
+  console.error('[mcpServer] Failed to register benchmark/stack tools:', e?.message || e);
 }
 
 // Permissive parameter normalizer to accept loose single-string inputs (e.g., random_string)
@@ -714,6 +749,10 @@ registerNormalizedTool('elicitation_response', z.object({ elicitationId: z.strin
 registerNormalizedTool('browser_inference_request', browserInferenceRequestSchema, runBrowserInference);
 registerNormalizedTool('browser_inference_result', browserInferenceResultSchema, handleBrowserInferenceResult);
 registerNormalizedTool('local_inference', localInferenceSchema, runLocalInference);
+registerNormalizedTool('trace.log', require('./tools').traceLogSchema, require('./tools').traceLogTool, {
+  title: 'Trace Log',
+  description: 'Persist a client-side trace event into compliance_traces.'
+});
 
 // Initialize local model manager at startup
 (async function initializeLocalModels() {
@@ -951,6 +990,14 @@ registerResources(server);
      });
    });
 
+  // App Platform API v0 (graphs, runs, events)
+  try {
+    const platformApi = require('../platform/api');
+    app.use('/platform', authenticate, express.json(), platformApi.router);
+  } catch (e) {
+    console.error('[platform] API not initialized:', e.message);
+  }
+
    // Minimal static UI placeholder (can be replaced later)
    app.get('/ui', (req, res) => {
      res.setHeader('Content-Type', 'text/html');
@@ -1061,7 +1108,7 @@ registerResources(server);
      console.error(`MCP server listening on port ${port}`); // Use error
    });
 
-   if (config.mcp.transport.websocketEnabled) {
+   if (config.mcp.transport.websocket) {
       const { setupWebSocketServer } = require('./wsTransport');
       setupWebSocketServer(httpServer, server, authenticate, requireScopes, getScopesForMethod);
    }
@@ -1069,33 +1116,36 @@ registerResources(server);
   } // Close the else block for HTTP setup
  };
 
- // Start the server
- setupTransports().catch(error => {
-   console.error('Failed to start MCP server:', error.message); // Keep error
-   process.exit(1);
- });
+ // Define the job worker function first
+  async function startJobWorker(){
+    const { concurrency, heartbeatMs } = require('../../config').jobs;
+    const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
+      while (true) {
+        try {
+          // Await the full initialization before allowing the job worker to claim jobs
+          // This prevents jobs from running before DB/embedder are ready
+          const isReady = dbClient.isDbInitialized() && dbClient.isEmbedderReady();
+          if (!isReady) {
+            console.error(`[${new Date().toISOString()}] Job worker waiting for DB/Embedder initialization...`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait and recheck
+            continue;
+          }
 
- // Start in-process job worker
- (async function startJobWorker(){
-   const { concurrency, heartbeatMs } = require('../../config').jobs;
-   const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
-     while (true) {
-       try {
-         const job = await dbClient.claimNextJob();
-         if (!job) { await new Promise(r=>setTimeout(r, 750)); continue; }
-         const jobId = job.id;
-         await dbClient.appendJobEvent(jobId, 'started', {});
-         const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
-         try {
-           if (job.type === 'research') {
-             // Reuse conductResearch flow but stream events via job events
-             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
-             // Minimal bridge: send progress chunks into job events
-             const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
-             const resultText = await require('./tools').conductResearch(params, exchange, jobId);
-             await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
-             await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
-            // Optional webhook notification
+          const job = await dbClient.claimNextJob();
+          if (!job) { await new Promise(r=>setTimeout(r, 750)); continue; }
+          const jobId = job.id;
+          await dbClient.appendJobEvent(jobId, 'started', {});
+          const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
+          try {
+            if (job.type === 'research') {
+              // Reuse conductResearch flow but stream events via job events
+              const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+              // Minimal bridge: send progress chunks into job events
+              const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
+              const resultText = await require('./tools').conductResearch(params, exchange, jobId);
+              await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
+              await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
+             // Optional webhook notification
             try {
               if (params?.notify) {
                 await nodeFetch(params.notify, {
@@ -1142,4 +1192,40 @@ registerResources(server);
      }
    })());
    await Promise.allSettled(runners);
- })();
+}
+
+// Orchestrate full initialization before starting the server process
+// This ensures DB and embedder are ready for all components
+(async () => {
+  const stdioMode = process.argv.includes('--stdio');
+  if (stdioMode) {
+    // Connect STDIO transport immediately to handle initialize without delay
+    try {
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+    } catch (e) {
+      // Avoid stdout logs in STDIO mode
+    }
+    // Initialize DB and embedder in the background; job worker will wait for readiness
+    dbClient.initializeDbAndEmbedder().catch(() => {});
+    startJobWorker().catch(() => {});
+    return;
+  }
+
+  console.error(`[${new Date().toISOString()}] Initiating full MCP server initialization...`);
+  const success = await dbClient.initializeDbAndEmbedder();
+  if (success) {
+    console.error(`[${new Date().toISOString()}] MCP server initialization COMPLETE.`);
+  } else {
+    console.error(`[${new Date().toISOString()}] MCP server initialization FAILED. Some features may be degraded.`);
+  }
+  // Proceed to start the transports and job worker after initialization
+  setupTransports().catch(error => {
+    console.error('Failed to start MCP server transports:', error.message);
+    process.exit(1);
+  });
+  startJobWorker().catch(error => {
+    console.error('Failed to start MCP job worker:', error.message);
+    // Don't exit, allow server to run even if worker fails
+  });
+})();

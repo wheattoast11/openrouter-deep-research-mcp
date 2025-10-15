@@ -34,43 +34,28 @@ const CognitiveSubstrate = () => {
   const velocitiesRef = useRef(null);
   const modelsRef = useRef({ instance: null, modelId: null });
 
-  // AI Model Singleton with profile + fallback
+  // AI Model Singleton with profile + fallback (using modelProfiles utilities)
   const getAIModel = async (onProgress) => {
     if (modelsRef.current.instance === null) {
       try {
-        const { pipeline } = await import('@huggingface/transformers');
-        const tryLoad = async (repo) => {
-          return await pipeline('text-generation', repo, {
-            progress_callback: onProgress || (() => {}),
-            device: 'webgpu'
-          });
-        };
-
-        // Resolve preferred profile, then attempt fallbacks
-        const preferred = resolveModelProfile(GatewayState.modelProfileId);
-        const candidates = [preferred.repo, 'Xenova/Qwen2.5-0.5B-Instruct', 'Xenova/Qwen1.5-0.5B-Chat'];
-
-        let generator = null;
-        let loadedId = null;
-        for (const repo of candidates) {
-          try {
-            trace({ type: 'model:load:attempt', repo });
-            generator = await tryLoad(repo);
-            loadedId = repo;
-            trace({ type: 'model:loaded', repo });
-            break;
-          } catch (e) {
-            trace({ type: 'model:load:failed', repo, error: String(e?.message || e) });
-          }
-        }
-        if (!generator) {
-          throw new Error('No compatible local model could be loaded');
-        }
-
+        const { loadModelWithFallback } = await import('../lib/modelProfiles');
+        
+        trace({ type: 'model:load:start', profileId: GatewayState.modelProfileId });
+        
+        const generator = await loadModelWithFallback(
+          GatewayState.modelProfileId,
+          onProgress || ((progress) => {
+            trace({ type: 'model:load:progress', ...progress });
+          })
+        );
+        
+        trace({ type: 'model:loaded', profileId: GatewayState.modelProfileId });
+        
         modelsRef.current.instance = Promise.resolve(generator);
-        modelsRef.current.modelId = loadedId;
+        modelsRef.current.modelId = GatewayState.modelProfileId;
       } catch (err) {
-        console.error('Failed to load Transformers.js:', err);
+        trace({ type: 'model:load:error', error: String(err?.message || err) });
+        console.error('Failed to load model:', err);
         throw err;
       }
     }
@@ -100,15 +85,15 @@ const CognitiveSubstrate = () => {
           ...this.history.slice(-4).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
         ].join('\n');
 
-        const seed = Number(import.meta?.env?.VITE_DETERMINISTIC_SEED || 0);
-        const output = await model(prompt, {
+        // Use inference options from modelProfiles (includes deterministic seed if enabled)
+        const { getInferenceOptions } = await import('../lib/modelProfiles');
+        const inferenceOpts = getInferenceOptions({
           max_new_tokens: 150,
           temperature: 0.2,
-          top_k: 40,
-          do_sample: true,
-          // seed is best-effort; supported in some kernels
-          seed
+          top_k: 40
         });
+        
+        const output = await model(prompt, inferenceOpts);
 
         const result = output && output[0] && output[0].generated_text
           ? String(output[0].generated_text)
@@ -385,6 +370,7 @@ const CognitiveSubstrate = () => {
       logToConsole(`PLANNER > ${plan}`);
 
       net.nodes.get(planNode).value = { agent: 'planner', result: plan.substring(0, 50) };
+      // Throttled graph update using RAF
       {
         const next = net.toJSON();
         const h = JSON.stringify(next).length.toString(36);
@@ -416,6 +402,7 @@ const CognitiveSubstrate = () => {
       logToConsole(`SYNTHESIZER > ${finalResponse}`);
 
       net.nodes.get(synthNode).value = { agent: 'synthesizer', result: finalResponse.substring(0, 50) };
+      // Throttled graph update using RAF
       {
         const next = net.toJSON();
         const h = JSON.stringify(next).length.toString(36);

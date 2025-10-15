@@ -1,0 +1,53 @@
+---
+alwaysApply: false
+description: "/compress — ultra-dense MECE summaries and cohesive doc guidance for this repo"
+---
+
+### Purpose
+Standardize /compress and /summarize outputs so they are ultra-dense, MECE, and actionable, driving cohesive documentation and tech-debt cleanup across the codebase.
+
+### Triggers
+- Use this rule when the user invokes `/compress` or `/summarize` or asks for a whole-repo summary.
+
+### Canonical Output Shape
+1) Single-word headline that encodes the realizability condition (e.g., "Operationalizability").
+2) 6–12 MECE bullets summarizing: Architecture, Transports, Tools, DB, Agents, Client, Security, Observability, Tests/Benchmarks, Packaging/CI.
+3) Key-file map with links: [src/server/mcpServer.js](mdc:src/server/mcpServer.js), [src/server/tools.js](mdc:src/server/tools.js), [src/server/wsTransport.js](mdc:src/server/wsTransport.js), [src/utils/dbClient.js](mdc:src/utils/dbClient.js), [src/platform/api.js](mdc:src/platform/api.js), [client/src/client/ContextGateway.js](mdc:client/src/client/ContextGateway.js), [client/src/services/DynamicContextManager.ts](mdc:client/src/services/DynamicContextManager.ts), [src/intelligence/algebraicTagSystem.js](mdc:src/intelligence/algebraicTagSystem.js), [genesis-emergence-mcp-nov2025.plan.md](mdc:genesis-emergence-mcp-nov2025.plan.md).
+4) Env tree (vars→usage) summarized from [config.js](mdc:config.js) and `.env` templates; list unknowns/required.
+5) Risks/tech-debt bullets with concrete refactors (≤7 items), each tied to a file.
+6) Next actions (≤5), each a verb-led, shippable step.
+
+### Style & Density
+- Prefer single-word directives followed by one-line gloss (e.g., "Phase-lock: client↔server coherence ≥ 0.85").
+- Use the repository’s heading convention: `###` section headers; bold only for key terms.
+- Use CODE REFERENCES when quoting existing code; avoid large code pastes.
+- Keep within 250–400 lines for whole-repo; 40–120 lines for subsystem summaries.
+
+### Cohesion Guardrails
+- Cross-link only real files via `mdc:` links listed above; avoid speculative paths.
+- Normalize terminology to project canon: MCP v2.2+, OAuth 2.1 Resource Server, PGlite, WebSocket `/mcp/ws`, Unified `agent` tool.
+- Surface spec-forward hints from the Nov-2025 plan where they fit (implicit cognition, seeds, encrypted traces) without assuming implementation is complete.
+
+### Env & Spec Notes
+- When summarizing env, group by purpose: transport, auth, db, private-agent, resources, tracing.
+- If present, note `{ agent_mode, algebra, seed, resource_hints }` fields and where they would thread through tools.
+
+### Doc Optimization Heuristics
+- Suggest doc pulls/merges: consolidate overlapping READMEs, add quickstarts, and link critical files via `mdc:`.
+- Prefer checklists with explicit acceptance criteria and SLOs.
+- Recommend removal or consolidation of stale summaries when duplicates exist.
+
+### Tech-Debt Identification Checklist
+- Duplicated schemas/types across server/client.
+- Unvalidated tool inputs (ensure Zod, McpError patterns).
+- Missing encrypted trace handling or determinism metadata.
+- Divergent terminology or transport endpoint drift.
+
+### References
+- Architecture entrypoints: [src/server/mcpServer.js](mdc:src/server/mcpServer.js), [src/server/tools.js](mdc:src/server/tools.js), [src/server/wsTransport.js](mdc:src/server/wsTransport.js).
+- Persistence: [src/utils/dbClient.js](mdc:src/utils/dbClient.js).
+- Platform API: [src/platform/api.js](mdc:src/platform/api.js).
+- Client context/runtime: [client/src/client/ContextGateway.js](mdc:client/src/client/ContextGateway.js), [client/src/services/DynamicContextManager.ts](mdc:client/src/services/DynamicContextManager.ts).
+- Intelligence layer: [src/intelligence/algebraicTagSystem.js](mdc:src/intelligence/algebraicTagSystem.js).
+- Nov-2025 plan: [genesis-emergence-mcp-nov2025.plan.md](mdc:genesis-emergence-mcp-nov2025.plan.md).
+

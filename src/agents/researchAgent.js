@@ -4,7 +4,8 @@ const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import the new parser
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
 const parallelism = require('../../config').models.parallelism || 4;
-const { BoundedExecutor } = require('@terminals-tech/core');
+// Polyfill: @terminals-tech/core@0.1.1 doesn't export BoundedExecutor yet
+const { BoundedExecutor } = require('../utils/BoundedExecutor');
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
 const COMPLEXITY_LEVELS = ["simple", "moderate", "complex"];

@@ -7,21 +7,28 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview",
+    "test:e2e": "start-server-and-test dev http://localhost:5173 'npx playwright test client/tests/e2e/cognitive-substrate.spec.js'"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.7.5",
     "@modelcontextprotocol/sdk": "1.17.4",
+    "@rollup/rollup-win32-x64-msvc": "^4.52.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sharp": "^0.33.5",
+    "three": "^0.169.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.40.1",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.38",
+    "start-server-and-test": "^2.0.3",
     "tailwindcss": "^3.4.3",
     "vite": "^5.2.11"
   }
 }
-

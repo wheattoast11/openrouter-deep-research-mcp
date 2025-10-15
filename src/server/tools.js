@@ -168,12 +168,23 @@ function setInCache(key, data) {
   }
 }
 
+const resourceHintsSchema = z.object({
+  max_context: z.number().int().positive().optional(),
+  rope_scale: z.number().positive().optional(),
+  device: z.enum(['webgpu','cpu']).optional()
+}).optional();
+
 const conductResearchSchema = z.object({
   query: z.string().min(1, "Query must not be empty"),
   costPreference: z.enum(['high', 'low']).default('low'),
   audienceLevel: z.enum(['beginner', 'intermediate', 'expert']).default('intermediate'),
   outputFormat: z.enum(['report', 'briefing', 'bullet_points']).default('report'),
   includeSources: z.boolean().default(true),
+  // Nov-2025 MCP draft fields (no-op passthrough for now)
+  agent_mode: z.enum(['implicit','explicit']).optional().default('implicit'),
+  algebra: z.string().optional(),
+  seed: z.number().int().optional(),
+  resource_hints: resourceHintsSchema,
   maxLength: z.number().optional(),
   images: z.array(z.object({
     url: z.string().url().or(z.string().startsWith('data:image/')),
@@ -1661,6 +1672,11 @@ const agentSchema = z.object({
   // Common
   async: z.boolean().optional().default(true),
   notify: z.string().url().optional(),
+  // Nov-2025 MCP draft fields (no-op passthrough for now)
+  agent_mode: z.enum(['implicit','explicit']).optional().default('implicit'),
+  algebra: z.string().optional(),
+  seed: z.number().int().optional(),
+  resource_hints: resourceHintsSchema,
   // Research
   query: z.string().optional(),
   costPreference: conductResearchSchema.shape.costPreference.optional(),
@@ -1705,11 +1721,7 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
   // If async=true (default), submit as job and return job_id immediately
   if (params.async !== false) {
     try {
-      const jobId = await dbClient.createJob({
-        operation: 'agent',
-        params: request,
-        status: 'queued'
-      });
+      const jobId = await dbClient.createJob('agent', request);
 
       // Execute agent in background
       setImmediate(async () => {
@@ -1752,6 +1764,13 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
   try {
     const result = await agent.execute(request, { job_id: requestId }, onEvent);
     
+    if (!result || !result.synthesis) {
+      return {
+        content: [{ type: 'text', text: 'Research failed: No synthesis generated' }],
+        isError: true
+      };
+    }
+    
     // Final result should be a structured object
     return {
       content: [
@@ -1759,20 +1778,21 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
           type: 'object',
           object: {
             summary: result.synthesis.substring(0, 500) + '...',
-            reportId: result.metadata.reportId,
-            durationMs: result.metadata.duration_ms
+            reportId: result.metadata?.reportId || 'unknown',
+            durationMs: result.metadata?.duration_ms || 0
           }
         },
         {
           type: 'resource',
           resource: {
             rel: 'full-report',
-            uri: `mcp://reports/${result.metadata.reportId}`
+            uri: `mcp://reports/${result.metadata?.reportId || 'unknown'}`
           }
         }
       ]
     };
   } catch (error) {
+    console.error(`[${new Date().toISOString()}] agentTool sync execution error:`, error.message);
     return {
       content: [{ type: 'text', text: `Agent execution failed: ${error.message}` }],
       isError: true
@@ -1827,6 +1847,119 @@ const localInferenceSchema = z.object({
   }).optional().describe("Inference options"),
   _requestId: z.string().optional().describe("Internal request ID for logging")
 }).describe("Run inference using server-side GGUF models loaded at startup.");
+
+// --- Benchmark & Stack MCP tools ---
+const modelProfileSchema = z.object({
+  id: z.string(),
+  engine: z.enum(['transformersjs','llama.cpp','remote']),
+  quant: z.string().optional(),
+  precision: z.string().optional(),
+  modality: z.string().optional(),
+  ctx: z.number().int().optional(),
+  license: z.string().optional(),
+  mem: z.number().optional(),
+  device: z.string().optional()
+});
+
+const stackConfigSchema = z.object({
+  mode: z.enum(['local','cloud']),
+  modelProfileId: z.string(),
+  embedder: z.enum(['gemini','hf-local']).optional(),
+  graph: z.enum(['enabled','disabled']).optional(),
+  concurrency: z.number().int().positive().optional().default(2),
+  samplingPolicy: z.record(z.any()).optional()
+});
+
+const benchmarkScenarioSchema = z.object({
+  task: z.enum(['chat','rag','tooluse','vision','dag']),
+  promptSet: z.string().optional(),
+  maxTokens: z.number().int().positive().optional().default(256),
+  temperature: z.number().min(0).max(2).optional().default(0.2),
+  stream: z.boolean().optional().default(true),
+  repetitions: z.number().int().positive().optional().default(5)
+});
+
+const benchmarkRunSchema = z.object({
+  scenario: benchmarkScenarioSchema,
+  modelProfile: modelProfileSchema,
+  stackConfig: stackConfigSchema,
+  mode: z.enum(['local','cloud']).optional(),
+  engine: z.string().optional(),
+  notes: z.string().optional()
+}).describe('Start a benchmark run; returns run_id. Subsequent measurements may be added.');
+
+async function benchmarkRunTool(params, mcpExchange = null, requestId = `req-${Date.now()}`) {
+  const runId = await dbClient.createBenchmarkRun({
+    id: undefined,
+    scenario: params.scenario,
+    modelProfile: params.modelProfile,
+    stackConfig: params.stackConfig,
+    mode: params.mode || params.stackConfig?.mode,
+    engine: params.modelProfile?.engine,
+    notes: params.notes || null
+  });
+  return JSON.stringify({ run_id: runId });
+}
+
+const benchmarkMeasureSchema = z.object({
+  run_id: z.string(),
+  iteration: z.number().int().nonnegative(),
+  ttft_ms: z.number().int().optional(),
+  tok_s: z.number().optional(),
+  latency_p95: z.number().optional(),
+  mem_peak_mb: z.number().optional(),
+  quality_score: z.number().optional(),
+  cost_usd: z.number().optional(),
+  raw: z.record(z.any()).optional()
+}).describe('Insert a single measurement for a benchmark run.');
+
+async function benchmarkMeasureTool(params) {
+  const ok = await dbClient.insertMeasurement(params.run_id, params);
+  return JSON.stringify({ acknowledged: !!ok });
+}
+
+const benchmarkFinishSchema = z.object({ run_id: z.string() }).describe('Mark a benchmark run finished.');
+async function benchmarkFinishTool(params) {
+  const ok = await dbClient.finishBenchmarkRun(params.run_id);
+  return JSON.stringify({ acknowledged: !!ok });
+}
+
+const traceSchema = z.object({
+  run_id: z.string(),
+  mcp_version: z.string().optional(),
+  oauth_scopes: z.array(z.string()).optional(),
+  tools: z.array(z.any()).optional(),
+  resources: z.array(z.any()).optional(),
+  logs: z.array(z.any()).optional()
+}).describe('Persist compliance trace for a run.');
+
+async function benchmarkTraceTool(params) {
+  const ok = await dbClient.insertComplianceTrace(params.run_id, params);
+  return JSON.stringify({ acknowledged: !!ok });
+}
+
+const modelCatalogSchema = z.object({ refresh: z.boolean().optional().default(false) }).describe('List/cached refresh model catalog.');
+async function modelCatalogTool(params) {
+  if (params.refresh) await modelCatalog.refresh();
+  const catalog = await modelCatalog.getCatalog();
+  return JSON.stringify({ models: catalog });
+}
+
+const modelSetSchema = z.object({ profile: modelProfileSchema }).describe('Set active model profile in stack config.');
+async function modelSetTool(params) {
+  const cfgId = 'active';
+  // Load existing config, update modelProfileId
+  const current = await dbClient.getStackConfig(cfgId);
+  const next = { ...(current?.config || {}), modelProfileId: params.profile.id };
+  await dbClient.saveStackConfig(cfgId, next);
+  return JSON.stringify({ saved: true, config: next });
+}
+
+const stackConfigureSchema = z.object({ id: z.string().default('active'), config: stackConfigSchema }).describe('Save stack configuration securely');
+async function stackConfigureTool(params) {
+  await dbClient.saveStackConfig(params.id, params.config);
+  return JSON.stringify({ saved: true, id: params.id });
+}
 
 // Implementation for browser_inference_request tool
 async function runBrowserInference(params, mcpExchange = null, requestId = 'unknown-req') {
@@ -1911,6 +2044,30 @@ async function runLocalInference(params, mcpExchange = null, requestId = 'unknow
   }
 }
 
+// --- Trace logging (UI → Server) ---
+const traceLogSchema = z.object({
+  run_id: z.string().optional(),
+  event: z.any()
+}).describe('Log a single trace event from a client UI into compliance_traces');
+
+async function traceLogTool(params, _mcpExchange = null, requestId = 'unknown-req') {
+  try {
+    const runId = params.run_id || `ui_${new Date().toISOString().slice(0,10)}`;
+    const entry = {
+      run_id: runId,
+      mcp_version: require('../../config').mcp?.supportedVersions?.slice(-1)?.[0] || 'unknown',
+      oauth_scopes: [],
+      tools: [],
+      resources: [],
+      logs: [ { requestId, event: params.event } ]
+    };
+    const ok = await dbClient.insertComplianceTrace(runId, entry);
+    return { acknowledged: !!ok, run_id: runId };
+  } catch (e) {
+    return { acknowledged: false, error: e.message };
+  }
+}
+
 module.exports = {
   // Schemas
   conductResearchSchema,
@@ -1950,6 +2107,15 @@ module.exports = {
   browserInferenceRequestSchema,
   browserInferenceResultSchema,
   localInferenceSchema,
+
+  // Benchmark & stack schemas
+  benchmarkRunSchema,
+  benchmarkMeasureSchema,
+  benchmarkFinishSchema,
+  traceSchema,
+  modelCatalogSchema,
+  modelSetSchema,
+  stackConfigureSchema,
   
   // Functions
   conductResearch,
@@ -1993,5 +2159,17 @@ module.exports = {
   // New browser inference functions
   runBrowserInference,
   handleBrowserInferenceResult,
-  runLocalInference
+  runLocalInference,
+
+  // Benchmark & stack tools
+  benchmarkRunTool,
+  benchmarkMeasureTool,
+  benchmarkFinishTool,
+  benchmarkTraceTool,
+  modelCatalogTool,
+  modelSetTool,
+  stackConfigureTool,
+
+  traceLogSchema,
+  traceLogTool
 };
