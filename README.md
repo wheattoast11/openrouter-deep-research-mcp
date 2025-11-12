@@ -44,9 +44,11 @@ npx @terminals-tech/openrouter-agents --stdio
 SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 ```
 
-## What’s new (v1.5.0)
+## What's new (v1.6.0)
+- **MCP SDK 1.21.1:** Full compliance with MCP Specification 2025-06-18
+- **Production Hardening:** Rate limiting (100 req/min per IP) and 10MB request size limits
+- **Enhanced Security:** OAuth2/JWT support with improved security headers
 - Version parity across npm, GitHub Releases, and GitHub Packages
-- Dual publish workflow enabled
 
 [Changelog →](docs/CHANGELOG.md)
 

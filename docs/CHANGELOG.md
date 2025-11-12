@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.0 — 2025-11-12
+- **MCP SDK Update:** Upgraded @modelcontextprotocol/sdk from 1.17.4 to 1.21.1 for full compatibility with MCP Specification 2025-06-18
+- **Production Hardening:**
+  - Added rate limiting middleware (100 requests/minute per IP) to prevent abuse
+  - Implemented 10MB request size limits for security
+  - Enhanced security headers with `RateLimit-*` headers
+- **Documentation:** Removed stale duplicate files; updated all documentation with current dates and versions
+- **Compliance:** Full compliance with MCP Specification 2025-06-18 (OAuth, enhanced security, interactive workflows)
+
 ## v1.5.0 — 2025-08-26
 - Version parity: package.json, GitHub Releases, GitHub Packages, and npm aligned to 1.5.0
 - Dual publish workflow: npmjs.org (public) and GitHub Packages (Packages tab visible)

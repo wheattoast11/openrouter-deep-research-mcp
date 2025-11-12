@@ -3,6 +3,7 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
 const config = require('../../config');
@@ -725,6 +726,20 @@ register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { 
   const expectedAudience = process.env.AUTH_EXPECTED_AUD || 'mcp-server';
 
   app.use(cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'], allowedHeaders: ['Content-Type', 'authorization', 'mcp-session-id'] }));
+
+  // Rate limiting middleware - production hardening
+  const limiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 100, // 100 requests per minute per IP
+    message: { error: 'Too many requests, please try again later.' },
+    standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
+    legacyHeaders: false, // Disable `X-RateLimit-*` headers
+  });
+  app.use(limiter);
+
+  // Request size limits
+  app.use(express.json({ limit: '10mb' }));
+
   // Enforce HTTPS in production when required
   if (config.server.requireHttps) {
     app.use((req, res, next) => {

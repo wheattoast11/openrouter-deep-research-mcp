@@ -12,7 +12,8 @@
 - QA/utility scripts present under `tests/` for tool coverage and regression checks.
 
 ## Important Decisions
-- MCP protocol adoption (2025-03-26 spec):
+- MCP protocol adoption (2025-06-18 spec):
+  - Full compliance with latest MCP specification including OAuth, enhanced security, and interactive workflows
   - Capabilities: `prompts.listChanged`, `resources.subscribe`, `resources.listChanged`.
   - Handlers via `server.setPromptRequestHandlers` and `server.setResourceRequestHandlers`.
 - Transport strategy:
@@ -30,6 +31,7 @@
   - Ensemble size and parallelism configurable; AIMD controller in planning for graceful degradation.
 - Security & logging:
   - Avoid logging secrets; robust stderr diagnostics; progress tokens used for fine-grained feedback.
+  - Production hardening: Rate limiting (100 req/min per IP), 10MB request size limits, enhanced security headers.
 
 ## Ongoing Challenges
 - External provider rate limits and transient API errors; continue improving backoff and retry heuristics.
@@ -66,6 +68,7 @@
 - Reliability/UX fixes:
   - d469cea: classifier `max_tokens` raise to satisfy provider minimums.
 - Notable bug fix (current code): ensured `onEvent` is threaded to `_executeSingleResearch` to prevent undefined reference.
-- SDKs & deps: MCP SDK 1.4+ supported; installed runtime observed at 1.7.x; Xenova transformers v2.17.x.
-- Timestamp: Updated on 2025-08-21.
+- SDKs & deps: MCP SDK 1.21.1 (upgraded from 1.17.4); Xenova transformers v2.17.x; express-rate-limit v7.4.1.
+- Production hardening (v1.6.0): Rate limiting middleware, request size limits, full MCP 2025-06-18 spec compliance.
+- Timestamp: Updated on 2025-11-12.
 
