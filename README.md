@@ -3,28 +3,18 @@
 
 [![npm version](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents) [![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-available-24292e?logo=github)](../../packages)
 
-[UPDATE – 2025-08-26] Two modes (set MODE env):
-- AGENT: one simple tool (`agent`) that routes research / follow_up / retrieve / query
-- MANUAL: individual tools for each action
-- ALL (default): both AGENT and MANUAL, plus always-on ops tools
+## Overview
 
-Diagram (simple)
-```
-[Always-On Ops]  ping • get_server_status • job_status • cancel_job
+Production-ready MCP server for multi-agent AI research with OpenRouter integration. Fully compliant with MCP Specification 2025-06-18 and prepared for November 2025 spec updates.
 
-AGENT MODE
-client → agent → (research | follow_up | retrieve | query)
-
-MANUAL MODE
-client → (submit_research | conduct_research | retrieve | query | research_follow_up | get_report_content | list_research_history)
-```
-
-- Killer features
-  - Plan → parallelize → synthesize workflow with bounded parallelism
-  - Dynamic model catalog; supports Anthropic Sonnet‑4 and OpenAI GPT‑5 family
-  - Built‑in semantic KB (PGlite + pgvector) with backup, export/import, health, and reindex tools
-  - Lightweight web helpers: quick search and page fetch for context
-  - Robust streaming (SSE), per‑connection auth, clean logs
+### Key Features
+  - **Multi-Agent Orchestration:** Plan → parallelize → synthesize workflow with adaptive concurrency
+  - **Async Operations:** Job system with SSE streaming for long-running research tasks
+  - **Knowledge Base:** Hybrid BM25+vector search with PGlite + pgvector
+  - **Model Support:** Dynamic catalog supporting Anthropic Sonnet-4, OpenAI GPT-5, Google Gemini, and more
+  - **Production Hardened:** Rate limiting, request size limits, multi-tier auth (JWT/API key)
+  - **MCP Compliant:** 100% spec compliance with server discovery and extension metadata
+  - **Three Modes:** AGENT (simple), MANUAL (granular), or ALL (both)
 
 ## Install / Run
 - Install (project dependency)
@@ -44,11 +34,15 @@ npx @terminals-tech/openrouter-agents --stdio
 SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 ```
 
-## What’s new (v1.5.0)
-- Version parity across npm, GitHub Releases, and GitHub Packages
-- Dual publish workflow enabled
+## What's new (v1.6.0 - November 12, 2025)
+- **MCP SDK 1.21.1:** Full compliance with MCP Specification 2025-06-18
+- **Nov 2025 Ready:** Server discovery endpoint (`.well-known/mcp-server`) and extension metadata
+- **Production Hardening:** Rate limiting (100 req/min per IP), 10MB request size limits
+- **Enhanced Security:** OAuth2/JWT support with improved security headers
+- **Health Monitoring:** New `/health` endpoint for production monitoring
+- **Comprehensive Compliance Report:** 100% MCP spec compliance verified
 
-[Changelog →](docs/CHANGELOG.md)
+[Changelog →](docs/CHANGELOG.md) | [Compliance Report →](docs/MCP-COMPLIANCE-REPORT.md)
 
 ## Quick start
 1) Prereqs

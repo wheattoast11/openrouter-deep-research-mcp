@@ -3,6 +3,7 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
 const config = require('../../config');
@@ -725,6 +726,20 @@ register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { 
   const expectedAudience = process.env.AUTH_EXPECTED_AUD || 'mcp-server';
 
   app.use(cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'], allowedHeaders: ['Content-Type', 'authorization', 'mcp-session-id'] }));
+
+  // Rate limiting middleware - production hardening
+  const limiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 100, // 100 requests per minute per IP
+    message: { error: 'Too many requests, please try again later.' },
+    standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
+    legacyHeaders: false, // Disable `X-RateLimit-*` headers
+  });
+  app.use(limiter);
+
+  // Request size limits
+  app.use(express.json({ limit: '10mb' }));
+
   // Enforce HTTPS in production when required
   if (config.server.requireHttps) {
     app.use((req, res, next) => {
@@ -932,6 +947,105 @@ register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { 
      } catch (e) {
        res.status(500).json({ error: e.message });
      }
+   });
+
+   // Health endpoint for monitoring (no auth required)
+   app.get('/health', async (req, res) => {
+     try {
+       const dbInitialized = dbClient.isDbInitialized();
+       const embedderReady = dbClient.isEmbedderReady();
+       const healthy = dbInitialized; // Minimum: DB must be initialized
+
+       res.status(healthy ? 200 : 503).json({
+         status: healthy ? 'healthy' : 'unhealthy',
+         version: config.server.version,
+         timestamp: new Date().toISOString(),
+         checks: {
+           database: dbInitialized ? 'ok' : 'not_initialized',
+           embedder: embedderReady ? 'ready' : 'initializing'
+         }
+       });
+     } catch (e) {
+       res.status(503).json({
+         status: 'unhealthy',
+         error: e.message,
+         timestamp: new Date().toISOString()
+       });
+     }
+   });
+
+   // Server discovery endpoint for MCP clients (no auth required per MCP draft spec Nov 2025)
+   app.get('/.well-known/mcp-server', (req, res) => {
+     res.json({
+       name: config.server.name,
+       version: config.server.version,
+       description: 'OpenRouter MCP server for multi-agent deep research',
+       specification: '2025-06-18',
+       specificationDraft: '2025-11-25',
+       capabilities: {
+         tools: {},
+         prompts: { listChanged: true },
+         resources: { subscribe: true, listChanged: true },
+         async: true, // Supports async operations via job system
+         streaming: true, // Supports SSE streaming
+         authentication: ['jwt', 'bearer', 'optional']
+       },
+       transports: [
+         {
+           type: 'stdio',
+           command: 'npx @terminals-tech/openrouter-agents --stdio',
+           description: 'Standard I/O transport for IDE integration'
+         },
+         {
+           type: 'sse',
+           endpoint: '/sse',
+           messageEndpoint: '/messages',
+           description: 'Server-Sent Events transport with per-connection routing'
+         },
+         {
+           type: 'http',
+           endpoint: '/mcp',
+           description: 'StreamableHTTP transport (if enabled)'
+         }
+       ],
+       endpoints: {
+         health: '/health',
+         metrics: '/metrics',
+         jobs: '/jobs',
+         jobEvents: '/jobs/:jobId/events',
+         discovery: '/.well-known/mcp-server',
+         ui: '/ui'
+       },
+       extensions: {
+         'async-operations': {
+           version: '1.0',
+           description: 'Long-running async operations via job system',
+           endpoints: {
+             submit: '/jobs',
+             status: 'tool:job_status',
+             cancel: 'tool:cancel_job',
+             events: '/jobs/:jobId/events'
+           }
+         },
+         'knowledge-base': {
+           version: '1.0',
+           description: 'Semantic knowledge base with hybrid BM25+vector search',
+           features: ['vector-search', 'bm25', 'hybrid-fusion', 'llm-rerank']
+         },
+         'multi-agent': {
+           version: '1.0',
+           description: 'Multi-agent orchestration (planning → research → synthesis)',
+           features: ['domain-aware-planning', 'ensemble-execution', 'streaming-synthesis']
+         }
+       },
+       contact: {
+         name: 'Tej Desai',
+         email: 'admin@terminals.tech',
+         url: 'https://terminals.tech'
+       },
+       repository: 'https://github.com/wheattoast11/openrouter-deep-research-mcp',
+       homepage: 'https://terminals.tech'
+     });
    });
 
    // About endpoint for directory metadata

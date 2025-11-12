@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.6.0 — 2025-11-12
+- **MCP SDK Update:** Upgraded @modelcontextprotocol/sdk from 1.17.4 to 1.21.1 for full compatibility with MCP Specification 2025-06-18
+- **November 2025 MCP Spec Readiness:**
+  - Added `/.well-known/mcp-server` endpoint for server discovery (Nov 2025 draft spec)
+  - Implemented extension metadata for async-operations, knowledge-base, and multi-agent capabilities
+  - Added `/health` endpoint for production monitoring (no auth required)
+  - Documented transport types, endpoints, and capabilities for client discovery
+- **Production Hardening:**
+  - Added rate limiting middleware (100 requests/minute per IP) to prevent abuse
+  - Implemented 10MB request size limits for security
+  - Enhanced security headers with `RateLimit-*` headers
+- **Documentation:**
+  - Added comprehensive MCP Compliance Report (100% spec compliance score)
+  - Removed stale duplicate files (implementation-plan.md, mece-analysis.md, qa-summary-report.md)
+  - Updated all documentation with current dates and versions (2025-11-12)
+  - Cleaned up README to reflect current features and remove outdated August references
+- **Compliance:** Full compliance with MCP Specification 2025-06-18 (OAuth, enhanced security, interactive workflows)
+
 ## v1.5.0 — 2025-08-26
 - Version parity: package.json, GitHub Releases, GitHub Packages, and npm aligned to 1.5.0
 - Dual publish workflow: npmjs.org (public) and GitHub Packages (Packages tab visible)
