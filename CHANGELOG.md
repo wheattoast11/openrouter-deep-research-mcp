@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.5.0...v1.6.0) (2025-11-12)
+
+
+### Features
+
+* add server discovery, health endpoint, and Nov 2025 MCP spec readiness ([702da6a](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/702da6a41d4118d24af3f76d012d6ae638bfbd9d))
+
 ## [1.5.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.4.0...v1.5.0) (2025-08-26)
 
 
