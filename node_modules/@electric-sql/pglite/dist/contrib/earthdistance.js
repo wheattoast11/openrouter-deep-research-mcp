@@ -1,0 +1,2 @@
+import{j as e}from"../chunk-BTBUZ646.js";e();var t=async(n,s)=>({bundlePath:new URL("../earthdistance.tar.gz",import.meta.url)}),r={name:"earthdistance",setup:t};export{r as earthdistance};
+//# sourceMappingURL=earthdistance.js.map

@@ -1,0 +1,2 @@
+import{d as i,e as p}from"../chunk-WGR4JCLS.js";import{j as n}from"../chunk-BTBUZ646.js";n();import*as s from"fs";import*as o from"path";var m=class extends p{constructor(t){super(t),this.rootDir=o.resolve(t),s.existsSync(o.join(this.rootDir))||s.mkdirSync(this.rootDir)}async init(t,e){return this.pg=t,{emscriptenOpts:{...e,preRun:[...e.preRun||[],r=>{let c=r.FS.filesystems.NODEFS;r.FS.mkdir(i),r.FS.mount(c,{root:this.rootDir},i)}]}}}async closeFs(){this.pg.Module.FS.quit()}};export{m as NodeFS};
+//# sourceMappingURL=nodefs.js.map

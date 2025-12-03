@@ -1,0 +1,2 @@
+import{j as e}from"../chunk-BTBUZ646.js";e();var n=async(s,t)=>({emscriptenOpts:t,bundlePath:new URL("../vector.tar.gz",import.meta.url)}),o={name:"pgvector",setup:n};export{o as vector};
+//# sourceMappingURL=index.js.map

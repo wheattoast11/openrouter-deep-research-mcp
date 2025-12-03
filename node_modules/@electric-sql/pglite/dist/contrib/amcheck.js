@@ -1,0 +1,2 @@
+import{j as e}from"../chunk-BTBUZ646.js";e();var t=async(n,s)=>({bundlePath:new URL("../amcheck.tar.gz",import.meta.url)}),c={name:"amcheck",setup:t};export{c as amcheck};
+//# sourceMappingURL=amcheck.js.map
