@@ -701,93 +701,135 @@ server.tool("list_research_history", listResearchHistorySchema, async (p, ex) =>
 server.tool("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
 
 // ============================================================================
-// MCP 2025-11-25: Task Protocol Handlers (SEP-1686)
+// MCP 2025-11-25: Task Protocol Tools (SEP-1686)
+// Exposed as MCP tools for compatibility with current SDK
 // ============================================================================
 if (config.mcp?.features?.tasks !== false) {
-  // tasks/get - Query task status
-  server.setRequestHandler('tasks/get', async (request) => {
-    const { taskId } = request.params || {};
-    if (!taskId) {
-      throw new Error('taskId is required');
+  // task_get - Query task status
+  server.tool(
+    "task_get",
+    z.object({ taskId: z.string() }).describe("Get status of a task by ID"),
+    async (params) => {
+      try {
+        const task = await taskAdapter.getTask(params.taskId);
+        if (!task) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'Task not found' }) }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
+      }
     }
-    const task = await taskAdapter.getTask(taskId);
-    if (!task) {
-      throw new Error(`Task not found: ${taskId}`);
-    }
-    return task;
-  });
+  );
 
-  // tasks/result - Retrieve task results
-  server.setRequestHandler('tasks/result', async (request) => {
-    const { taskId } = request.params || {};
-    if (!taskId) {
-      throw new Error('taskId is required');
+  // task_result - Get task result
+  server.tool(
+    "task_result",
+    z.object({ taskId: z.string() }).describe("Get result of a completed task"),
+    async (params) => {
+      try {
+        const result = await taskAdapter.getTaskResult(params.taskId);
+        if (!result) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'Task result not available' }) }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
+      }
     }
-    const result = await taskAdapter.getTaskResult(taskId);
-    if (!result) {
-      throw new Error(`Task result not available for: ${taskId}`);
+  );
+
+  // task_cancel - Cancel a task
+  server.tool(
+    "task_cancel",
+    z.object({ taskId: z.string() }).describe("Cancel a running or queued task"),
+    async (params) => {
+      try {
+        const result = await taskAdapter.cancelTask(params.taskId);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
+      }
     }
-    return result;
-  });
+  );
 
-  // tasks/cancel - Cancel a task
-  server.setRequestHandler('tasks/cancel', async (request) => {
-    const { taskId } = request.params || {};
-    if (!taskId) {
-      throw new Error('taskId is required');
+  // task_list - List tasks
+  server.tool(
+    "task_list",
+    z.object({
+      cursor: z.string().optional(),
+      limit: z.number().optional().default(50),
+      status: z.enum(['working', 'completed', 'failed', 'cancelled', 'input_required']).optional()
+    }).describe("List tasks with pagination"),
+    async (params) => {
+      try {
+        const result = await taskAdapter.listTasks(params.cursor, params.limit, params.status);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
+      }
     }
-    return taskAdapter.cancelTask(taskId);
-  });
+  );
 
-  // tasks/list - List tasks with pagination
-  server.setRequestHandler('tasks/list', async (request) => {
-    const { cursor, limit, status } = request.params || {};
-    return taskAdapter.listTasks(cursor, limit, status);
-  });
-
-  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Task protocol handlers registered\n`);
+  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Task protocol tools registered\n`);
 }
 
 // ============================================================================
-// MCP 2025-11-25: Sampling with Tools Handler (SEP-1577)
+// MCP 2025-11-25: Sampling Tool (SEP-1577)
+// Exposed as MCP tool for server-side sampling
 // ============================================================================
 if (config.mcp?.features?.sampling?.enabled !== false) {
-  server.setRequestHandler('sampling/createMessage', async (request, context) => {
-    return samplingHandler.createMessage(request, {
-      clientCapabilities: context?.clientCapabilities
-    });
-  });
+  server.tool(
+    "sample_message",
+    z.object({
+      messages: z.array(z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.union([z.string(), z.array(z.any())])
+      })),
+      model: z.string().optional(),
+      maxTokens: z.number().optional(),
+      temperature: z.number().optional(),
+      tools: z.array(z.object({
+        name: z.string(),
+        description: z.string().optional(),
+        inputSchema: z.any().optional()
+      })).optional()
+    }).describe("Create a message via server-side sampling with optional tool use"),
+    async (params) => {
+      try {
+        const result = await samplingHandler.createMessage({ params });
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
+      }
+    }
+  );
 
-  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Sampling handler registered\n`);
+  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Sampling tool registered\n`);
 }
 
 // ============================================================================
-// MCP 2025-11-25: Elicitation Handlers (SEP-1036)
+// MCP 2025-11-25: Elicitation Tools (SEP-1036)
 // ============================================================================
 if (config.mcp?.features?.elicitation?.url !== false || config.mcp?.features?.elicitation?.form !== false) {
-  // elicitation/respond - Handle user response to elicitation
-  server.setRequestHandler('elicitation/respond', async (request) => {
-    const { elicitationId, action, data } = request.params || {};
-    if (!elicitationId || !action) {
-      throw new Error('elicitationId and action are required');
+  server.tool(
+    "elicitation_respond",
+    z.object({
+      elicitationId: z.string(),
+      action: z.enum(['accept', 'decline', 'cancel']),
+      data: z.any().optional()
+    }).describe("Respond to an elicitation request"),
+    async (params) => {
+      try {
+        const result = elicitationHandler.handleElicitationResponse(params.elicitationId, params.action, params.data);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
+      }
     }
-    return elicitationHandler.handleElicitationResponse(elicitationId, action, data);
-  });
+  );
 
-  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Elicitation handlers registered\n`);
-}
-
-// ============================================================================
-// MCP 2025-11-25: Task Input Resume Handler
-// ============================================================================
-if (config.mcp?.features?.tasks !== false) {
-  server.setRequestHandler('tasks/resumeWithInput', async (request) => {
-    const { taskId, input } = request.params || {};
-    if (!taskId || !input) {
-      throw new Error('taskId and input are required');
-    }
-    return taskAdapter.resumeTaskWithInput(taskId, input);
-  });
+  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Elicitation tools registered\n`);
 }
 
  // Set up transports based on environment
