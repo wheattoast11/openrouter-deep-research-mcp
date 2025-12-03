@@ -7,6 +7,12 @@ const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
 const config = require('../../config');
+
+// MCP 2025-11-25 Feature Modules
+const taskAdapter = require('./taskAdapter');
+const samplingHandler = require('./sampling');
+const elicitationHandler = require('./elicitation');
+
 const { 
   // Schemas
   conductResearchSchema,
@@ -702,7 +708,75 @@ register("conduct_research", researchSchema, async (p, ex) => { try { const norm
 register("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
 register("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
 register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
- 
+
+// ==========================================
+// MCP 2025-11-25 Protocol Tools (SEP-1686, SEP-1577, SEP-1036)
+// ==========================================
+
+// Task Protocol Tools (SEP-1686)
+register("task_get", { taskId: z.string().describe("Task/job ID to retrieve") }, async (p) => {
+  try {
+    const task = await taskAdapter.getTask(p.taskId);
+    return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error task_get: ${e.message}` }], isError: true };
+  }
+});
+
+register("task_result", { taskId: z.string().describe("Task/job ID to get result for") }, async (p) => {
+  try {
+    const result = await taskAdapter.getTaskResult(p.taskId);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error task_result: ${e.message}` }], isError: true };
+  }
+});
+
+register("task_cancel", { taskId: z.string().describe("Task/job ID to cancel") }, async (p) => {
+  try {
+    const result = await taskAdapter.cancelTask(p.taskId);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error task_cancel: ${e.message}` }], isError: true };
+  }
+});
+
+register("task_list", { cursor: z.string().optional(), limit: z.number().optional() }, async (p) => {
+  try {
+    const tasks = await taskAdapter.listTasks(p.cursor, p.limit || 20);
+    return { content: [{ type: 'text', text: JSON.stringify(tasks, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error task_list: ${e.message}` }], isError: true };
+  }
+});
+
+// Sampling with Tools (SEP-1577)
+register("sample_message", {
+  messages: z.array(z.object({ role: z.string(), content: z.string() })).describe("Messages for sampling"),
+  model: z.string().optional().describe("Model preference"),
+  maxTokens: z.number().optional().describe("Max tokens")
+}, async (p, ex) => {
+  try {
+    const result = await samplingHandler.handleSampling(p, ex);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error sample_message: ${e.message}` }], isError: true };
+  }
+});
+
+// Elicitation Response (SEP-1036)
+register("elicitation_respond", {
+  requestId: z.string().describe("Elicitation request ID"),
+  response: z.record(z.any()).describe("User response data")
+}, async (p) => {
+  try {
+    const result = await elicitationHandler.handleResponse(p.requestId, p.response);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error elicitation_respond: ${e.message}` }], isError: true };
+  }
+});
+
  // Set up transports based on environment
  const setupTransports = async () => {
   let lastSseTransport = null; // Variable to hold the last SSE transport
