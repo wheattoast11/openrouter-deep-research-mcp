@@ -306,6 +306,18 @@ async function initDB() {
     await db.query(`CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);`);
     process.stderr.write(`[${new Date().toISOString()}] Job tables created or verified\n`);
 
+    // MCP 2025-11-25: Add task protocol columns (SEP-1686)
+    try {
+      // Add ttl_ms column for task TTL
+      await db.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ttl_ms INTEGER DEFAULT 3600000;`);
+      // Add task_metadata column for MCP task-specific data
+      await db.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS task_metadata JSONB DEFAULT '{}';`);
+      process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Task protocol columns added\n`);
+    } catch (migrationError) {
+      // Columns may already exist, which is fine
+      process.stderr.write(`[${new Date().toISOString()}] Task columns migration note: ${migrationError.message}\n`);
+    }
+
     // Usage counters to track interactions with docs/reports
     await db.query(`
       CREATE TABLE IF NOT EXISTS usage_counters (

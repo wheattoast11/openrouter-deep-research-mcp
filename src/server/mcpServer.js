@@ -1,11 +1,19 @@
 // src/server/mcpServer.js
+// MCP 2025-11-25 Compliant Server
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const express = require('express');
 const { z } = require('zod');
-const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
+const { v4: uuidv4 } = require('uuid');
 const config = require('../../config');
+
+// MCP 2025-11-25 Feature Modules
+const taskAdapter = require('./taskAdapter');
+const samplingHandler = require('./sampling');
+const elicitationHandler = require('./elicitation');
+const clientMetadata = require('./auth/clientMetadata');
+const enterpriseAuth = require('./auth/enterpriseAuth');
 const { 
   // Schemas
   conductResearchSchema,
@@ -74,16 +82,39 @@ const dbClient = require('../utils/dbClient'); // Import dbClient
 const nodeFetch = require('node-fetch');
 const cors = require('cors');
 
-// Create MCP server with proper capabilities declaration per MCP spec 2025-06-18
+// Create MCP server with proper capabilities declaration per MCP spec 2025-11-25
 const server = new McpServer({
   name: config.server.name,
   version: config.server.version,
   capabilities: {
     tools: {},
-    prompts: {}, // Simplified format for MCP 2025-06-18 spec
-    resources: {}
+    prompts: {},
+    resources: {},
+    // MCP 2025-11-25: Task-based workflows (SEP-1686)
+    ...(config.mcp?.features?.tasks !== false && {
+      tasks: {
+        requests: ['tools/call', 'sampling/createMessage']
+      }
+    }),
+    // MCP 2025-11-25: Sampling with tools (SEP-1577)
+    ...(config.mcp?.features?.sampling?.enabled !== false && {
+      sampling: {
+        context: {},
+        ...(config.mcp?.features?.sampling?.withTools !== false && { tools: {} })
+      }
+    }),
+    // MCP 2025-11-25: Elicitation (SEP-1036)
+    ...(config.mcp?.features?.elicitation && {
+      elicitation: {
+        ...(config.mcp?.features?.elicitation?.form !== false && { form: {} }),
+        ...(config.mcp?.features?.elicitation?.url !== false && { url: {} })
+      }
+    })
   }
 });
+
+// Log MCP spec version on startup
+process.stderr.write(`[${new Date().toISOString()}] MCP Server initialized (spec ${config.mcp?.specVersion || '2025-11-25'})\n`);
 
 // Permissive parameter normalizer to accept loose single-string inputs (e.g., random_string)
 function extractRawParam(input) {
@@ -668,7 +699,97 @@ server.tool("conduct_research", researchSchema, async (p, ex) => { try { const n
 server.tool("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
 server.tool("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
 server.tool("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
- 
+
+// ============================================================================
+// MCP 2025-11-25: Task Protocol Handlers (SEP-1686)
+// ============================================================================
+if (config.mcp?.features?.tasks !== false) {
+  // tasks/get - Query task status
+  server.setRequestHandler('tasks/get', async (request) => {
+    const { taskId } = request.params || {};
+    if (!taskId) {
+      throw new Error('taskId is required');
+    }
+    const task = await taskAdapter.getTask(taskId);
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+    return task;
+  });
+
+  // tasks/result - Retrieve task results
+  server.setRequestHandler('tasks/result', async (request) => {
+    const { taskId } = request.params || {};
+    if (!taskId) {
+      throw new Error('taskId is required');
+    }
+    const result = await taskAdapter.getTaskResult(taskId);
+    if (!result) {
+      throw new Error(`Task result not available for: ${taskId}`);
+    }
+    return result;
+  });
+
+  // tasks/cancel - Cancel a task
+  server.setRequestHandler('tasks/cancel', async (request) => {
+    const { taskId } = request.params || {};
+    if (!taskId) {
+      throw new Error('taskId is required');
+    }
+    return taskAdapter.cancelTask(taskId);
+  });
+
+  // tasks/list - List tasks with pagination
+  server.setRequestHandler('tasks/list', async (request) => {
+    const { cursor, limit, status } = request.params || {};
+    return taskAdapter.listTasks(cursor, limit, status);
+  });
+
+  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Task protocol handlers registered\n`);
+}
+
+// ============================================================================
+// MCP 2025-11-25: Sampling with Tools Handler (SEP-1577)
+// ============================================================================
+if (config.mcp?.features?.sampling?.enabled !== false) {
+  server.setRequestHandler('sampling/createMessage', async (request, context) => {
+    return samplingHandler.createMessage(request, {
+      clientCapabilities: context?.clientCapabilities
+    });
+  });
+
+  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Sampling handler registered\n`);
+}
+
+// ============================================================================
+// MCP 2025-11-25: Elicitation Handlers (SEP-1036)
+// ============================================================================
+if (config.mcp?.features?.elicitation?.url !== false || config.mcp?.features?.elicitation?.form !== false) {
+  // elicitation/respond - Handle user response to elicitation
+  server.setRequestHandler('elicitation/respond', async (request) => {
+    const { elicitationId, action, data } = request.params || {};
+    if (!elicitationId || !action) {
+      throw new Error('elicitationId and action are required');
+    }
+    return elicitationHandler.handleElicitationResponse(elicitationId, action, data);
+  });
+
+  process.stderr.write(`[${new Date().toISOString()}] MCP 2025-11-25: Elicitation handlers registered\n`);
+}
+
+// ============================================================================
+// MCP 2025-11-25: Task Input Resume Handler
+// ============================================================================
+if (config.mcp?.features?.tasks !== false) {
+  server.setRequestHandler('tasks/resumeWithInput', async (request) => {
+    const { taskId, input } = request.params || {};
+    if (!taskId || !input) {
+      throw new Error('taskId and input are required');
+    }
+    return taskAdapter.resumeTaskWithInput(taskId, input);
+  });
+}
+
  // Set up transports based on environment
  const setupTransports = async () => {
   let lastSseTransport = null; // Variable to hold the last SSE transport

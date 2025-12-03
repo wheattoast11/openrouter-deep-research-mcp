@@ -112,22 +112,57 @@ const config = {
   reportOutputPath: process.env.REPORT_OUTPUT_PATH || './research_outputs/'
 };
 
-// MCP feature toggles (opt-in by default; can be disabled via env)
+// MCP 2025-11-25 Configuration
 config.mcp = {
+  // Specification version
+  specVersion: '2025-11-25',
+
+  // Core feature toggles
   features: {
-    prompts: process.env.MCP_ENABLE_PROMPTS === 'false' ? false : true,
-    resources: process.env.MCP_ENABLE_RESOURCES === 'false' ? false : true
+    prompts: process.env.MCP_ENABLE_PROMPTS !== 'false',
+    resources: process.env.MCP_ENABLE_RESOURCES !== 'false',
+
+    // Task-based workflows (SEP-1686)
+    tasks: process.env.MCP_ENABLE_TASKS !== 'false',
+
+    // Sampling with tools (SEP-1577)
+    sampling: {
+      enabled: process.env.MCP_ENABLE_SAMPLING !== 'false',
+      withTools: process.env.MCP_SAMPLING_TOOLS !== 'false'
+    },
+
+    // Elicitation (SEP-1036)
+    elicitation: {
+      form: process.env.MCP_ELICITATION_FORM !== 'false',
+      url: process.env.MCP_ELICITATION_URL !== 'false'
+    }
+  },
+
+  // Authorization (SEP-991, SEP-990)
+  auth: {
+    // Client ID Metadata Documents (CIMD)
+    clientMetadataEnabled: process.env.MCP_CIMD_ENABLED === 'true',
+
+    // Enterprise-Managed Authorization (Cross App Access)
+    enterpriseAuthEnabled: process.env.MCP_ENTERPRISE_AUTH === 'true',
+    enterpriseIdpUrl: process.env.ENTERPRISE_IDP_URL || null
+  },
+
+  // Task protocol configuration
+  tasks: {
+    defaultTtlMs: parseInt(process.env.MCP_TASK_TTL_MS, 10) || 3600000, // 1 hour
+    maxTtlMs: parseInt(process.env.MCP_TASK_MAX_TTL_MS, 10) || 86400000 // 24 hours
+  },
+
+  // Transport preferences
+  transport: {
+    streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED !== 'false'
   }
 };
 
 // Experimental modes
 config.modes = {
   hyper: process.env.HYPER_MODE === 'true'
-};
-
-// MCP transport preferences
-config.mcp.transport = {
-  streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED === 'false' ? false : true
 };
 
 // Prompt strategy configuration
