@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.7.0...v1.8.0) (2025-12-04)
+
+
+### Features
+
+* **v1.8.0:** MCP Apps, Knowledge Graph, and Session Time-Travel ([488bfed](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/488bfed4caaba3a82302176fe58f67a68b2531ec))
+
 ## [1.6.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.5.0...v1.6.0) (2025-11-12)
 
 
