@@ -34,13 +34,11 @@ npx @terminals-tech/openrouter-agents --stdio
 SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 ```
 
-## What's new (v1.6.0 - November 12, 2025)
-- **MCP SDK 1.21.1:** Full compliance with MCP Specification 2025-06-18
-- **Nov 2025 Ready:** Server discovery endpoint (`.well-known/mcp-server`) and extension metadata
-- **Production Hardening:** Rate limiting (100 req/min per IP), 10MB request size limits
-- **Enhanced Security:** OAuth2/JWT support with improved security headers
-- **Health Monitoring:** New `/health` endpoint for production monitoring
-- **Comprehensive Compliance Report:** 100% MCP spec compliance verified
+## What's new (v1.7.0 - December 3, 2025)
+- **Adaptive Tokens:** Model-aware token limits using OpenRouter catalog (fixes report truncation)
+- **Tool Chaining:** Recursive tool execution with `chain` action (max depth: 3)
+- **Claude Code Integration:** One-liner setup, slash commands, and LLM integration guide
+- **Truncation Detection:** Warns when API responses appear cut off mid-sentence
 
 [Changelog →](docs/CHANGELOG.md) | [Compliance Report →](docs/MCP-COMPLIANCE-REPORT.md)
 
@@ -172,7 +170,77 @@ Minimal examples:
 }
 ```
 
-With the package installed globally (or via npx), MCP clients can spawn the server automatically. See your client’s docs for where to place this JSON (e.g., `~/.config/client/mcp.json`).
+With the package installed globally (or via npx), MCP clients can spawn the server automatically. See your client's docs for where to place this JSON (e.g., `~/.config/client/mcp.json`).
+
+## Claude Code Integration
+
+One-liner setup for Claude Code:
+
+```bash
+claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
+```
+
+Or interactive setup with slash commands and hooks:
+
+```bash
+npx @terminals-tech/openrouter-agents --setup-claude
+```
+
+### Included Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/mcp-status` | Check server health and recent activity |
+| `/mcp-research` | Run synchronous research query |
+| `/mcp-async-research` | Run async research (returns job_id) |
+| `/mcp-search` | Search the knowledge base |
+| `/mcp-query` | Execute SQL query |
+
+### Environment Setup
+
+Set your API key before using:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+```
+
+### Portable Project Configuration
+
+The setup creates a `.mcp.json` file for team-shareable configuration:
+
+```json
+{
+  "mcpServers": {
+    "openrouter-agents": {
+      "command": "npx",
+      "args": ["@terminals-tech/openrouter-agents", "--stdio"],
+      "env": {
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+        "INDEXER_ENABLED": "true",
+        "MCP_ENABLE_TASKS": "true"
+      }
+    }
+  }
+}
+```
+
+### Verification
+
+After setup, verify the connection:
+
+```
+/mcp-status
+```
+
+Or use the tools directly:
+
+```javascript
+ping {}                    // → {"pong":true}
+get_server_status {}       // → Full health check
+list_tools {}              // → Available tools
+```
+
+See [.claude/README.md](.claude/README.md) for detailed configuration options.
 
 ## Tools (high‑value)
 - Always‑on (all modes): `ping`, `get_server_status`, `job_status`, `get_job_status`, `cancel_job`

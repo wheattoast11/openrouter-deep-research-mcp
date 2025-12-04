@@ -2,6 +2,65 @@
 const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import parser
+const modelCatalog = require('../utils/modelCatalog'); // Model-aware token limits
+
+/**
+ * Calculate adaptive max_tokens based on model capabilities and content size
+ * Uses OpenRouter model catalog to detect model-specific limits dynamically
+ * @param {string} model - Model ID
+ * @param {Array} researchResults - Research results to synthesize
+ * @param {Object} options - Additional options (documents, structuredData)
+ * @returns {Promise<number>} Calculated max tokens
+ */
+async function calculateAdaptiveMaxTokens(model, researchResults, options = {}) {
+  const tokenCfg = config.models?.tokens?.synthesis || {
+    min: 4000,
+    fallbackMax: 16000,
+    perSubQuery: 800,
+    perDocument: 500
+  };
+
+  // Get model-specific max output tokens
+  const modelMax = await modelCatalog.getModelMaxOutputTokens(model, tokenCfg.fallbackMax);
+
+  // Calculate content-based token estimate
+  let tokens = tokenCfg.min;
+  tokens += (researchResults?.length || 0) * tokenCfg.perSubQuery;
+  tokens += (options.documents?.length || 0) * tokenCfg.perDocument;
+  tokens += (options.structuredData?.length || 0) * tokenCfg.perDocument;
+
+  // Use 90% of model max to leave room for safety margin
+  const maxAllowed = Math.floor(modelMax * 0.9);
+  const result = Math.min(Math.max(tokens, tokenCfg.min), maxAllowed);
+
+  console.error(`[contextAgent] Adaptive tokens: calculated=${tokens}, modelMax=${modelMax}, final=${result}`);
+  return result;
+}
+
+/**
+ * Detect if content appears to be truncated mid-sentence
+ * Common patterns: ends with incomplete number (d ≈ 0.), trailing comma, no sentence terminator
+ * @param {string} content - Content to check
+ * @returns {boolean} True if truncation detected
+ */
+function detectTruncation(content) {
+  if (!content || content.length < 100) return false;
+  const lastChars = content.slice(-50).trim();
+
+  // Truncation patterns - content cut off mid-thought
+  const truncationPatterns = [
+    /\d+\.\s*$/,              // Ends with "d ≈ 0." pattern (from report 2)
+    /[a-z],\s*$/i,            // Ends with comma after word
+    /\s[a-z]{1,3}\s*$/i,      // Ends with short word fragment
+    /[^.!?)\]\"\'…]\s*$/,     // No sentence terminator at end
+    /\([^)]*$/,               // Unclosed parenthesis
+    /\[[^\]]*$/,              // Unclosed bracket
+    /:\s*$/,                  // Ends with colon
+    /—\s*$/,                  // Ends with em-dash
+  ];
+
+  return truncationPatterns.some(p => p.test(lastChars));
+}
 
 class ContextAgent {
   constructor() {
@@ -200,10 +259,17 @@ Please perform a critical synthesis of these findings, considering the original 
     let streamError = null;
 
     try {
-      // Use the new streaming method
+      // Calculate adaptive max_tokens based on model capabilities and content size
+      const adaptiveMaxTokens = await calculateAdaptiveMaxTokens(
+        this.model,
+        researchResults,
+        { documents, structuredData }
+      );
+
+      // Use the new streaming method with adaptive token limit
       const stream = openRouterClient.streamChatCompletion(this.model, messages, {
         temperature: 0.3, // Low temperature for synthesis consistency
-        max_tokens: 4000 // Allow ample space for the final report
+        max_tokens: adaptiveMaxTokens // Model-aware adaptive limit
       });
 
       for await (const chunk of stream) {
@@ -229,6 +295,15 @@ Please perform a critical synthesis of these findings, considering the original 
       const duration = Date.now() - startTime;
       if (!streamError) {
         console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Synthesis stream completed successfully in ${duration}ms.`);
+
+        // Check for truncation and warn if detected
+        if (detectTruncation(fullContent)) {
+          console.warn(`[${new Date().toISOString()}] [${requestId}] ContextAgent: WARNING - Possible truncation detected in synthesis output`);
+          yield {
+            warning: 'Response may have been truncated by token limit. Consider increasing SYNTHESIS_MAX_TOKENS or using a model with larger output capacity.',
+            truncationDetected: true
+          };
+        }
       } else {
          console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Synthesis stream finished with error after ${duration}ms.`);
       }

@@ -93,10 +93,46 @@ function getPreferred2025Models() {
   return preferred;
 }
 
+/**
+ * Get model info by ID from cached catalog
+ * @param {string} modelId - Model ID (e.g., "openai/gpt-4")
+ * @returns {Object|null} Model info or null if not found
+ */
+async function getModelInfo(modelId) {
+  const catalog = await getCatalog();
+  return catalog.find(m => m.id === modelId) || null;
+}
+
+/**
+ * Get max output tokens for a model
+ * Uses context window / 2 as fallback if specific output limit not available
+ * @param {string} modelId - Model ID
+ * @param {number} fallback - Fallback value if model not found (default 16000)
+ * @returns {Promise<number>} Max output tokens
+ */
+async function getModelMaxOutputTokens(modelId, fallback = 16000) {
+  try {
+    const info = await getModelInfo(modelId);
+    if (!info) return fallback;
+    // Check for explicit max output tokens (some providers include this)
+    const contextWindow = info.capabilities?.contextWindow;
+    if (contextWindow && typeof contextWindow === 'number') {
+      // Heuristic: output is typically 25-50% of context window
+      return Math.min(Math.floor(contextWindow * 0.4), 32000);
+    }
+    return fallback;
+  } catch (err) {
+    console.error(`[modelCatalog] Error getting max tokens for ${modelId}:`, err.message);
+    return fallback;
+  }
+}
+
 module.exports = {
   refresh,
   getCatalog,
   findByCapability,
   getCatalogHash,
   getPreferred2025Models,
+  getModelInfo,
+  getModelMaxOutputTokens,
 };

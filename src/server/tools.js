@@ -18,6 +18,103 @@ const advancedCache = require('../utils/advancedCache');
 const robustWebScraper = require('../utils/robustWebScraper');
 const robustScraperInstance = new robustWebScraper();
 
+// ===== RECURSIVE TOOL EXECUTION =====
+// Enabled by default with MAX_TOOL_DEPTH=3. Set MAX_TOOL_DEPTH=0 to disable.
+const MAX_TOOL_DEPTH = config.toolRecursion?.maxDepth ?? 3;
+const toolDepthMap = new Map();
+
+/**
+ * Track recursion depth for a request to prevent infinite loops
+ * @param {string} requestId - Unique request identifier
+ * @returns {number} Current depth for this request
+ */
+function getToolDepth(requestId) {
+  return toolDepthMap.get(requestId) || 0;
+}
+
+/**
+ * Increment depth before tool call, decrement after
+ * @param {Function} toolFn - The tool function to wrap
+ * @param {string} requestId - Request ID for tracking
+ * @returns {Function} Wrapped function with depth tracking
+ */
+function withDepthTracking(toolFn, requestId) {
+  return async (...args) => {
+    if (MAX_TOOL_DEPTH === 0) return toolFn(...args); // Disabled
+    const depth = toolDepthMap.get(requestId) || 0;
+    if (depth >= MAX_TOOL_DEPTH) {
+      throw new Error(`Max tool recursion depth (${MAX_TOOL_DEPTH}) exceeded. Set MAX_TOOL_DEPTH env to increase.`);
+    }
+    toolDepthMap.set(requestId, depth + 1);
+    try {
+      return await toolFn(...args);
+    } finally {
+      toolDepthMap.set(requestId, depth);
+      // Cleanup if back to zero
+      if (depth === 0) toolDepthMap.delete(requestId);
+    }
+  };
+}
+
+/**
+ * Route a tool call by name with depth tracking
+ * @param {string} toolName - Name of the tool to call
+ * @param {object} params - Tool parameters
+ * @param {object} mcpExchange - MCP exchange for progress
+ * @param {string} requestId - Request ID for depth tracking
+ * @returns {Promise<string>} Tool result
+ */
+async function routeToTool(toolName, params, mcpExchange, requestId) {
+  const depth = getToolDepth(requestId);
+  if (MAX_TOOL_DEPTH > 0 && depth >= MAX_TOOL_DEPTH) {
+    return JSON.stringify({ error: `Max recursion depth (${MAX_TOOL_DEPTH}) reached`, tool: toolName });
+  }
+
+  toolDepthMap.set(requestId, depth + 1);
+  try {
+    // Route to appropriate tool
+    switch (toolName) {
+      case 'research':
+      case 'conduct_research':
+        return await conductResearch(params, mcpExchange, requestId);
+      case 'search':
+        return await searchTool(params);
+      case 'query':
+        return await queryTool(params, mcpExchange, requestId);
+      case 'retrieve':
+        return await retrieveTool(params, mcpExchange, requestId);
+      case 'get_report':
+      case 'get_report_content':
+        return await getReportContent(params, mcpExchange, requestId);
+      case 'search_web':
+        return await searchWeb(params, mcpExchange, requestId);
+      case 'fetch_url':
+        return await fetchUrl(params, mcpExchange, requestId);
+      case 'list_models':
+        return await listModels(params);
+      case 'ping':
+        return await pingTool(params);
+      case 'get_server_status':
+        return await getServerStatus(params);
+      case 'job_status':
+      case 'get_job_status':
+        return await getJobStatusTool(params);
+      case 'date_time':
+        return await dateTimeTool(params);
+      case 'calc':
+        return await calcTool(params);
+      case 'history':
+      case 'list_research_history':
+        return await listResearchHistory(params);
+      default:
+        return JSON.stringify({ error: `Unknown tool: ${toolName}`, available: ['research', 'search', 'query', 'retrieve', 'get_report', 'search_web', 'fetch_url'] });
+    }
+  } finally {
+    toolDepthMap.set(requestId, depth);
+    if (depth === 0) toolDepthMap.delete(requestId);
+  }
+}
+
 // Compact param normalization for conduct_research
 function normalizeResearchParams(params) {
   if (!params || typeof params !== 'object') return params;
@@ -1525,6 +1622,22 @@ async function buildToolEmbedding(text) {
   }
 }
 
+// MODE-based tool exposure (mirrors mcpServer.js shouldExpose logic)
+const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
+const ALWAYS_ON = new Set(['ping', 'get_server_status', 'job_status', 'get_job_status', 'cancel_job']);
+const AGENT_ONLY = new Set(['agent']);
+const MANUAL_SET = new Set([
+  'research', 'conduct_research', 'submit_research', 'research_follow_up',
+  'retrieve', 'search', 'query',
+  'get_report', 'get_report_content', 'history', 'list_research_history'
+]);
+function toolExposedByMode(name) {
+  if (ALWAYS_ON.has(name)) return true;
+  if (MODE === 'AGENT') return AGENT_ONLY.has(name);
+  if (MODE === 'MANUAL') return MANUAL_SET.has(name);
+  return true; // ALL
+}
+
 async function listToolsTool(params, mcpExchange = null, requestId = 'unknown-req') {
   const { query, limit, semantic } = params || {};
   const all = TOOL_CATALOG.filter(t => toolExposedByMode(t.name)).filter(t => {
@@ -1580,7 +1693,8 @@ async function dateTimeTool(params) {
 const calcSchema = z.object({ expr: z.string(), precision: z.number().int().min(0).max(12).optional().default(6) }).describe("Evaluate a simple arithmetic expression (+,-,*,/,^,(), decimals). Safe parser.");
 async function calcTool(params) {
   const src = String(params.expr || '').trim();
-  if (!/^[0-9+\-*/().^\s]+$/.test(src)) return JSON.stringify({ error: 'Invalid characters' });
+  // Allow digits, operators, parens, decimal, caret, and whitespace (space, tab)
+  if (!/^[0-9+\-*/().^ \t]+$/.test(src)) return JSON.stringify({ error: 'Invalid characters' });
   try {
     // Replace ^ with ** for exponent
     const js = src.replace(/\^/g, '**');
@@ -1633,7 +1747,7 @@ async function retrieveTool(params, mcpExchange = null, requestId = `req-${Date.
 
 // Agent meta-tool schema and router
 const agentSchema = z.object({
-  action: z.enum(['auto','research','follow_up','retrieve','query']).optional().default('auto'),
+  action: z.enum(['auto','research','follow_up','retrieve','query','chain']).optional().default('auto'),
   // Common
   async: z.boolean().optional().default(true),
   notify: z.string().url().optional(),
@@ -1657,11 +1771,62 @@ const agentSchema = z.object({
   sql: z.string().optional(),
   params: z.array(z.any()).optional(),
   explain: z.boolean().optional(),
+  // Tool chaining: execute multiple tools in sequence
+  chain: z.array(z.object({
+    tool: z.string(),
+    params: z.record(z.any()).optional()
+  })).optional(),
   _requestId: z.string().optional()
-}).describe("Single entrypoint agent tool. Routes to research, follow_up, or retrieve/query based on params. Set action to control explicitly or use action='auto'.");
+}).describe("Single entrypoint agent tool. Routes to research, follow_up, retrieve/query, or chain. Use chain=[{tool,params},...] for multi-step execution (max depth: " + (parseInt(process.env.MAX_TOOL_DEPTH,10) ?? 3) + ").");
 
 async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now()}`) {
   const action = (params?.action || 'auto').toLowerCase();
+
+  // Handle tool chaining: execute multiple tools in sequence
+  if (action === 'chain' || (params?.chain && Array.isArray(params.chain))) {
+    const chain = params.chain || [];
+    if (!chain.length) {
+      return JSON.stringify({ error: 'chain requires at least one step', example: { chain: [{ tool: 'search', params: { q: 'topic' } }, { tool: 'get_report', params: { reportId: '1' } }] } });
+    }
+
+    const maxSteps = Math.min(chain.length, MAX_TOOL_DEPTH > 0 ? MAX_TOOL_DEPTH : 10);
+    const results = [];
+
+    for (let i = 0; i < maxSteps; i++) {
+      const step = chain[i];
+      const toolName = step.tool?.toLowerCase();
+      const toolParams = step.params || {};
+
+      try {
+        const result = await routeToTool(toolName, toolParams, mcpExchange, requestId);
+        results.push({
+          step: i + 1,
+          tool: toolName,
+          success: true,
+          result: typeof result === 'string' ? (result.startsWith('{') || result.startsWith('[') ? JSON.parse(result) : result) : result
+        });
+      } catch (err) {
+        results.push({
+          step: i + 1,
+          tool: toolName,
+          success: false,
+          error: err.message
+        });
+        // Stop chain on error (can be made configurable)
+        break;
+      }
+    }
+
+    return JSON.stringify({
+      chain: {
+        requested: chain.length,
+        executed: results.length,
+        maxDepth: MAX_TOOL_DEPTH,
+        results
+      }
+    }, null, 2);
+  }
+
   if (action === 'research') return researchTool(params, mcpExchange, requestId);
   if (action === 'follow_up') return researchFollowUp(params, mcpExchange, requestId);
   if (action === 'retrieve') return retrieveTool({ mode: 'index', query: params.query, k: params.k, scope: params.scope, rerank: params.rerank }, mcpExchange, requestId);
@@ -1769,5 +1934,10 @@ module.exports = {
   agentSchema,
   agentTool,
   pingSchema,
-  pingTool
+  pingTool,
+  // Recursive tool execution utilities
+  routeToTool,
+  getToolDepth,
+  withDepthTracking,
+  MAX_TOOL_DEPTH
 };

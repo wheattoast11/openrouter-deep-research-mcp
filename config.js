@@ -76,7 +76,24 @@ const config = {
      // Parallelism for concurrent sub-queries
      parallelism: parseInt(process.env.PARALLELISM, 10) || 4,
      // Enforce a minimum max_tokens to avoid truncation across all calls
-     minMaxTokens: parseInt(process.env.MIN_MAX_TOKENS, 10) || 2048
+     minMaxTokens: parseInt(process.env.MIN_MAX_TOKENS, 10) || 2048,
+     // Model-aware adaptive token limits (dynamically adjusted based on model capabilities)
+     tokens: {
+       synthesis: {
+         min: parseInt(process.env.SYNTHESIS_MIN_TOKENS, 10) || 4000,
+         fallbackMax: parseInt(process.env.SYNTHESIS_MAX_TOKENS, 10) || 16000,
+         perSubQuery: parseInt(process.env.TOKENS_PER_SUBQUERY, 10) || 800,
+         perDocument: parseInt(process.env.TOKENS_PER_DOC, 10) || 500
+       },
+       research: {
+         min: parseInt(process.env.RESEARCH_MIN_TOKENS, 10) || 2000,
+         fallbackMax: parseInt(process.env.RESEARCH_MAX_TOKENS, 10) || 8000
+       },
+       planning: {
+         min: parseInt(process.env.PLANNING_MIN_TOKENS, 10) || 1000,
+         fallbackMax: parseInt(process.env.PLANNING_MAX_TOKENS, 10) || 4000
+       }
+     }
   },
   // Database configuration for knowledge base using PGLite
   database: {
@@ -142,6 +159,13 @@ config.prompts = {
 // Simple tool aliasing (short params) for minimal token overhead
 config.simpleTools = {
   enabled: process.env.SIMPLE_TOOLS === 'false' ? false : true
+};
+
+// Tool recursion/chaining configuration
+// Allows agent to execute multiple tools in a single call with depth limiting
+config.toolRecursion = {
+  enabled: process.env.MAX_TOOL_DEPTH !== '0',
+  maxDepth: parseInt(process.env.MAX_TOOL_DEPTH, 10) || 3 // Default: 3 levels, set to 0 to disable
 };
 
 // Async job processing

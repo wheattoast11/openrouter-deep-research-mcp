@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.7.0 — 2025-12-03
+
+### Model-Aware Adaptive Tokens
+- **Dynamic Token Limits:** Replaced hard-coded `max_tokens: 4000` with model-aware adaptive calculation
+- **OpenRouter Catalog Integration:** Queries model capabilities to set appropriate token limits per model
+- **Truncation Detection:** Added `detectTruncation()` to warn when API responses appear cut off mid-sentence
+- **Configurable Limits:** New env vars `SYNTHESIS_MIN_TOKENS`, `SYNTHESIS_MAX_TOKENS`, `TOKENS_PER_SUBQUERY`, `TOKENS_PER_DOC`
+
+### Recursive Tool Execution
+- **Tool Chaining:** New `chain` action in agent tool for multi-step execution in single call
+- **Depth Limiting:** `MAX_TOOL_DEPTH=3` (default) prevents infinite loops; set to 0 to disable
+- **Route-to-Tool:** Internal `routeToTool()` function for programmatic tool invocation with depth tracking
+
+### Claude Code Integration
+- **One-Liner Setup:** `claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio`
+- **Interactive Setup:** `npx @terminals-tech/openrouter-agents --setup-claude` copies slash commands and hooks
+- **Portable Config:** `.mcp.json` uses `npx` for team-shareable configuration
+- **Slash Commands:** `/mcp-status`, `/mcp-research`, `/mcp-async-research`, `/mcp-search`, `/mcp-query`
+- **LLM Guide:** `CLAUDE.md` provides comprehensive tool patterns and best practices
+
+### Documentation
+- **CLAUDE.md:** Complete LLM integration guide with quick reference, workflows, and troubleshooting
+- **TOOL-PATTERNS.md:** Detailed tool patterns, parameter normalization, and error recovery
+- **.claude/README.md:** Documentation for slash commands, hooks, and settings
+- **README.md:** Added Claude Code Integration section with setup instructions
+
+### Infrastructure
+- **postinstall.js:** Minimal script showing setup command after npm install
+- **setup-claude-code.js:** Interactive script to configure Claude Code integration
+- **--setup-claude flag:** Run setup directly via `npx @terminals-tech/openrouter-agents --setup-claude`
+
 ## v1.6.0 — 2025-11-12
 - **MCP SDK Update:** Upgraded @modelcontextprotocol/sdk from 1.17.4 to 1.21.1 for full compatibility with MCP Specification 2025-06-18
 - **November 2025 MCP Spec Readiness:**

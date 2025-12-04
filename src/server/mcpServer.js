@@ -1,4 +1,16 @@
+#!/usr/bin/env node
 // src/server/mcpServer.js
+
+// Handle --setup-claude flag before loading the server
+if (process.argv.includes('--setup-claude')) {
+  require('../../scripts/setup-claude-code').main()
+    .then(() => process.exit(0))
+    .catch((e) => { console.error(e); process.exit(1); });
+  // Prevent the rest of the file from executing synchronously
+  // while the async setup runs
+  module.exports = {};
+} else {
+
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
@@ -203,9 +215,14 @@ function normalizeParamsForTool(toolName, params) {
 
     case 'get_report':
     case 'get_report_content':
-      if (parsed && parsed.reportId) return parsed;
-      if (parsed && parsed.id) return { reportId: parsed.id };
-      return { reportId: s || String(parsed._raw || '') };
+      // Handle various input formats: { reportId }, { id }, number, string
+      if (parsed && parsed.reportId !== undefined) return { ...parsed, reportId: String(parsed.reportId) };
+      if (parsed && parsed.id !== undefined) return { reportId: String(parsed.id), ...parsed };
+      if (parsed && parsed.report_id !== undefined) return { reportId: String(parsed.report_id), ...parsed };
+      // Handle numeric or string-only input
+      const rid = s || String(parsed._raw || params || '');
+      if (/^\d+$/.test(rid.trim())) return { reportId: rid.trim() };
+      return { reportId: rid };
 
     case 'history':
     case 'list_research_history':
@@ -757,7 +774,7 @@ register("sample_message", {
   maxTokens: z.number().optional().describe("Max tokens")
 }, async (p, ex) => {
   try {
-    const result = await samplingHandler.handleSampling(p, ex);
+    const result = await samplingHandler.createMessage({ params: p }, ex);
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
   } catch (e) {
     return { content: [{ type: 'text', text: `Error sample_message: ${e.message}` }], isError: true };
@@ -1321,3 +1338,5 @@ register("elicitation_respond", {
    })());
    await Promise.allSettled(runners);
  })();
+
+} // Close else block for --setup-claude check

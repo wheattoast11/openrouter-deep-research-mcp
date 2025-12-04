@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__openrouter-agents__ping",
+      "mcp__openrouter-agents__get_server_status",
+      "mcp__openrouter-agents__list_tools",
+      "mcp__openrouter-agents__date_time",
+      "mcp__openrouter-agents__calc",
+      "mcp__openrouter-agents__history",
+      "mcp__openrouter-agents__sample_message",
+      "mcp__openrouter-agents__research",
+      "mcp__openrouter-agents__job_status",
+      "mcp__openrouter-agents__conduct_research",
+      "mcp__openrouter-agents__get_report",
+      "mcp__openrouter-agents__task_list",
+      "mcp__openrouter-agents__task_result",
+      "mcp__openrouter-agents__search",
+      "mcp__openrouter-agents__agent",
+      "mcp__openrouter-agents__task_get"
+    ],
+    "deny": []
+  }
+}

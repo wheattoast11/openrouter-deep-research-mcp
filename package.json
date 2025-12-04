@@ -1,6 +1,6 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "OpenRouter MCP server for research agents",
   "main": "src/server/mcpServer.js",
   "bin": {
@@ -10,10 +10,21 @@
     "start": "node src/server/mcpServer.js",
     "dev": "nodemon src/server/mcpServer.js",
     "stdio": "node src/server/mcpServer.js --stdio",
+    "postinstall": "node scripts/postinstall.js",
+    "setup-claude": "node scripts/setup-claude-code.js",
     "gen:examples": "node scripts/generate-examples.js",
     "gen:docs": "node scripts/gen-docs.js",
     "gen:diagram": "mmdc -i docs/diagram-architecture.mmd -o docs/diagram-architecture.svg"
   },
+  "files": [
+    "src/",
+    "config.js",
+    "scripts/postinstall.js",
+    "scripts/setup-claude-code.js",
+    ".claude/",
+    "CLAUDE.md",
+    "docs/TOOL-PATTERNS.md"
+  ],
   "publishConfig": {
     "access": "public"
   },

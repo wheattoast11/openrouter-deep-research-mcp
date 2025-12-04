@@ -1,13 +1,13 @@
 {
   "mcpServers": {
     "openrouter-agents": {
-      "command": "node",
-      "args": ["/var/home/zero/terminals-tech/src/server/mcpServer.js", "--stdio"],
+      "command": "npx",
+      "args": ["@terminals-tech/openrouter-agents", "--stdio"],
       "env": {
         "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+        "INDEXER_ENABLED": "true",
         "MCP_ENABLE_TASKS": "true",
-        "MCP_SAMPLING_TOOLS": "true",
-        "MCP_ELICITATION_URL": "true"
+        "MCP_SAMPLING_TOOLS": "true"
       }
     }
   }
