@@ -9,105 +9,99 @@ const path = require('path');
 const isNodeEnv = typeof process !== 'undefined' && process.versions && process.versions.node;
 const isBrowserEnv = typeof window !== 'undefined';
 
-// Variables to hold dynamically imported functions
-let pipeline;
-let cos_sim;
+// Variables for filesystem access
 let fs;
-
-// If we're in Node.js, require fs module
 if (isNodeEnv) {
   fs = require('fs');
 }
 
 let db = null;
 let isEmbedderReady = false;
-let embedder = null; // Variable to hold the embedding pipeline
-let dbInitialized = false; // Track DB initialization status
-let dbInitAttempted = false; // Track if we've already attempted to initialize
-let usingInMemoryFallback = false; // Track if we're using in-memory fallback
-let dbPathInfo = 'Not Initialized'; // Store DB path/type info
+let embeddingProvider = null; // @terminals-tech/embeddings provider
+let dbInitialized = false;
+let dbInitAttempted = false;
+let usingInMemoryFallback = false;
+let dbPathInfo = 'Not Initialized';
 
 // Track embedder version for reindex trigger
-let embedderVersionKey = 'Xenova/all-MiniLM-L6-v2';
+let embedderVersionKey = '@terminals-tech/embeddings-v0.1.0';
 
 // Get retry configuration from config
 const MAX_RETRIES = config.database.maxRetryAttempts;
-// Base delay for exponential backoff (in ms)
 const BASE_RETRY_DELAY = config.database.retryDelayBaseMs;
 
-// Async IIFE to load the ES Module and initialize embedder
+// Initialize embedder using @terminals-tech/embeddings
 (async () => {
   try {
-    const transformers = await import('@xenova/transformers');
-    pipeline = transformers.pipeline;
-    cos_sim = transformers.cos_sim;
-    process.stderr.write(`[${new Date().toISOString()}] Successfully imported @xenova/transformers.\n`); // Use stderr
-    // Now initialize the embedder since the pipeline function is available
-    await initializeEmbedder();
+    const { EmbeddingProviderFactory } = await import('@terminals-tech/embeddings');
+    process.stderr.write(`[${new Date().toISOString()}] Initializing @terminals-tech/embeddings...\n`);
+
+    // Create provider with quantized cache for 75% memory savings
+    embeddingProvider = await EmbeddingProviderFactory.createBest({
+      cache: true,
+      quantizeCache: true
+    });
+
+    isEmbedderReady = true;
+    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/embeddings initialized successfully.\n`);
+
+    // Trigger reindex if embedder version changed
+    const previous = embedderVersionKey;
+    embedderVersionKey = '@terminals-tech/embeddings-v0.1.0';
+    if (dbInitialized && previous !== embedderVersionKey) {
+      try { await reindexVectors(); } catch (_) {}
+    }
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Failed to dynamically import @xenova/transformers:`, err);
-    // pipeline and cos_sim will remain undefined
+    console.error(`[${new Date().toISOString()}] Failed to initialize @terminals-tech/embeddings:`, err);
+    isEmbedderReady = false;
   }
 })();
 
-// Function to calculate cosine similarity (using library function)
+// Function to calculate cosine similarity using the embedding provider
 function calculateCosineSimilarity(vecA, vecB) {
-  if (!cos_sim) { // Check if import succeeded
-    console.error(`[${new Date().toISOString()}] cos_sim function not available due to import error.`);
+  if (!embeddingProvider) {
+    console.error(`[${new Date().toISOString()}] Embedding provider not available for similarity calculation.`);
     return 0;
   }
   if (!vecA || !vecB || vecA.length !== vecB.length) {
     return 0;
   }
   try {
-    return cos_sim(vecA, vecB);
+    return embeddingProvider.similarity(vecA, vecB);
   } catch (e) {
     console.error(`[${new Date().toISOString()}] Error calculating cosine similarity:`, e);
     return 0;
   }
 }
 
-// Initialize the embedding pipeline asynchronously
-async function initializeEmbedder() {
-  if (!pipeline) { // Check if import succeeded
-    console.error(`[${new Date().toISOString()}] Pipeline function not available due to import error. Cannot initialize embedder.`);
-    isEmbedderReady = false;
-    return;
-  }
-  try {
-    process.stderr.write(`[${new Date().toISOString()}] Initializing embedding model Xenova/all-MiniLM-L6-v2...\n`); // Use stderr
-    // Use a small, efficient model suitable for running locally
-    // This model generates 384-dimensional embeddings
-    embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-    isEmbedderReady = true;
-    // Update version key and trigger reindex if changed
-    const previous = embedderVersionKey;
-    embedderVersionKey = 'Xenova/all-MiniLM-L6-v2';
-    if (dbInitialized && previous !== embedderVersionKey) {
-      try { await reindexVectors(); } catch (_) {}
-    }
-    process.stderr.write(`[${new Date().toISOString()}] Embedding model initialized successfully.\n`); // Use stderr
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] Failed to initialize embedding model:`, error); // Keep console.error for actual errors
-    embedder = null; // Ensure embedder is null on failure
-    isEmbedderReady = false;
-  }
-}
-
+// Generate embedding using @terminals-tech/embeddings
 async function generateEmbedding(text) {
-  if (!isEmbedderReady || !embedder) {
+  if (!isEmbedderReady || !embeddingProvider) {
     console.error(`[${new Date().toISOString()}] Embedder not ready, cannot generate embedding for text: "${text.substring(0, 50)}..."`);
     return null;
   }
   try {
-    // Generate embedding, pooling strategy might matter (e.g., mean pooling)
-    // The library handles pooling by default for sentence-transformer models
-    const output = await embedder(text, { pooling: 'mean', normalize: true });
-    // Output data is Float32Array, convert to regular array for storage
-    return Array.from(output.data);
+    const embedding = await embeddingProvider.embed(text);
+    // Convert to regular array for PGLite storage
+    return Array.isArray(embedding) ? embedding : Array.from(embedding);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Error generating embedding for text "${text.substring(0, 50)}...":`, error);
     return null;
+  }
+}
+
+// Batch embedding generation for efficiency
+async function generateEmbeddingBatch(texts) {
+  if (!isEmbedderReady || !embeddingProvider) {
+    console.error(`[${new Date().toISOString()}] Embedder not ready for batch embedding.`);
+    return texts.map(() => null);
+  }
+  try {
+    const embeddings = await embeddingProvider.embedBatch(texts);
+    return embeddings.map(e => Array.isArray(e) ? e : Array.from(e));
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error in batch embedding:`, error);
+    return texts.map(() => null);
   }
 }
 

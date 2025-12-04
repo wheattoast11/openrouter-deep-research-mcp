@@ -336,6 +336,161 @@ class ElicitationHandler {
   getAllElicitations() {
     return Array.from(this.pendingElicitations.values());
   }
+
+  // ==========================================
+  // terminals.tech Auth Bridge
+  // ==========================================
+
+  /**
+   * Create a terminals.tech OAuth elicitation for GitHub
+   * Leverages existing terminals.tech auth infrastructure
+   *
+   * @param {string} provider - Auth provider ('github', 'google', etc.)
+   * @param {Object} options - Additional options
+   * @returns {Object} Elicitation request with auth URL
+   */
+  createTerminalsAuthElicitation(provider = 'github', options = {}) {
+    if (!this.urlModeEnabled) {
+      throw new Error('URL mode elicitation is disabled');
+    }
+
+    const elicitationId = uuidv4();
+    const state = uuidv4(); // CSRF protection
+    const serverBaseUrl = config.server?.baseUrl || `http://localhost:${config.server?.port || 3001}`;
+
+    // Build terminals.tech OAuth URL with callback
+    const authParams = new URLSearchParams({
+      redirect_uri: `${serverBaseUrl}/auth/callback`,
+      scope: options.scope || 'repo',
+      state: state,
+      elicitation_id: elicitationId
+    });
+
+    const authUrl = `https://terminals.tech/auth/${provider}?${authParams.toString()}`;
+
+    const message = options.message ||
+      `Sign in with ${provider} via terminals.tech to enable git operations and session sync`;
+
+    const elicitation = {
+      mode: 'url',
+      elicitationId,
+      url: authUrl,
+      message,
+      status: 'pending',
+      provider,
+      state, // Store state for CSRF validation
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + (options.ttlMs || 600000)).toISOString(),
+      metadata: {
+        ...options.metadata,
+        authProvider: provider,
+        terminalsAuth: true
+      }
+    };
+
+    this.pendingElicitations.set(elicitationId, elicitation);
+
+    process.stderr.write(`[${new Date().toISOString()}] Elicitation: Created terminals.tech ${provider} auth elicitation ${elicitationId}\n`);
+
+    return {
+      method: 'elicitation/create',
+      params: {
+        mode: 'url',
+        elicitationId,
+        url: authUrl,
+        message
+      },
+      state // Return state for callback validation
+    };
+  }
+
+  /**
+   * Handle OAuth callback from terminals.tech
+   * Called by Express route /auth/callback
+   *
+   * @param {string} code - OAuth authorization code
+   * @param {string} state - CSRF state parameter
+   * @param {string} elicitationId - Elicitation ID from query params
+   * @returns {Object} Result with access token or error
+   */
+  async handleTerminalsAuthCallback(code, state, elicitationId) {
+    // Find the matching elicitation
+    const elicitation = this.pendingElicitations.get(elicitationId);
+
+    if (!elicitation) {
+      return { success: false, error: 'Elicitation not found' };
+    }
+
+    // Validate CSRF state
+    if (elicitation.state !== state) {
+      return { success: false, error: 'Invalid state parameter (CSRF protection)' };
+    }
+
+    // Check expiration
+    if (new Date(elicitation.expiresAt).getTime() < Date.now()) {
+      elicitation.status = 'expired';
+      return { success: false, error: 'Elicitation expired' };
+    }
+
+    try {
+      // Exchange code for token via terminals.tech API
+      const tokenResponse = await fetch('https://terminals.tech/api/auth/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          code,
+          state,
+          elicitation_id: elicitationId
+        })
+      });
+
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        throw new Error(`Token exchange failed: ${errorText}`);
+      }
+
+      const tokenData = await tokenResponse.json();
+
+      // Update elicitation with success
+      elicitation.status = 'accepted';
+      elicitation.completedAt = new Date().toISOString();
+      elicitation.data = {
+        access_token: tokenData.access_token,
+        token_type: tokenData.token_type || 'Bearer',
+        scope: tokenData.scope,
+        provider: elicitation.provider
+      };
+
+      process.stderr.write(`[${new Date().toISOString()}] Elicitation: terminals.tech auth successful for ${elicitationId}\n`);
+
+      return {
+        success: true,
+        access_token: tokenData.access_token,
+        provider: elicitation.provider
+      };
+    } catch (error) {
+      elicitation.status = 'failed';
+      elicitation.error = error.message;
+      process.stderr.write(`[${new Date().toISOString()}] Elicitation: terminals.tech auth failed: ${error.message}\n`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Get stored access token from a completed auth elicitation
+   *
+   * @param {string} elicitationId - Elicitation ID
+   * @returns {string|null} Access token or null
+   */
+  getAccessToken(elicitationId) {
+    const elicitation = this.pendingElicitations.get(elicitationId);
+    if (elicitation?.status === 'accepted' && elicitation?.data?.access_token) {
+      return elicitation.data.access_token;
+    }
+    return null;
+  }
 }
 
 // Export singleton and error code

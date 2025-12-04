@@ -37,6 +37,26 @@ This document provides Claude and other LLMs with everything needed to effective
 | `list_tools` | List all tools | `{}` |
 | `search_tools` | Semantic tool search | `{"query":"find research"}` |
 
+### Session & Time-Travel Tools (NEW in v1.8.0)
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `undo` | Undo last action | `{"sessionId":"default"}` |
+| `redo` | Redo undone action | `{"sessionId":"default"}` |
+| `fork_session` | Create alternate timeline | `{"sessionId":"...", "newSessionId":"..."}` |
+| `time_travel` | Navigate to timestamp | `{"timestamp":"2025-12-04T..."}` |
+| `session_state` | Get current state | `{"sessionId":"default"}` |
+| `checkpoint` | Create named checkpoint | `{"name":"before refactor"}` |
+
+### Knowledge Graph Tools (NEW in v1.8.0)
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `graph_traverse` | Explore graph from node | `{"startNode":"report:5", "depth":3, "strategy":"semantic"}` |
+| `graph_path` | Find path between nodes | `{"from":"report:1", "to":"report:5"}` |
+| `graph_clusters` | Find node clusters | `{}` |
+| `graph_pagerank` | Get importance rankings | `{"topK":20}` |
+| `graph_patterns` | Find event patterns | `{"n":3}` |
+| `graph_stats` | Get graph statistics | `{}` |
+
 ---
 
 ## Parameter Normalization: How to Call Tools
@@ -292,10 +312,39 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 1.7.0
+- **Server Version**: 1.8.0
 - **MCP SDK**: 1.21.1
 - **MCP Spec**: 2025-06-18 (Nov 2025 ready)
-- **Protocol Features**: Task Protocol, Sampling with Tools, Elicitation, Tool Chaining
+- **Protocol Features**: Task Protocol, Sampling with Tools, Elicitation, Tool Chaining, MCP Apps (SEP-1865)
+- **Package Integrations**: @terminals-tech/embeddings, @terminals-tech/graph, @terminals-tech/core
+
+---
+
+## MCP Apps (SEP-1865) - Autonomous UI Surfacing
+
+The server declares `ui://` resources that clients can render as interactive UI components:
+
+### Available UI Resources
+| URI | Purpose | Linked Tools |
+|-----|---------|--------------|
+| `ui://research/viewer` | Interactive report viewer | `research`, `get_report`, `research_follow_up` |
+| `ui://knowledge/graph` | Force-directed graph explorer | `search`, `graph_traverse`, `graph_clusters` |
+| `ui://timeline/session` | Session timeline with undo/redo | `history`, `undo`, `redo`, `time_travel` |
+
+### Using UI Resources
+```javascript
+// Read a UI resource to get HTML template
+read_resource {"uri": "ui://research/viewer"}
+// Returns HTML with embedded JSON-RPC bridge for tool calls
+
+// The UI communicates via postMessage JSON-RPC:
+window.parent.postMessage({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'tools/call',
+  params: { name: 'get_report', arguments: { reportId: '5' } }
+}, '*');
+```
 
 ---
 

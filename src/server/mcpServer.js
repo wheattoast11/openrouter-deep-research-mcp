@@ -93,6 +93,265 @@ const dbClient = require('../utils/dbClient'); // Import dbClient
 const nodeFetch = require('node-fetch');
 const cors = require('cors');
 
+// @terminals-tech/* package integrations
+const { getKnowledgeGraph } = require('../utils/knowledgeGraph');
+const { getSessionManager, EventTypes } = require('../utils/sessionStore');
+
+// Initialize singleton instances
+let knowledgeGraph = null;
+let sessionManager = null;
+
+// Lazy init for knowledge graph and session manager
+async function ensureIntegrations() {
+  if (!knowledgeGraph) {
+    knowledgeGraph = getKnowledgeGraph(dbClient);
+    await knowledgeGraph.initialize().catch(e => console.error('[mcpServer] KnowledgeGraph init error:', e));
+  }
+  if (!sessionManager) {
+    sessionManager = getSessionManager(dbClient);
+    await sessionManager.initialize().catch(e => console.error('[mcpServer] SessionManager init error:', e));
+  }
+}
+
+// MCP Apps (SEP-1865) UI Template Generator
+// Generates minimal HTML templates that communicate via postMessage JSON-RPC
+function generateUITemplate(templateType, options = {}) {
+  const { title, description, linkedTools, capabilities } = options;
+  const baseStyles = `
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d1117; color: #c9d1d9; padding: 16px;
+    }
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid #30363d; padding-bottom: 12px; margin-bottom: 16px;
+    }
+    .title { font-size: 18px; font-weight: 600; }
+    .description { font-size: 13px; color: #8b949e; }
+    .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tool-badge {
+      background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+      padding: 4px 8px; font-size: 12px; font-family: monospace;
+    }
+    .content { flex: 1; overflow: auto; }
+    .loading { text-align: center; padding: 40px; color: #8b949e; }
+    #app { height: calc(100vh - 32px); display: flex; flex-direction: column; }
+  `;
+
+  const mcpBridge = `
+    // MCP Apps Bridge - JSON-RPC over postMessage
+    const mcpBridge = {
+      requestId: 0,
+      pending: new Map(),
+
+      init() {
+        window.addEventListener('message', (e) => {
+          if (e.data?.jsonrpc === '2.0' && e.data.id) {
+            const resolve = this.pending.get(e.data.id);
+            if (resolve) {
+              this.pending.delete(e.data.id);
+              resolve(e.data.result || e.data.error);
+            }
+          }
+        });
+      },
+
+      async callTool(toolName, params = {}) {
+        const id = ++this.requestId;
+        return new Promise((resolve) => {
+          this.pending.set(id, resolve);
+          window.parent.postMessage({
+            jsonrpc: '2.0',
+            id,
+            method: 'tools/call',
+            params: { name: toolName, arguments: params }
+          }, '*');
+          setTimeout(() => {
+            if (this.pending.has(id)) {
+              this.pending.delete(id);
+              resolve({ error: 'Timeout' });
+            }
+          }, 30000);
+        });
+      },
+
+      notify(method, params = {}) {
+        window.parent.postMessage({
+          jsonrpc: '2.0',
+          method,
+          params
+        }, '*');
+      }
+    };
+    mcpBridge.init();
+  `;
+
+  const templates = {
+    'research-viewer': `
+      <!DOCTYPE html>
+      <html><head><meta charset="UTF-8"><title>${title}</title>
+      <style>${baseStyles}
+        .report { white-space: pre-wrap; line-height: 1.6; }
+        .citation { background: #161b22; border-left: 3px solid #58a6ff; padding: 8px 12px; margin: 8px 0; }
+      </style>
+      </head><body>
+      <div id="app">
+        <div class="header">
+          <div><div class="title">${title}</div><div class="description">${description}</div></div>
+          <div class="tools">${linkedTools.map(t => '<span class="tool-badge">' + t + '</span>').join('')}</div>
+        </div>
+        <div class="content" id="content"><div class="loading">Loading report...</div></div>
+      </div>
+      <script>${mcpBridge}
+        async function loadReport(reportId) {
+          const result = await mcpBridge.callTool('get_report', { reportId });
+          if (result && !result.error) {
+            document.getElementById('content').innerHTML = '<div class="report">' + result + '</div>';
+          }
+        }
+        // Listen for report ID from parent
+        window.addEventListener('message', (e) => {
+          if (e.data?.reportId) loadReport(e.data.reportId);
+        });
+      </script>
+      </body></html>
+    `,
+    'graph-explorer': `
+      <!DOCTYPE html>
+      <html><head><meta charset="UTF-8"><title>${title}</title>
+      <style>${baseStyles}
+        #graph { width: 100%; height: calc(100% - 80px); }
+        .controls { display: flex; gap: 8px; margin-bottom: 12px; }
+        .btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+        .btn:hover { background: #30363d; }
+      </style>
+      <script src="https://d3js.org/d3.v7.min.js"></script>
+      </head><body>
+      <div id="app">
+        <div class="header">
+          <div><div class="title">${title}</div><div class="description">${description}</div></div>
+          <div class="tools">${linkedTools.map(t => '<span class="tool-badge">' + t + '</span>').join('')}</div>
+        </div>
+        <div class="controls">
+          <button class="btn" onclick="loadGraph()">Refresh</button>
+          <button class="btn" onclick="showClusters()">Clusters</button>
+          <button class="btn" onclick="showPageRank()">PageRank</button>
+        </div>
+        <svg id="graph"></svg>
+      </div>
+      <script>${mcpBridge}
+        let simulation, svg, node, link;
+        async function loadGraph(nodeId) {
+          const result = await mcpBridge.callTool('graph_traverse', { startNode: nodeId || 'report:1', depth: 3 });
+          if (result?.nodes) renderGraph(result);
+        }
+        async function showClusters() { await mcpBridge.callTool('graph_clusters', {}); }
+        async function showPageRank() { await mcpBridge.callTool('graph_pagerank', { topK: 10 }); }
+        function renderGraph(data) {
+          const width = document.getElementById('graph').clientWidth || 800;
+          const height = document.getElementById('graph').clientHeight || 500;
+          d3.select('#graph').selectAll('*').remove();
+          svg = d3.select('#graph').attr('viewBox', [0, 0, width, height]);
+          simulation = d3.forceSimulation(data.nodes)
+            .force('link', d3.forceLink(data.edges).id(d => d.id).distance(80))
+            .force('charge', d3.forceManyBody().strength(-200))
+            .force('center', d3.forceCenter(width/2, height/2));
+          link = svg.append('g').selectAll('line')
+            .data(data.edges).join('line')
+            .attr('stroke', '#30363d').attr('stroke-width', d => d.weight || 1);
+          node = svg.append('g').selectAll('circle')
+            .data(data.nodes).join('circle')
+            .attr('r', 8).attr('fill', d => d.type === 'report' ? '#58a6ff' : '#3fb950')
+            .call(d3.drag().on('drag', (e,d) => { d.fx = e.x; d.fy = e.y; }));
+          node.append('title').text(d => d.title || d.id);
+          simulation.on('tick', () => {
+            link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+            node.attr('cx',d=>d.x).attr('cy',d=>d.y);
+          });
+        }
+        loadGraph();
+      </script>
+      </body></html>
+    `,
+    'timeline': `
+      <!DOCTYPE html>
+      <html><head><meta charset="UTF-8"><title>${title}</title>
+      <style>${baseStyles}
+        .timeline { display: flex; flex-direction: column; gap: 8px; }
+        .event {
+          display: flex; gap: 12px; padding: 12px; background: #161b22;
+          border-radius: 6px; border-left: 3px solid #30363d;
+        }
+        .event.current { border-left-color: #58a6ff; }
+        .event-time { color: #8b949e; font-size: 12px; min-width: 80px; }
+        .event-type { font-weight: 500; }
+        .controls { display: flex; gap: 8px; margin-bottom: 16px; }
+        .btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn:hover { background: #30363d; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      </style>
+      </head><body>
+      <div id="app">
+        <div class="header">
+          <div><div class="title">${title}</div><div class="description">${description}</div></div>
+          <div class="tools">${linkedTools.map(t => '<span class="tool-badge">' + t + '</span>').join('')}</div>
+        </div>
+        <div class="controls">
+          <button class="btn" id="undoBtn" onclick="doUndo()">← Undo</button>
+          <button class="btn" id="redoBtn" onclick="doRedo()">Redo →</button>
+          <button class="btn" onclick="createCheckpoint()">📍 Checkpoint</button>
+          <button class="btn" onclick="forkSession()">🔀 Fork</button>
+        </div>
+        <div class="timeline" id="timeline"><div class="loading">Loading session...</div></div>
+      </div>
+      <script>${mcpBridge}
+        let sessionId = 'default';
+        async function loadSession() {
+          const result = await mcpBridge.callTool('session_state', { sessionId });
+          if (result?.state) renderTimeline(result);
+        }
+        async function doUndo() {
+          const result = await mcpBridge.callTool('undo', { sessionId });
+          if (result) loadSession();
+        }
+        async function doRedo() {
+          const result = await mcpBridge.callTool('redo', { sessionId });
+          if (result) loadSession();
+        }
+        async function createCheckpoint() {
+          await mcpBridge.callTool('checkpoint', { sessionId, name: 'Manual checkpoint' });
+          loadSession();
+        }
+        async function forkSession() {
+          const newId = 'fork_' + Date.now();
+          await mcpBridge.callTool('fork_session', { sessionId, newSessionId: newId });
+          sessionId = newId;
+          loadSession();
+        }
+        function renderTimeline(data) {
+          const events = [...(data.state?.queries || []), ...(data.state?.reports || [])];
+          events.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+          document.getElementById('timeline').innerHTML = events.map((e, i) =>
+            '<div class="event' + (i === events.length-1 ? ' current' : '') + '">' +
+            '<span class="event-time">' + new Date(e.timestamp).toLocaleTimeString() + '</span>' +
+            '<span class="event-type">' + (e.query ? '🔍 Query' : '📄 Report') + '</span>' +
+            '<span>' + (e.query || e.summary || 'Event').substring(0,50) + '</span>' +
+            '</div>'
+          ).join('');
+          document.getElementById('undoBtn').disabled = !data.canUndo;
+          document.getElementById('redoBtn').disabled = !data.canRedo;
+        }
+        window.addEventListener('message', (e) => { if (e.data?.sessionId) sessionId = e.data.sessionId; loadSession(); });
+        loadSession();
+      </script>
+      </body></html>
+    `
+  };
+
+  return templates[templateType] || templates['research-viewer'];
+}
+
 // Create MCP server with proper capabilities declaration per MCP spec 2025-06-18
 const server = new McpServer({
   name: config.server.name,
@@ -401,31 +660,55 @@ research_follow_up { "originalQuery": "${safeTopic}", "followUpQuestion": "[your
 }
 
 // Register resources using latest MCP spec with proper protocol handlers and URI templates
+// Includes MCP Apps (SEP-1865) ui:// resources for autonomous UI surfacing
 if (config.mcp?.features?.resources) {
   const resources = new Map([
+    // === MCP Apps UI Resources (SEP-1865) ===
+    ['ui://research/viewer', {
+      uri: 'ui://research/viewer',
+      name: 'Research Report Viewer',
+      description: 'Interactive viewer for research reports with citation linking and markdown rendering',
+      mimeType: 'text/html+mcp',
+      linkedTools: ['research', 'get_report', 'research_follow_up']
+    }],
+    ['ui://knowledge/graph', {
+      uri: 'ui://knowledge/graph',
+      name: 'Knowledge Graph Explorer',
+      description: 'Force-directed visualization of the knowledge graph with traversal and clustering',
+      mimeType: 'text/html+mcp',
+      linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank']
+    }],
+    ['ui://timeline/session', {
+      uri: 'ui://timeline/session',
+      name: 'Session Timeline',
+      description: 'Time-travel interface showing session history with undo/redo controls',
+      mimeType: 'text/html+mcp',
+      linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state']
+    }],
+    // === Data Resources ===
     ['mcp://specs/core', {
       uri: 'mcp://specs/core',
       name: 'MCP Core Specification',
       description: 'Canonical Model Context Protocol specification links and references',
-    mimeType: 'application/json'
+      mimeType: 'application/json'
     }],
     ['mcp://tools/catalog', {
       uri: 'mcp://tools/catalog',
       name: 'Available Tools Catalog',
       description: 'Live MCP tools catalog with lightweight params for client UIs',
-    mimeType: 'application/json'
+      mimeType: 'application/json'
     }],
     ['mcp://patterns/workflows', {
-      uri: 'mcp://patterns/workflows', 
+      uri: 'mcp://patterns/workflows',
       name: 'Research Workflow Patterns',
       description: 'Sophisticated tool chaining patterns for multi-agent research orchestration',
-    mimeType: 'application/json'
+      mimeType: 'application/json'
     }],
     ['mcp://examples/multimodal', {
       uri: 'mcp://examples/multimodal',
       name: 'Multimodal Research Examples',
       description: 'Advanced examples for vision-capable research with dynamic model routing',
-    mimeType: 'application/json'
+      mimeType: 'application/json'
     }],
     ['mcp://use-cases/domains', {
       uri: 'mcp://use-cases/domains',
@@ -592,7 +875,56 @@ if (config.mcp?.features?.resources) {
             }
           };
           break;
-          
+
+        // === MCP Apps UI Resources (SEP-1865) ===
+        case 'ui://research/viewer':
+          // Return HTML template for research report viewer
+          content = generateUITemplate('research-viewer', {
+            title: 'Research Report Viewer',
+            description: 'Interactive research report display with markdown rendering',
+            linkedTools: ['research', 'get_report', 'research_follow_up'],
+            capabilities: ['markdown-rendering', 'citation-linking', 'export-pdf']
+          });
+          return {
+            contents: [{
+              uri: resource.uri,
+              mimeType: 'text/html',
+              text: content
+            }]
+          };
+
+        case 'ui://knowledge/graph':
+          // Return HTML template for knowledge graph explorer
+          content = generateUITemplate('graph-explorer', {
+            title: 'Knowledge Graph Explorer',
+            description: 'Force-directed graph visualization with D3.js',
+            linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank'],
+            capabilities: ['force-directed', 'clustering', 'path-finding', 'pagerank']
+          });
+          return {
+            contents: [{
+              uri: resource.uri,
+              mimeType: 'text/html',
+              text: content
+            }]
+          };
+
+        case 'ui://timeline/session':
+          // Return HTML template for session timeline
+          content = generateUITemplate('timeline', {
+            title: 'Session Timeline',
+            description: 'Time-travel debugging interface for session history',
+            linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state'],
+            capabilities: ['undo-redo', 'time-travel', 'checkpoints', 'forking']
+          });
+          return {
+            contents: [{
+              uri: resource.uri,
+              mimeType: 'text/html',
+              text: content
+            }]
+          };
+
         default:
           throw new Error(`Unknown resource: ${uri}`);
       }
@@ -725,6 +1057,161 @@ register("conduct_research", researchSchema, async (p, ex) => { try { const norm
 register("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
 register("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
 register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
+
+// ==========================================
+// Session & Time-Travel Tools (@terminals-tech/core)
+// ==========================================
+
+register("undo", {
+  sessionId: z.string().optional().describe("Session ID (defaults to 'default')")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await sessionManager.undo(p.sessionId || 'default');
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error undo: ${e.message}` }], isError: true };
+  }
+});
+
+register("redo", {
+  sessionId: z.string().optional().describe("Session ID (defaults to 'default')")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await sessionManager.redo(p.sessionId || 'default');
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error redo: ${e.message}` }], isError: true };
+  }
+});
+
+register("fork_session", {
+  sessionId: z.string().optional().describe("Session ID to fork (defaults to 'default')"),
+  newSessionId: z.string().optional().describe("ID for the new forked session")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const newId = p.newSessionId || `fork_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+    const result = await sessionManager.forkSession(p.sessionId || 'default', newId);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error fork_session: ${e.message}` }], isError: true };
+  }
+});
+
+register("time_travel", {
+  sessionId: z.string().optional().describe("Session ID"),
+  timestamp: z.string().describe("ISO timestamp to navigate to")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error time_travel: ${e.message}` }], isError: true };
+  }
+});
+
+register("session_state", {
+  sessionId: z.string().optional().describe("Session ID (defaults to 'default')")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await sessionManager.getState(p.sessionId || 'default');
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error session_state: ${e.message}` }], isError: true };
+  }
+});
+
+register("checkpoint", {
+  sessionId: z.string().optional().describe("Session ID"),
+  name: z.string().describe("Name for the checkpoint")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await sessionManager.createCheckpoint(p.sessionId || 'default', p.name);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error checkpoint: ${e.message}` }], isError: true };
+  }
+});
+
+// ==========================================
+// Knowledge Graph Tools (@terminals-tech/graph)
+// ==========================================
+
+register("graph_traverse", {
+  startNode: z.string().describe("Starting node ID (e.g., 'report:5')"),
+  depth: z.number().optional().default(3).describe("Max traversal depth"),
+  strategy: z.enum(['bfs', 'dfs', 'semantic']).optional().default('semantic').describe("Traversal strategy")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic');
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error graph_traverse: ${e.message}` }], isError: true };
+  }
+});
+
+register("graph_path", {
+  from: z.string().describe("Source node ID"),
+  to: z.string().describe("Target node ID")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await knowledgeGraph.findPath(p.from, p.to);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error graph_path: ${e.message}` }], isError: true };
+  }
+});
+
+register("graph_clusters", {}, async () => {
+  try {
+    await ensureIntegrations();
+    const result = await knowledgeGraph.getClusters();
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error graph_clusters: ${e.message}` }], isError: true };
+  }
+});
+
+register("graph_pagerank", {
+  topK: z.number().optional().default(20).describe("Number of top nodes to return")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await knowledgeGraph.getPageRank(p.topK || 20);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error graph_pagerank: ${e.message}` }], isError: true };
+  }
+});
+
+register("graph_patterns", {
+  n: z.number().optional().default(3).describe("N-gram size for pattern extraction")
+}, async (p) => {
+  try {
+    await ensureIntegrations();
+    const result = await knowledgeGraph.findPatterns(p.n || 3);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error graph_patterns: ${e.message}` }], isError: true };
+  }
+});
+
+register("graph_stats", {}, async () => {
+  try {
+    await ensureIntegrations();
+    const result = await knowledgeGraph.getStats();
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error graph_stats: ${e.message}` }], isError: true };
+  }
+});
 
 // ==========================================
 // MCP 2025-11-25 Protocol Tools (SEP-1686, SEP-1577, SEP-1036)
