@@ -4,7 +4,8 @@
   "description": "OpenRouter MCP server for research agents",
   "main": "src/server/mcpServer.js",
   "bin": {
-    "openrouter-agents": "src/server/mcpServer.js"
+    "openrouter-agents": "src/server/mcpServer.js",
+    "zero": "bin/zero"
   },
   "scripts": {
     "start": "node src/server/mcpServer.js",
@@ -18,6 +19,7 @@
   },
   "files": [
     "src/",
+    "bin/",
     "config.js",
     "scripts/postinstall.js",
     "scripts/setup-claude-code.js",

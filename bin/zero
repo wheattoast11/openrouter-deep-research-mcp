@@ -1,0 +1,48 @@
+#!/usr/bin/env node
+/**
+ * Zero CLI - Bleeding-Edge Agentic Intelligence System
+ *
+ * A lightweight, security-hardened CLI that leverages:
+ * - Knowledge Graph for intelligent suggestions
+ * - Session Store for time-travel (undo/redo)
+ * - Signal Protocol for multi-model consensus
+ * - Fact-verification to prevent hallucinations
+ *
+ * Zero external dependencies for core CLI.
+ *
+ * @author Tej Desai <admin@terminals.tech>
+ * @license MIT
+ */
+
+'use strict';
+
+const path = require('path');
+
+// Ensure we're in the right context
+process.title = 'zero';
+
+// Load CLI orchestrator
+const cli = require('../src/cli/index.js');
+
+// Handle uncaught errors gracefully
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`\x1b[31mFatal error: ${err.message}\x1b[0m\n`);
+  if (process.env.DEBUG) {
+    process.stderr.write(err.stack + '\n');
+  }
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  process.stderr.write(`\x1b[31mUnhandled rejection: ${reason}\x1b[0m\n`);
+  process.exit(1);
+});
+
+// Run CLI
+cli.run(process.argv.slice(2)).then(() => {
+  // Explicit exit needed because PGLite/embeddings keep handles open
+  process.exit(0);
+}).catch((err) => {
+  process.stderr.write(`\x1b[31mError: ${err.message}\x1b[0m\n`);
+  process.exit(1);
+});
