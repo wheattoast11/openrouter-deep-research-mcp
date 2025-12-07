@@ -263,9 +263,28 @@ function getDatabaseUrl() {
   } else if (isNodeEnv) {
     // Node.js can use file-based storage
     const dataDir = path.resolve(config.database.dataDirectory);
-    
+
     // Ensure directory exists if we're in Node
     if (fs) {
+      // Proactive read-only detection before attempting mkdir
+      // (Avoids error noise in AppImage/Docker sandboxed environments)
+      const parentDir = path.dirname(dataDir);
+      try {
+        fs.accessSync(parentDir, fs.constants.W_OK);
+      } catch (accessErr) {
+        if (['EACCES', 'EROFS', 'ENOENT'].includes(accessErr.code)) {
+          logger.info('Parent directory not writable, using in-memory database', {
+            path: parentDir,
+            reason: accessErr.code,
+            suggestion: accessErr.code === 'EROFS' ? 'AppImage/Docker detected - this is expected' : 'Check permissions'
+          });
+          if (config.database.allowInMemoryFallback) {
+            dbPathInfo = `In-Memory (${accessErr.code})`;
+            return null;
+          }
+        }
+      }
+
       try {
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });

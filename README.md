@@ -59,6 +59,76 @@ Set `OPENROUTER_API_KEY` in your environment, then configure via `.env` or `.mcp
 ```
 </details>
 
+## Multi-Client Setup
+
+### Transport Modes
+
+| Transport | Flag | Use Case |
+|-----------|------|----------|
+| STDIO | (default) | MCP clients (Claude, Jan AI, Continue) |
+| HTTP | `--http` | Web apps, shared server |
+
+STDIO is the default transport per [MCP spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports). Use `--http` explicitly for HTTP mode.
+
+### Client-Specific Setup
+
+<details>
+<summary><strong>Jan AI</strong></summary>
+
+1. Enable MCP Servers in Settings → Advanced → Experimental
+2. Click + to add server
+3. Configure:
+   - **Name:** `openrouter-agents`
+   - **Command:** `npx`
+   - **Arguments:** `@terminals-tech/openrouter-agents`
+   - **Environment:** `OPENROUTER_API_KEY=sk-or-...`
+
+Note: STDIO is now default - no `--stdio` flag needed.
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong></summary>
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "openrouter-agents": {
+      "command": "npx",
+      "args": ["@terminals-tech/openrouter-agents"],
+      "env": {
+        "OPENROUTER_API_KEY": "sk-or-..."
+      }
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><strong>Continue / Zed / Other MCP Clients</strong></summary>
+
+Standard MCP config - STDIO is default, no flags needed:
+```json
+{
+  "command": "npx",
+  "args": ["@terminals-tech/openrouter-agents"],
+  "env": { "OPENROUTER_API_KEY": "..." }
+}
+```
+</details>
+
+### Feature Matrix
+
+| Feature | All MCP Clients | Claude Code Only |
+|---------|-----------------|------------------|
+| Core Research Tools | ✓ | ✓ |
+| Knowledge Base | ✓ | ✓ |
+| Session/Graph Tools | ✓ | ✓ |
+| Slash Commands | - | ✓ |
+| Zero CLI | - | standalone |
+
 ## Tools
 
 <details>

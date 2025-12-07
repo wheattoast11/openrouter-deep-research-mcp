@@ -1371,15 +1371,26 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   let lastSseTransport = null; // Variable to hold the last SSE transport
   const sseConnections = new Map(); // Map to store active SSE connections
 
-  // For command-line usage, use STDIO
-  if (process.argv.includes('--stdio')) {
-    // console.error('Starting MCP server with STDIO transport'); // Commented out: Logs interfere with STDIO JSON-RPC
+  // Transport mode detection per MCP spec (STDIO is default per spec: "Clients SHOULD support stdio")
+  const hasStdioFlag = process.argv.includes('--stdio');
+  const hasHttpFlag = process.argv.includes('--http');
+
+  // Mutual exclusivity check
+  if (hasStdioFlag && hasHttpFlag) {
+    logger.error('Cannot specify both --stdio and --http flags');
+    process.exit(1);
+  }
+
+  // STDIO transport: explicit --stdio flag OR default when no flags specified
+  if (hasStdioFlag || !hasHttpFlag) {
+    // STDIO mode - no logging to stdout/stderr during operation (JSON-RPC protocol)
     const transport = new StdioServerTransport();
-    // console.error('Attempting server.connect(transport)...'); // Commented out: Logs interfere with STDIO JSON-RPC
     await server.connect(transport);
-    // console.error('server.connect(transport) completed.'); // Commented out: Logs interfere with STDIO JSON-RPC
     return; // Exit after setting up stdio, don't proceed to HTTP setup
-  } else { // Only setup HTTP/SSE if --stdio is NOT specified
+  }
+
+  // HTTP/SSE transport: only when --http is explicitly specified
+  {
   // For HTTP usage, set up Express with SSE and optional Streamable HTTP
     const app = express();
     const port = config.server.port;
@@ -1986,11 +1997,28 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
     return lastSseTransport.handlePostMessage(req, res);
   });
 
-   // Start server
-   app.listen(port, () => {
-     logger.info('MCP server listening', { port });
+   // Start server with error handling
+   const httpServer = app.listen(port);
+
+   httpServer.on('error', (err) => {
+     if (err.code === 'EADDRINUSE') {
+       logger.error('Port already in use', {
+         port,
+         suggestion: `Another instance running? Try: lsof -i tcp:${port}`,
+         alternatives: [
+           'Use STDIO transport (default): npx @terminals-tech/openrouter-agents',
+           `Use different port: SERVER_PORT=${port + 1} npx @terminals-tech/openrouter-agents --http`
+         ]
+       });
+       process.exit(1); // Clean exit instead of crash
+     }
+     throw err;
    });
-  } // Close the else block for HTTP setup
+
+   httpServer.on('listening', () => {
+     logger.info('MCP server listening', { port, transport: 'HTTP' });
+   });
+  } // Close the block for HTTP setup
  };
 
  /**

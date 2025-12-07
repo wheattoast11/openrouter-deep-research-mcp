@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const pkg = require('./package.json');
 
 const config = {
@@ -100,7 +101,23 @@ const config = {
   },
   // Database configuration for knowledge base using PGLite
   database: {
-    dataDirectory: process.env.PGLITE_DATA_DIR || "./researchAgentDB",
+    // Smart default paths: XDG_DATA_HOME > TMPDIR (AppImage) > ~/.local/share > ./
+    dataDirectory: process.env.PGLITE_DATA_DIR || (() => {
+      // XDG Base Directory compliance (Linux/macOS)
+      if (process.env.XDG_DATA_HOME) {
+        return path.join(process.env.XDG_DATA_HOME, 'openrouter-agents', 'db');
+      }
+      // AppImage environments set TMPDIR to writable location within sandbox
+      if (process.env.APPIMAGE && process.env.TMPDIR) {
+        return path.join(process.env.TMPDIR, 'openrouter-agents-db');
+      }
+      // Standard user data location
+      if (process.env.HOME) {
+        return path.join(process.env.HOME, '.local', 'share', 'openrouter-agents', 'db');
+      }
+      // Fallback to current directory (legacy behavior)
+      return './researchAgentDB';
+    })(),
     vectorDimension: 384, // Dimension for the embeddings from all-MiniLM-L6-v2
     cacheTTL: parseInt(process.env.CACHE_TTL_SECONDS, 10) || 3600, // 1 hour in seconds
     // Enhanced PGLite configuration
