@@ -34,11 +34,12 @@ npx @terminals-tech/openrouter-agents --stdio
 SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 ```
 
-## What's new (v1.7.0 - December 3, 2025)
-- **Adaptive Tokens:** Model-aware token limits using OpenRouter catalog (fixes report truncation)
-- **Tool Chaining:** Recursive tool execution with `chain` action (max depth: 3)
-- **Claude Code Integration:** One-liner setup, slash commands, and LLM integration guide
-- **Truncation Detection:** Warns when API responses appear cut off mid-sentence
+## What's New (v1.8.0 - December 5, 2025)
+- **MCP Apps (SEP-1865):** UI resources for autonomous interface surfacing (`ui://research/viewer`, `ui://knowledge/graph`)
+- **Knowledge Graph:** New tools for graph exploration - `graph_traverse`, `graph_path`, `graph_clusters`, `graph_pagerank`
+- **Session Time-Travel:** Undo/redo, fork sessions, checkpoints, and time navigation via `@terminals-tech/core`
+- **Error Visibility:** Structured error handling with cause chains, pre-flight validation, and detailed diagnostics
+- **Package Ecosystem:** Integrated `@terminals-tech/embeddings`, `@terminals-tech/graph`, `@terminals-tech/core`
 
 [Changelog →](docs/CHANGELOG.md) | [Compliance Report →](docs/MCP-COMPLIANCE-REPORT.md)
 
@@ -51,7 +52,39 @@ SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 npm install
 ```
 
-3) Configure (.env)
+3) Verify installation (optional but recommended)
+```bash
+npx @terminals-tech/openrouter-agents --verify
+```
+
+### Configuration: .env vs .mcp.json
+
+Choose your configuration method based on your use case:
+
+```
+Are you working alone or with a team?
+│
+├─ ALONE (local development)
+│   │
+│   └─► Use .env file
+│       • Keeps secrets out of version control
+│       • Personal API keys stay private
+│       • Add .env to .gitignore
+│
+└─ TEAM (shared project)
+    │
+    └─► Use .mcp.json file
+        • Commit to version control
+        • Use ${VAR} syntax for secrets
+        • Team shares same configuration
+        • Each member sets own env vars
+```
+
+**Quick Decision:**
+- `.env` → Solo developer, local machine, prototype
+- `.mcp.json` → Team project, CI/CD, shareable config
+
+4) Configure (.env)
 ```dotenv
 OPENROUTER_API_KEY=your_openrouter_key
 SERVER_API_KEY=your_http_transport_key
@@ -330,7 +363,7 @@ How it differs from typical “agent chains”:
 
 ## Package publishing
 - Name: `@terminals-tech/openrouter-agents`
-- Version: 1.3.2
+- Version: 1.8.0
 - Bin: `openrouter-agents`
 - Author: Tej Desai <admin@terminals.tech>
 - Homepage: https://terminals.tech
@@ -345,7 +378,7 @@ SERVER_API_KEY=your_key npx @terminals-tech/openrouter-agents
 ### Publish (scoped)
 ```bash
 npm login
-npm version 1.3.2 -m "chore(release): %s"
+npm version patch -m "chore(release): %s"
 git push --follow-tags
 npm publish --access public --provenance
 ```

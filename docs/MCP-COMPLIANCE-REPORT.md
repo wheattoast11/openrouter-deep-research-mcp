@@ -1,8 +1,8 @@
 # MCP Specification 2025-06-18 Compliance Report
 
-**Report Date:** November 12, 2025
+**Report Date:** December 5, 2025
 **Package:** @terminals-tech/openrouter-agents
-**Version:** 1.6.0
+**Version:** 1.8.0
 **MCP SDK:** 1.21.1
 **Target Spec:** [MCP Specification 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18)
 
@@ -373,8 +373,8 @@ if (allowNoAuth) return next();
 - ✅ CORS with allowed origins
 - ✅ DNS rebinding protection
 - ✅ SQL injection prevention (parameterized queries)
-- ✅ Rate limiting (100 req/min per IP) **[NEW in v1.6.0]**
-- ✅ Request size limits (10MB max) **[NEW in v1.6.0]**
+- ✅ Rate limiting (100 req/min per IP)
+- ✅ Request size limits (10MB max)
 - ✅ Read-only database access via tools
 - ✅ No secrets in logs
 
@@ -620,7 +620,7 @@ All compliance assessments are grounded in:
 
 ## 14. Conclusion
 
-The OpenRouter Deep Research MCP server v1.6.0 achieves **full compliance** with the MCP Specification 2025-06-18 (latest stable) and demonstrates **production-grade implementation** suitable for enterprise deployment.
+The OpenRouter Deep Research MCP server v1.8.0 achieves **full compliance** with the MCP Specification 2025-06-18 (latest stable) and demonstrates **production-grade implementation** suitable for enterprise deployment.
 
 ### Key Strengths
 

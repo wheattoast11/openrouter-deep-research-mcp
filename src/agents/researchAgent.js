@@ -3,11 +3,35 @@ const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import the new parser
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
+const logger = require('../utils/logger').child('ResearchAgent');
+const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
+const RobustWebScraper = require('../utils/robustWebScraper'); // Web grounding for real-time data
 const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
 const COMPLEXITY_LEVELS = ["simple", "moderate", "complex"];
 const SIMPLE_QUERY_MAX_LENGTH = 15; // Example threshold for length heuristic
+
+// Web grounding configuration
+const WEB_GROUNDING_CONFIG = {
+  enabled: process.env.WEB_GROUNDING_ENABLED !== 'false', // Enabled by default
+  maxResults: parseInt(process.env.WEB_GROUNDING_MAX_RESULTS, 10) || 5,
+  // Patterns that indicate query needs real-time web grounding
+  groundingPatterns: [
+    /\b(latest|newest|recent|new|current|2024|2025|2026)\b/i,
+    /\b(released?|launched?|announced?|introduced?)\b/i,
+    /\b(does|is|are|was|were)\s+.{1,50}\s+(exist|real|available|supported)\b/i,
+    /\bversion\s*[\d.]+/i,
+    /\b(v\d+|v\d+\.\d+)\b/i,
+    /\b(qwen|llama|gpt|claude|gemini|mistral|deepseek|phi)\s*[-]?\s*\d/i, // Model names with versions
+    /\b(hugging\s*face|github|arxiv|paper)\b/i,
+    /\bMoE\b/i, // Mixture of Experts - often new architectures
+    /\b\d+[bB]\s*(param|model|active)/i, // Parameter counts like "80B model"
+  ]
+};
+
+// Singleton web scraper instance
+const webScraper = new RobustWebScraper();
 
 class ResearchAgent {
   constructor() {
@@ -16,6 +40,62 @@ class ResearchAgent {
     this.veryLowCostModels = config.models.veryLowCost || []; // Add veryLowCost models
     this.classificationModel = config.models.classification;
     this.ensembleSize = config.models.ensembleSize || 2; // Set ensemble size from config or default to 2
+  }
+
+  /**
+   * Detect if a query requires real-time web grounding
+   * Returns true for queries about recent events, specific products, version numbers, etc.
+   */
+  queryNeedsWebGrounding(query) {
+    if (!WEB_GROUNDING_CONFIG.enabled) return false;
+    return WEB_GROUNDING_CONFIG.groundingPatterns.some(pattern => pattern.test(query));
+  }
+
+  /**
+   * Perform web search and format results for LLM context injection
+   * @param {string} query - The research query
+   * @param {string} requestId - Request ID for logging
+   * @returns {Promise<{success: boolean, context: string, sources: Array}>}
+   */
+  async getWebGroundingContext(query, requestId = 'unknown-req') {
+    try {
+      logger.info('Performing web grounding search', { requestId, query: query.substring(0, 80) });
+      const startTime = Date.now();
+
+      const results = await webScraper.searchWeb(query, WEB_GROUNDING_CONFIG.maxResults);
+
+      if (!results || results.length === 0) {
+        logger.warn('Web grounding returned no results', { requestId, query: query.substring(0, 50) });
+        return { success: false, context: '', sources: [] };
+      }
+
+      const duration = Date.now() - startTime;
+      logger.info('Web grounding completed', { requestId, resultCount: results.length, durationMs: duration });
+
+      // Format results for LLM context
+      const formattedResults = results.map((r, i) =>
+        `[${i + 1}] ${r.title}\nSource: ${r.url}\n${r.text || r.snippet || ''}`
+      ).join('\n\n');
+
+      const context = `
+=== REAL-TIME WEB SEARCH RESULTS ===
+The following information was retrieved from the web just now. Use this as your PRIMARY source of truth for factual claims, especially for recent developments, product specifications, and current availability.
+
+${formattedResults}
+
+=== END WEB RESULTS ===
+IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESULTS as they are more current. Cite these sources when making claims.
+`;
+
+      return {
+        success: true,
+        context,
+        sources: results.map(r => ({ title: r.title, url: r.url }))
+      };
+    } catch (error) {
+      logger.error('Web grounding failed', { requestId, error: error.message });
+      return { success: false, context: '', sources: [], error: error.message };
+    }
   }
 
   // Ensure options parameter is accepted
@@ -37,14 +117,14 @@ class ResearchAgent {
       domain = domain.replace(/[^a-z]/g, ''); 
       
       if (DOMAINS.includes(domain)) {
-        console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Classified query domain for "${query.substring(0, 50)}..." as: ${domain}`);
+        logger.debug('Classified query domain', { requestId, query: query.substring(0, 50), domain });
         return domain;
       } else {
-        console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Domain classification model returned invalid domain "${domain}" for query "${query.substring(0, 50)}...". Defaulting to 'general'.`);
+        logger.warn('Invalid domain classification, defaulting to general', { requestId, query: query.substring(0, 50), invalidDomain: domain });
         return 'general';
       }
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Error classifying query domain for "${query.substring(0, 50)}...". Defaulting to 'general'. Error:`, error);
+      logger.error('Error classifying query domain', { requestId, query: query.substring(0, 50), error });
       return 'general';
     }
   }
@@ -53,7 +133,7 @@ class ResearchAgent {
      const requestId = options?.requestId || 'unknown-req';
      // Simple heuristic: short queries might be simple
      if (query.split(' ').length <= SIMPLE_QUERY_MAX_LENGTH) {
-        console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Query "${query.substring(0, 50)}..." assessed as potentially simple based on length.`);
+        logger.debug('Query assessed as potentially simple based on length', { requestId, query: query.substring(0, 50) });
         // Optionally add LLM call for more nuanced assessment
         const systemPrompt = `Assess the complexity of the following research query. Is it likely answerable with a concise factual statement or does it require deep analysis? Respond with ONLY one complexity level: ${COMPLEXITY_LEVELS.join(', ')}.`;
         const messages = [ { role: 'system', content: systemPrompt }, { role: 'user', content: query } ];
@@ -61,20 +141,20 @@ class ResearchAgent {
            const response = await openRouterClient.chatCompletion(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
            let complexity = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
            if (COMPLEXITY_LEVELS.includes(complexity)) {
-              console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Classified query complexity for "${query.substring(0, 50)}..." as: ${complexity}`);
+              logger.debug('Classified query complexity', { requestId, query: query.substring(0, 50), complexity });
               return complexity;
            } else {
-              console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Complexity classification model returned invalid level "${complexity}". Defaulting to 'moderate'.`);
+              logger.warn('Invalid complexity classification, defaulting to moderate', { requestId, invalidLevel: complexity });
               return 'moderate';
            }
         } catch (error) {
-           console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Error classifying query complexity for "${query.substring(0, 50)}...". Defaulting to 'moderate'. Error:`, error);
+           logger.error('Error classifying query complexity', { requestId, query: query.substring(0, 50), error });
            return 'moderate'; // Default to moderate on error
         }
      }
      // Longer queries default to moderate/complex
-     console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Query "${query.substring(0, 50)}..." assessed as moderate/complex based on length.`);
-     return 'moderate'; 
+     logger.debug('Query assessed as moderate/complex based on length', { requestId, query: query.substring(0, 50) });
+     return 'moderate';
   }
 
 
@@ -97,7 +177,7 @@ class ResearchAgent {
           }
         }
       } catch (e) {
-        console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Dynamic catalog unavailable, using static model lists.`);
+        logger.warn('Dynamic catalog unavailable, using static model lists', { requestId });
       }
     }
 
@@ -120,9 +200,9 @@ class ResearchAgent {
       if (!selectedModel) {
          const availableModels = costPreference === 'high' ? this.highCostModels : this.lowCostModels;
          if (availableModels.length === 0) {
-            console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: CRITICAL ERROR - No models available for cost preference "${costPreference}".`);
+            logger.error('No models available for cost preference', { requestId, costPreference });
             // Fallback to planning model as last resort
-            return config.models.planning || "openai/gpt-5-chat"; 
+            return config.models.planning || "openai/gpt-5-chat";
          }
          const domainMatchingModels = availableModels.filter(m => m.domains.includes(domain));
          if (domainMatchingModels.length > 0) {
@@ -134,8 +214,8 @@ class ResearchAgent {
          }
       }
     }
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Selected model for agent ${agentIndex}: ${selectedModel}. Reason: ${reason}.`);
-    return selectedModel; 
+    logger.debug('Selected model for agent', { requestId, agentIndex, model: selectedModel, reason });
+    return selectedModel;
   }
 
   // Helper to get alternative models from the same cost tier, excluding the primary model
@@ -234,7 +314,7 @@ class ResearchAgent {
     }
 
     const modelsToRun = Array.from(ensemble).slice(0, Math.max(2, Math.min(3, this.ensembleSize)));
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Ensemble models: ${modelsToRun.join(', ')}`);
+    logger.debug('Ensemble models selected', { requestId, agentId, models: modelsToRun });
 
     const ensemblePromises = modelsToRun.map(model => 
       this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent)
@@ -284,10 +364,28 @@ class ResearchAgent {
          structuredDataContextSnippet += "Use the provided structured data summaries for context if relevant to the query.";
      }
 
+     // Inject verified local knowledge to prevent hallucinations about system capabilities
+     const localKnowledgeContext = localKnowledge.getKnowledgeContext(query);
+     if (localKnowledgeContext) {
+       logger.debug('Injecting local knowledge context', { requestId, agentId, matchCount: localKnowledge.findRelevantKnowledge(query).length });
+     }
+
+     // Web grounding: fetch real-time web results for queries that need current information
+     let webGroundingContext = '';
+     if (this.queryNeedsWebGrounding(query)) {
+       logger.info('Query requires web grounding', { requestId, agentId, query: query.substring(0, 60) });
+       const webResult = await this.getWebGroundingContext(query, requestId);
+       if (webResult.success) {
+         webGroundingContext = webResult.context;
+         logger.info('Web grounding injected', { requestId, agentId, sourceCount: webResult.sources.length });
+       }
+     }
 
      const systemPrompt = `
  You are Research Agent ${agentId} using model ${model}, an elite AI research specialist tasked with providing authoritative information on specific topics.
- ${textDocumentContextSnippet} 
+ ${webGroundingContext}
+ ${localKnowledgeContext}
+ ${textDocumentContextSnippet}
  ${structuredDataContextSnippet}
  Your mission is to thoroughly investigate the assigned research question and deliver a comprehensive, evidence-based analysis.
  
@@ -317,10 +415,10 @@ class ResearchAgent {
     let queryText = query; // Start with the original query text
     
     if (modelSupportsVision && images && images.length > 0) {
-       console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Including ${images.length} image(s) and analysis prompt for model ${model}.`);
+       logger.debug('Including images with analysis prompt', { requestId, agentId, imageCount: images.length, model });
        // Modify query text to ask for image analysis
        queryText = `Analyze the following image(s) in the context of this query: ${query}\n\nImage Analysis Task: Describe relevant visual elements, extract key information (like text or data from charts), and explain how the image content relates to the research query.`;
-       
+
        // Add the modified text part first
        userMessageContent.push({ type: 'text', text: queryText });
        // Then add the images
@@ -334,19 +432,19 @@ class ResearchAgent {
        // If no images or model doesn't support vision, just use the original query text
        userMessageContent.push({ type: 'text', text: query });
        if (images && images.length > 0 && !modelSupportsVision) {
-          console.warn(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Model ${model} selected does not support vision, skipping image analysis.`);
+          logger.warn('Model does not support vision, skipping image analysis', { requestId, agentId, model });
        }
     }
-    
+
     // Replace the user message content
     messages[1] = { role: 'user', content: userMessageContent };
 
     const startTime = Date.now();
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Starting research for query "${query.substring(0, 50)}..." using model ${model} (Vision: ${modelSupportsVision && images && images.length > 0})`);
+    logger.info('Starting research', { requestId, agentId, query: query.substring(0, 50), model, vision: modelSupportsVision && images && images.length > 0 });
     // Add detailed logging before the API call
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Preparing API call. Model: ${model}, Message Count: ${messages.length}, Options: ${JSON.stringify({ temperature: 0.3, max_tokens: 4000 })}`);
+    logger.debug('Preparing API call', { requestId, agentId, model, messageCount: messages.length });
     if (!model) {
-       console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: CRITICAL - Model variable is undefined/null/empty before API call!`);
+       logger.error('Model variable undefined before API call', { requestId, agentId });
        // Throw an explicit error here to prevent calling the API with an invalid model
        throw new Error(`ResearchAgent ${agentId}: Attempted to call API with undefined model.`);
     }
@@ -362,7 +460,7 @@ class ResearchAgent {
       }
       
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Research completed successfully in ${duration}ms using model ${model}.`);
+      logger.info('Research completed', { requestId, agentId, durationMs: duration, model });
       return {
         agentId, // Keep original agentId for grouping
         model,   // Record the specific model used
@@ -373,7 +471,7 @@ class ResearchAgent {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent ${agentId}: Error after ${duration}ms. Query: "${query.substring(0, 50)}...". Model: ${model}. Error:`, error);
+      logger.error('Research error', { requestId, agentId, durationMs: duration, query: query.substring(0, 50), model, error });
       // Return error information structured similarly to success response
       return {
         agentId,
@@ -389,7 +487,7 @@ class ResearchAgent {
 
   // Added images, textDocuments, structuredData, inputEmbeddings, and requestId parameters here
   async conductParallelResearch(queries, costPreference = 'low', images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null, extra = {}) { 
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Starting parallel ensemble research for ${queries.length} queries with costPreference=${costPreference}. Parallelism=${parallelism}.`);
+    logger.info('Starting parallel ensemble research', { requestId, queryCount: queries.length, costPreference, parallelism });
     const startTime = Date.now();
 
     const mode = extra?.mode || 'standard';
@@ -420,7 +518,7 @@ class ResearchAgent {
     const duration = Date.now() - startTime;
     const successfulTasks = flatResults.filter(r => !r.error).length;
     const failedTasks = flatResults.length - successfulTasks;
-    console.error(`[${new Date().toISOString()}] [${requestId}] ResearchAgent: Parallel research completed in ${duration}ms. Total results: ${flatResults.length}. Success: ${successfulTasks}, Failed: ${failedTasks}.`);
+    logger.info('Parallel research completed', { requestId, durationMs: duration, totalResults: flatResults.length, successfulTasks, failedTasks });
     return flatResults;
   }
 }

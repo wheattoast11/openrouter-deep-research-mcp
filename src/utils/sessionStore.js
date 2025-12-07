@@ -30,7 +30,10 @@ const EventTypes = {
   SEARCH_PERFORMED: 'SEARCH_PERFORMED',
   TOOL_EXECUTED: 'TOOL_EXECUTED',
   SESSION_FORKED: 'SESSION_FORKED',
-  CHECKPOINT_CREATED: 'CHECKPOINT_CREATED'
+  CHECKPOINT_CREATED: 'CHECKPOINT_CREATED',
+  // Job lifecycle events for batch research tracking
+  JOBS_DISPATCHED: 'JOBS_DISPATCHED',
+  JOBS_COMPLETED: 'JOBS_COMPLETED'
 };
 
 // Initial session state
@@ -40,6 +43,7 @@ const createInitialState = () => ({
   searches: [],
   toolExecutions: [],
   checkpoints: [],
+  batchJobs: [], // Tracks batch research job dispatches for recovery
   currentReportId: null,
   metadata: {
     createdAt: new Date().toISOString(),
@@ -116,6 +120,38 @@ const sessionReducer = (state, event) => {
           timestamp: new Date().toISOString(),
           eventIndex: event.payload.eventIndex
         }]
+      };
+
+    case EventTypes.JOBS_DISPATCHED:
+      return {
+        ...newState,
+        batchJobs: [...(state.batchJobs || []), {
+          batchId: event.payload.batchId,
+          jobIds: event.payload.jobIds,
+          queries: event.payload.queries,
+          status: 'dispatched',
+          dispatchedAt: event.payload.timestamp || new Date().toISOString(),
+          costPreference: event.payload.costPreference,
+          sseUrl: event.payload.sseUrl
+        }].slice(-50) // Keep last 50 batch dispatches
+      };
+
+    case EventTypes.JOBS_COMPLETED:
+      return {
+        ...newState,
+        batchJobs: (state.batchJobs || []).map(batch =>
+          batch.batchId === event.payload.batchId
+            ? {
+                ...batch,
+                status: 'completed',
+                completedAt: event.payload.timestamp || new Date().toISOString(),
+                results: event.payload.results,
+                reportIds: event.payload.reportIds,
+                successCount: event.payload.successCount,
+                failureCount: event.payload.failureCount
+              }
+            : batch
+        )
       };
 
     default:

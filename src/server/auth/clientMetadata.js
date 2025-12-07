@@ -61,7 +61,7 @@ class ClientMetadataValidator {
       response = await fetch(clientId, {
         headers: {
           'Accept': 'application/json',
-          'User-Agent': 'openrouter-agents-mcp/1.4.0'
+          'User-Agent': `openrouter-agents-mcp/${config.server.version}`
         },
         timeout: 10000 // 10 second timeout
       });

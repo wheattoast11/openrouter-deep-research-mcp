@@ -10,7 +10,10 @@ const config = {
     // Add a key for basic server authentication (optional)
     apiKey: process.env.SERVER_API_KEY || null,
     requireHttps: process.env.REQUIRE_HTTPS === 'true',
-    publicUrl: process.env.PUBLIC_URL || `${process.env.REQUIRE_HTTPS === 'true' ? 'https' : 'http'}://localhost:${process.env.SERVER_PORT || process.env.PORT || 3002}`
+    publicUrl: process.env.PUBLIC_URL || `${process.env.REQUIRE_HTTPS === 'true' ? 'https' : 'http'}://localhost:${process.env.SERVER_PORT || process.env.PORT || 3002}`,
+    // Server startup behavior
+    allowStartWithoutDb: process.env.ALLOW_START_WITHOUT_DB === 'true',
+    startupTimeoutMs: parseInt(process.env.STARTUP_TIMEOUT_MS, 10) || 30000
   },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -102,10 +105,13 @@ const config = {
     cacheTTL: parseInt(process.env.CACHE_TTL_SECONDS, 10) || 3600, // 1 hour in seconds
     // Enhanced PGLite configuration
     databaseUrl: process.env.PGLITE_DATABASE_URL || null, // Override auto-detected URL
-    relaxedDurability: process.env.PGLITE_RELAXED_DURABILITY === 'false' ? false : true, // Default to true; allow explicit disable
-    maxRetryAttempts: parseInt(process.env.PGLITE_MAX_RETRY_ATTEMPTS, 10) || 3, // Default to 3 retry attempts
-    retryDelayBaseMs: parseInt(process.env.PGLITE_RETRY_DELAY_BASE_MS, 10) || 200, // Base delay in milliseconds
-    allowInMemoryFallback: process.env.PGLITE_ALLOW_IN_MEMORY_FALLBACK === 'false' ? false : true // Default to true
+    relaxedDurability: process.env.PGLITE_RELAXED_DURABILITY === 'false' ? false : true,
+    maxRetryAttempts: parseInt(process.env.PGLITE_MAX_RETRY_ATTEMPTS, 10) || 3,
+    retryDelayBaseMs: parseInt(process.env.PGLITE_RETRY_DELAY_BASE_MS, 10) || 200,
+    // Initialization behavior
+    initTimeoutMs: parseInt(process.env.PGLITE_INIT_TIMEOUT_MS, 10) || 30000,
+    retryOnFailure: process.env.PGLITE_RETRY_ON_FAILURE === 'true',
+    allowInMemoryFallback: process.env.PGLITE_ALLOW_IN_MEMORY_FALLBACK !== 'false' // Default true for backwards compat
   },
   // Local indexing/search configuration (opt-in by default)
   indexer: {
@@ -168,11 +174,26 @@ config.toolRecursion = {
   maxDepth: parseInt(process.env.MAX_TOOL_DEPTH, 10) || 3 // Default: 3 levels, set to 0 to disable
 };
 
-// Async job processing
+// Async job processing - optimized for parallel batch research
 config.jobs = {
-  concurrency: parseInt(process.env.JOBS_CONCURRENCY, 10) || 2,
-  heartbeatMs: parseInt(process.env.JOB_HEARTBEAT_MS, 10) || 5000,
-  leaseTimeoutMs: parseInt(process.env.JOB_LEASE_TIMEOUT_MS, 10) || 60000
+  concurrency: parseInt(process.env.JOBS_CONCURRENCY, 10) || 4,        // ↑ from 2 for better parallelism
+  heartbeatMs: parseInt(process.env.JOB_HEARTBEAT_MS, 10) || 2000,     // ↓ from 5000 for faster stale detection
+  leaseTimeoutMs: parseInt(process.env.JOB_LEASE_TIMEOUT_MS, 10) || 30000, // ↓ from 60000 for faster recovery
+  batchEventLimit: parseInt(process.env.JOB_BATCH_EVENT_LIMIT, 10) || 500, // SSE event limit per batch poll
+  ssePollingMs: parseInt(process.env.JOB_SSE_POLLING_MS, 10) || 500    // ↓ from 1000 for lower latency
+};
+
+// Structured logging configuration (MCP-compliant)
+config.logging = {
+  // Log level filtering: 'debug' | 'info' | 'warn' | 'error' (default: info)
+  level: (process.env.LOG_LEVEL || 'info').toLowerCase(),
+  // Output mode: 'stderr' | 'mcp' | 'both' (default: stderr)
+  // - stderr: Traditional stderr logging (compatible with all clients)
+  // - mcp: Use MCP SDK sendLoggingMessage notifications (client can filter)
+  // - both: Output to both channels
+  output: process.env.LOG_OUTPUT || 'stderr',
+  // JSON format for machine parsing (default: false for human-readable)
+  json: process.env.LOG_JSON === 'true'
 };
 
 // Advanced caching and cost optimization
@@ -202,6 +223,38 @@ config.caching = {
       complex: 0.000015   // Max cost per token for complex queries
     }
   }
+};
+
+// Core abstractions (Convergence Plan v2.0)
+config.core = {
+  // Enable new consolidated handlers (gradual migration)
+  handlers: {
+    enabled: process.env.CORE_HANDLERS_ENABLED === 'true',
+    // Which domains use new handlers (others fall back to tools.js)
+    domains: (process.env.CORE_HANDLER_DOMAINS || '').split(',').filter(Boolean)
+  },
+  // Signal protocol configuration
+  signal: {
+    enabled: process.env.SIGNAL_PROTOCOL_ENABLED === 'true',
+    maxHistorySize: parseInt(process.env.SIGNAL_MAX_HISTORY, 10) || 1000
+  },
+  // RoleShift bidirectional protocol
+  roleShift: {
+    enabled: process.env.ROLESHIFT_ENABLED === 'true',
+    timeout: parseInt(process.env.ROLESHIFT_TIMEOUT_MS, 10) || 60000
+  },
+  // Schema registry options
+  schemas: {
+    strictValidation: process.env.STRICT_SCHEMA_VALIDATION === 'true'
+  }
+};
+
+// Version information
+config.version = pkg.version;
+config.mcpSpec = {
+  stable: '2025-06-18',
+  draft: '2025-11-25',
+  features: ['SEP-1686', 'SEP-1577', 'SEP-1036', 'SEP-1865']
 };
 
 module.exports = config;

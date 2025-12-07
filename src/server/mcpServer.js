@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 // src/server/mcpServer.js
 
+// Handle --verify flag for installation verification
+if (process.argv.includes('--verify')) {
+  require('../../scripts/postinstall');
+  // postinstall.js handles --verify and exits
+  module.exports = {};
+}
 // Handle --setup-claude flag before loading the server
-if (process.argv.includes('--setup-claude')) {
+else if (process.argv.includes('--setup-claude')) {
   require('../../scripts/setup-claude-code').main()
     .then(() => process.exit(0))
     .catch((e) => { console.error(e); process.exit(1); });
@@ -24,6 +30,9 @@ const config = require('../../config');
 const taskAdapter = require('./taskAdapter');
 const samplingHandler = require('./sampling');
 const elicitationHandler = require('./elicitation');
+
+// Structured logging (MCP-compliant)
+const logger = require('../utils/logger');
 
 const { 
   // Schemas
@@ -57,6 +66,7 @@ const {
   retrieveSchema, // New: schema for retrieve tool
   getJobStatusSchema,
   cancelJobSchema,
+  batchResearchSchema, // Batch research for parallel job dispatch
   
   // Functions
   conductResearch,
@@ -87,7 +97,10 @@ const {
   dateTimeTool,
   calcTool,
   retrieveTool, // New: function for retrieve tool
-  
+  batchResearchTool, // Batch research function
+  searchTool, // KB search
+  queryTool, // SQL query
+
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
 const nodeFetch = require('node-fetch');
@@ -97,6 +110,16 @@ const cors = require('cors');
 const { getKnowledgeGraph } = require('../utils/knowledgeGraph');
 const { getSessionManager, EventTypes } = require('../utils/sessionStore');
 
+// Consolidated handlers (feature-flagged via CORE_HANDLERS_ENABLED)
+const handlers = config.core?.handlers?.enabled ? require('./handlers') : null;
+
+// Tools that require legacy tools.js implementation (complex orchestration, MCP protocols, external APIs)
+const LEGACY_ONLY_TOOLS = new Set([
+  'research', 'agent', 'research_follow_up', 'batch_research',
+  'sample_message', 'elicitation_respond',
+  'search_web', 'fetch_url', 'get_server_status'
+]);
+
 // Initialize singleton instances
 let knowledgeGraph = null;
 let sessionManager = null;
@@ -105,11 +128,11 @@ let sessionManager = null;
 async function ensureIntegrations() {
   if (!knowledgeGraph) {
     knowledgeGraph = getKnowledgeGraph(dbClient);
-    await knowledgeGraph.initialize().catch(e => console.error('[mcpServer] KnowledgeGraph init error:', e));
+    await knowledgeGraph.initialize().catch(e => logger.error('KnowledgeGraph init error', { error: e }));
   }
   if (!sessionManager) {
     sessionManager = getSessionManager(dbClient);
-    await sessionManager.initialize().catch(e => console.error('[mcpServer] SessionManager init error:', e));
+    await sessionManager.initialize().catch(e => logger.error('SessionManager init error', { error: e }));
   }
 }
 
@@ -359,9 +382,13 @@ const server = new McpServer({
   capabilities: {
     tools: {},
     prompts: { listChanged: true },
-    resources: { subscribe: true, listChanged: true }
+    resources: { subscribe: true, listChanged: true },
+    logging: {} // Enable MCP logging notifications
   }
 });
+
+// Wire structured logger to MCP server for sendLoggingMessage support
+logger.setServer(server);
 
 // MODE-based tool exposure
 const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
@@ -379,9 +406,81 @@ function shouldExpose(name) {
   return true; // ALL
 }
 function register(name, schema, handler) {
-  if (shouldExpose(name)) server.tool(name, schema, handler);
+  if (shouldExpose(name)) {
+    // Use registerTool with config object to properly pass ZodEffects schemas
+    // The .tool() method only accepts ZodRawShape, not full Zod schemas with transforms
+    const description = schema?.description || schema?._def?.description || '';
+    server.registerTool(name, { inputSchema: schema, description }, handler);
+  }
 }
 
+// =============================================================================
+// Handler Integration (v1.8.1 - Feature-flagged via CORE_HANDLERS_ENABLED)
+// =============================================================================
+
+/**
+ * Build context object for consolidated handlers
+ */
+function buildHandlerContext() {
+  return {
+    dbClient,
+    sessionStore: sessionManager,
+    graphClient: knowledgeGraph,
+    toolRegistry: server.getTools?.() || new Map()
+  };
+}
+
+/**
+ * Route a tool call through consolidated handlers
+ * Returns null if handlers are disabled or tool is unknown to handlers
+ */
+async function routeThroughHandler(toolName, params, context) {
+  if (!handlers) return null;
+  try {
+    const result = await handlers.routeToHandler(toolName, params, context);
+    return {
+      content: [{
+        type: 'text',
+        text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+      }]
+    };
+  } catch (e) {
+    // If handler doesn't know the tool, fall back to legacy
+    if (e.message.includes('Unknown tool')) return null;
+    throw e;
+  }
+}
+
+/**
+ * Wrap a legacy tool with handler routing
+ * When CORE_HANDLERS_ENABLED=true, routes through handlers first
+ * Falls back to legacy implementation if handlers unavailable or for LEGACY_ONLY_TOOLS
+ */
+function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
+  return async (params, exchange, requestId = `req-${Date.now()}`) => {
+    try {
+      const norm = needsNormalization ? normalizeParamsForTool(toolName, params) : params;
+
+      // Try handler routing for non-legacy tools
+      if (handlers && !LEGACY_ONLY_TOOLS.has(toolName)) {
+        await ensureIntegrations();
+        const result = await routeThroughHandler(toolName, norm, buildHandlerContext());
+        if (result) return result;
+      }
+
+      // Fall back to legacy implementation
+      const text = await legacyFn(norm, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return {
+        content: [{ type: 'text', text: `Error ${toolName}: ${e.message}` }],
+        isError: true
+      };
+    }
+  };
+}
+
+// =============================================================================
 // Permissive parameter normalizer to accept loose single-string inputs (e.g., random_string)
 function extractRawParam(input) {
   if (typeof input === 'string') return input;
@@ -444,8 +543,11 @@ function toBoolean(value, fallback = false) {
 }
 
 function normalizeParamsForTool(toolName, params) {
-  // If already a structured object without loose fields, pass through
-  if (params && typeof params === 'object' && !('random_string' in params) && !('raw' in params) && !('text' in params)) {
+  // For research tools, always go through normalization to handle q -> query conversion
+  const needsNormalization = ['research', 'submit_research', 'conduct_research'].includes(toolName);
+
+  // If already a structured object without loose fields, pass through (except research tools)
+  if (!needsNormalization && params && typeof params === 'object' && !('random_string' in params) && !('raw' in params) && !('text' in params)) {
     return params;
   }
 
@@ -526,6 +628,13 @@ function normalizeParamsForTool(toolName, params) {
     case 'search_tools':
       if (parsed && parsed.query) return parsed;
       return s ? { query: s } : {};
+
+    case 'search':
+      // Accept either 'q' or 'query' parameter
+      if (parsed && (parsed.q || parsed.query)) return parsed;
+      return s ? { q: s } : {};
+
+    // Note: 'retrieve' case is handled above at line 503-518
 
     case 'get_server_status':
       return {}; // no params
@@ -945,8 +1054,45 @@ register(
   "research",
   researchSchema,
   async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('research', params); const text = await researchTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error research: ${e.message}` }], isError: true }; }
+    const requestId = `req-${Date.now()}`;
+    try {
+      // Pre-flight check for research operations
+      const { runResearchPreflight } = require('../utils/preflight');
+      const preflight = await runResearchPreflight(dbClient);
+
+      if (!preflight.passed) {
+        const { formatErrorForResponse } = require('../utils/errors');
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: true,
+              message: preflight.toError().message,
+              code: 'PREFLIGHT_FAILED',
+              checks: preflight.checks,
+              errors: preflight.errors,
+              warnings: preflight.warnings
+            }, null, 2)
+          }],
+          isError: true
+        };
+      }
+
+      const norm = normalizeParamsForTool('research', params);
+      logger.info('Research params normalized', { requestId, normalizedQuery: norm?.query?.substring(0, 100), hasQuery: !!norm?.query });
+      const text = await researchTool(norm, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      const { formatErrorForResponse } = require('../utils/errors');
+      const errorResponse = formatErrorForResponse(e, true);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ ...errorResponse, requestId }, null, 2)
+        }],
+        isError: true
+      };
+    }
   }
 );
 register(
@@ -960,84 +1106,52 @@ register(
 register(
   "ping",
   require('./tools').pingSchema,
-  async (params) => {
-    try { const text = await require('./tools').pingTool(params); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error ping: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('ping', require('./tools').pingTool, false)
 );
 register(
   "job_status",
   getJobStatusSchema,
-  async (params) => {
-    try { const norm = normalizeParamsForTool('job_status', params); const text = await getJobStatusTool(norm); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error job_status: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('job_status', getJobStatusTool)
 );
 register(
   "cancel_job",
   cancelJobSchema,
-  async (params) => {
-    try { const norm = normalizeParamsForTool('cancel_job', params); const text = await cancelJobTool(norm); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error cancel_job: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('cancel_job', cancelJobTool)
 );
 register(
   "retrieve",
   retrieveSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('retrieve', params); const text = await retrieveTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error retrieve: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('retrieve', retrieveTool)
 );
 register(
   "get_report",
   getReportContentSchema,
-  async (params, exchange) => {
-    const startTime = Date.now();
-    const requestId = `req-${startTime}-${Math.random().toString(36).substring(2, 7)}`;
-    try { const norm = normalizeParamsForTool('get_report', params); const result = await getReportContent(norm, exchange, requestId); return { content: [{ type: 'text', text: result }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error get_report: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('get_report', getReportContent)
 );
 register(
   "history",
   listResearchHistorySchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('history', params); const text = await listResearchHistory(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error history: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('history', listResearchHistory)
 );
 register(
   "date_time",
   dateTimeSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('date_time', params); const text = await dateTimeTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error date_time: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('date_time', dateTimeTool)
 );
 register(
   "calc",
   calcSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('calc', params); const text = await calcTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error calc: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('calc', calcTool)
 );
 register(
   "list_tools",
   listToolsSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('list_tools', params); const text = await listToolsTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error list_tools: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('list_tools', listToolsTool)
 );
 register(
   "search_tools",
   searchToolsSchema,
-  async (params, exchange) => {
-    try { const norm = normalizeParamsForTool('search_tools', params); const text = await searchToolsTool(norm, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
-    catch (e) { return { content: [{ type: 'text', text: `Error search_tools: ${e.message}` }], isError: true }; }
-  }
+  wrapWithHandler('search_tools', searchToolsTool)
 );
 register(
   "get_server_status",
@@ -1048,211 +1162,126 @@ register(
   }
 );
 
-// Back-compat aliases → unified tools
-register("submit_research", submitResearchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('submit_research', p); const t = await researchTool({ ...norm, async: true }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error submit_research: ${e.message}`}], isError:true }; }});
-register("get_job_status", getJobStatusSchema, async (p) => { try { const norm = normalizeParamsForTool('get_job_status', p); const t = await getJobStatusTool(norm); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_job_status: ${e.message}`}], isError:true }; }});
-register("search", searchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('search', p); const t = await retrieveTool({ mode: 'index', query: norm.q || norm.query, k: norm.k, scope: norm.scope, rerank: norm.rerank }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error search: ${e.message}`}], isError:true }; }});
-register("query", querySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('query', p); const t = await retrieveTool({ mode: 'sql', sql: norm.sql, params: norm.params, explain: norm.explain }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error query: ${e.message}`}], isError:true }; }});
-register("conduct_research", researchSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('conduct_research', p); const t = await researchTool({ ...norm, async: false }, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error conduct_research: ${e.message}`}], isError:true }; }});
-register("get_report_content", getReportContentSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('get_report_content', p); const t = await getReportContent(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error get_report_content: ${e.message}`}], isError:true }; }});
-register("list_research_history", listResearchHistorySchema, async (p, ex) => { try { const norm = normalizeParamsForTool('list_research_history', p); const t = await listResearchHistory(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error list_research_history: ${e.message}`}], isError:true }; }});
+// Semantic aliases - provide clearer names for common operations
+register("search", searchSchema, wrapWithHandler('search', searchTool));
+register("query", querySchema, wrapWithHandler('query', queryTool));
 register("research_follow_up", researchFollowUpSchema, async (p, ex) => { try { const norm = normalizeParamsForTool('research_follow_up', p); const t = await researchFollowUp(norm, ex, `req-${Date.now()}`); return { content: [{ type: 'text', text: t }] }; } catch (e){ return { content: [{ type: 'text', text: `Error research_follow_up: ${e.message}`}], isError:true }; }});
+
+// Batch research - dispatch multiple queries in single call
+register("batch_research", batchResearchSchema, async (p, ex) => {
+  try {
+    const requestId = `batch-${Date.now()}`;
+    const result = await batchResearchTool(p, ex, requestId);
+    return { content: [{ type: 'text', text: result }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error batch_research: ${e.message}` }], isError: true };
+  }
+});
 
 // ==========================================
 // Session & Time-Travel Tools (@terminals-tech/core)
 // ==========================================
 
+// Session tool legacy implementations (for when handlers disabled)
+const sessionLegacy = {
+  undo: async (p) => JSON.stringify(await sessionManager.undo(p.sessionId || 'default'), null, 2),
+  redo: async (p) => JSON.stringify(await sessionManager.redo(p.sessionId || 'default'), null, 2),
+  fork_session: async (p) => {
+    const newId = p.newSessionId || `fork_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+    return JSON.stringify(await sessionManager.forkSession(p.sessionId || 'default', newId), null, 2);
+  },
+  time_travel: async (p) => JSON.stringify(await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp), null, 2),
+  session_state: async (p) => JSON.stringify(await sessionManager.getState(p.sessionId || 'default'), null, 2),
+  checkpoint: async (p) => JSON.stringify(await sessionManager.createCheckpoint(p.sessionId || 'default', p.name), null, 2)
+};
+
 register("undo", {
   sessionId: z.string().optional().describe("Session ID (defaults to 'default')")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await sessionManager.undo(p.sessionId || 'default');
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error undo: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('undo', sessionLegacy.undo, false));
 
 register("redo", {
   sessionId: z.string().optional().describe("Session ID (defaults to 'default')")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await sessionManager.redo(p.sessionId || 'default');
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error redo: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('redo', sessionLegacy.redo, false));
 
 register("fork_session", {
   sessionId: z.string().optional().describe("Session ID to fork (defaults to 'default')"),
   newSessionId: z.string().optional().describe("ID for the new forked session")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const newId = p.newSessionId || `fork_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-    const result = await sessionManager.forkSession(p.sessionId || 'default', newId);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error fork_session: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('fork_session', sessionLegacy.fork_session, false));
 
 register("time_travel", {
   sessionId: z.string().optional().describe("Session ID"),
   timestamp: z.string().describe("ISO timestamp to navigate to")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error time_travel: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('time_travel', sessionLegacy.time_travel, false));
 
 register("session_state", {
   sessionId: z.string().optional().describe("Session ID (defaults to 'default')")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await sessionManager.getState(p.sessionId || 'default');
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error session_state: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('session_state', sessionLegacy.session_state, false));
 
 register("checkpoint", {
   sessionId: z.string().optional().describe("Session ID"),
   name: z.string().describe("Name for the checkpoint")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await sessionManager.createCheckpoint(p.sessionId || 'default', p.name);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error checkpoint: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('checkpoint', sessionLegacy.checkpoint, false));
 
 // ==========================================
 // Knowledge Graph Tools (@terminals-tech/graph)
 // ==========================================
 
+// Graph tool legacy implementations (for when handlers disabled)
+const graphLegacy = {
+  traverse: async (p) => JSON.stringify(await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic'), null, 2),
+  path: async (p) => JSON.stringify(await knowledgeGraph.findPath(p.from, p.to), null, 2),
+  clusters: async () => JSON.stringify(await knowledgeGraph.getClusters(), null, 2),
+  pagerank: async (p) => JSON.stringify(await knowledgeGraph.getPageRank(p.topK || 20), null, 2),
+  patterns: async (p) => JSON.stringify(await knowledgeGraph.findPatterns(p.n || 3), null, 2),
+  stats: async () => JSON.stringify(await knowledgeGraph.getStats(), null, 2)
+};
+
 register("graph_traverse", {
   startNode: z.string().describe("Starting node ID (e.g., 'report:5')"),
   depth: z.number().optional().default(3).describe("Max traversal depth"),
   strategy: z.enum(['bfs', 'dfs', 'semantic']).optional().default('semantic').describe("Traversal strategy")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic');
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error graph_traverse: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('graph_traverse', graphLegacy.traverse, false));
 
 register("graph_path", {
   from: z.string().describe("Source node ID"),
   to: z.string().describe("Target node ID")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await knowledgeGraph.findPath(p.from, p.to);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error graph_path: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('graph_path', graphLegacy.path, false));
 
-register("graph_clusters", {}, async () => {
-  try {
-    await ensureIntegrations();
-    const result = await knowledgeGraph.getClusters();
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error graph_clusters: ${e.message}` }], isError: true };
-  }
-});
+register("graph_clusters", {}, wrapWithHandler('graph_clusters', graphLegacy.clusters, false));
 
 register("graph_pagerank", {
   topK: z.number().optional().default(20).describe("Number of top nodes to return")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await knowledgeGraph.getPageRank(p.topK || 20);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error graph_pagerank: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('graph_pagerank', graphLegacy.pagerank, false));
 
 register("graph_patterns", {
   n: z.number().optional().default(3).describe("N-gram size for pattern extraction")
-}, async (p) => {
-  try {
-    await ensureIntegrations();
-    const result = await knowledgeGraph.findPatterns(p.n || 3);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error graph_patterns: ${e.message}` }], isError: true };
-  }
-});
+}, wrapWithHandler('graph_patterns', graphLegacy.patterns, false));
 
-register("graph_stats", {}, async () => {
-  try {
-    await ensureIntegrations();
-    const result = await knowledgeGraph.getStats();
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error graph_stats: ${e.message}` }], isError: true };
-  }
-});
+register("graph_stats", {}, wrapWithHandler('graph_stats', graphLegacy.stats, false));
 
 // ==========================================
 // MCP 2025-11-25 Protocol Tools (SEP-1686, SEP-1577, SEP-1036)
 // ==========================================
 
 // Task Protocol Tools (SEP-1686)
-register("task_get", { taskId: z.string().describe("Task/job ID to retrieve") }, async (p) => {
-  try {
-    const task = await taskAdapter.getTask(p.taskId);
-    return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error task_get: ${e.message}` }], isError: true };
-  }
-});
+const taskLegacy = {
+  get: async (p) => JSON.stringify(await taskAdapter.getTask(p.taskId), null, 2),
+  result: async (p) => JSON.stringify(await taskAdapter.getTaskResult(p.taskId), null, 2),
+  cancel: async (p) => JSON.stringify(await taskAdapter.cancelTask(p.taskId), null, 2),
+  list: async (p) => JSON.stringify(await taskAdapter.listTasks(p.cursor, p.limit || 20), null, 2)
+};
 
-register("task_result", { taskId: z.string().describe("Task/job ID to get result for") }, async (p) => {
-  try {
-    const result = await taskAdapter.getTaskResult(p.taskId);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error task_result: ${e.message}` }], isError: true };
-  }
-});
+register("task_get", { taskId: z.string().describe("Task/job ID to retrieve") },
+  wrapWithHandler('task_get', taskLegacy.get, false));
 
-register("task_cancel", { taskId: z.string().describe("Task/job ID to cancel") }, async (p) => {
-  try {
-    const result = await taskAdapter.cancelTask(p.taskId);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error task_cancel: ${e.message}` }], isError: true };
-  }
-});
+register("task_result", { taskId: z.string().describe("Task/job ID to get result for") },
+  wrapWithHandler('task_result', taskLegacy.result, false));
 
-register("task_list", { cursor: z.string().optional(), limit: z.number().optional() }, async (p) => {
-  try {
-    const tasks = await taskAdapter.listTasks(p.cursor, p.limit || 20);
-    return { content: [{ type: 'text', text: JSON.stringify(tasks, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: 'text', text: `Error task_list: ${e.message}` }], isError: true };
-  }
-});
+register("task_cancel", { taskId: z.string().describe("Task/job ID to cancel") },
+  wrapWithHandler('task_cancel', taskLegacy.cancel, false));
+
+register("task_list", { cursor: z.string().optional(), limit: z.number().optional() },
+  wrapWithHandler('task_list', taskLegacy.list, false));
 
 // Sampling with Tools (SEP-1577)
 register("sample_message", {
@@ -1278,6 +1307,26 @@ register("elicitation_respond", {
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
   } catch (e) {
     return { content: [{ type: 'text', text: `Error elicitation_respond: ${e.message}` }], isError: true };
+  }
+});
+
+// Web Search Tool - Real-time web grounding for factual queries
+register("search_web", searchWebSchema, async (p, ex) => {
+  try {
+    const result = await searchWeb(p, ex, `req-${Date.now()}`);
+    return { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error search_web: ${e.message}` }], isError: true };
+  }
+});
+
+// URL Fetch Tool - Retrieve and parse web page content
+register("fetch_url", fetchUrlSchema, async (p, ex) => {
+  try {
+    const result = await fetchUrl(p, ex, `req-${Date.now()}`);
+    return { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error fetch_url: ${e.message}` }], isError: true };
   }
 });
 
@@ -1358,15 +1407,15 @@ register("elicitation_respond", {
     return res.status(403).json({ error: 'Forbidden: Auth failed' });
   };
  
-  console.error(`Starting MCP server with HTTP/SSE transport on port ${port}`); // Use error
+  logger.info('Starting MCP server with HTTP/SSE transport', { port });
   if (jwksUrl) {
-    console.error(`[${new Date().toISOString()}] OAuth2/JWT auth ENABLED (JWKS=${jwksUrl}, aud=${expectedAudience}).`);
+    logger.info('OAuth2/JWT auth enabled', { jwksUrl, audience: expectedAudience });
   } else if (serverApiKey) {
-    console.error(`[${new Date().toISOString()}] API key fallback ENABLED for HTTP transport.`);
+    logger.info('API key fallback enabled for HTTP transport');
   } else if (process.env.ALLOW_NO_API_KEY === 'true') {
-    console.error(`[${new Date().toISOString()}] SECURITY WARNING: Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true).`); // Use error, keep as warning level
+    logger.warn('Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true)');
   } else {
-    console.error(`[${new Date().toISOString()}] CRITICAL: SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail.`); // Keep error
+    logger.error('SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail');
   }
   
   // Streamable HTTP transport (preferred) guarded by feature flag
@@ -1384,7 +1433,7 @@ register("elicitation_respond", {
         await transport.handleRequest(req, res, req.body);
       });
     } catch (e) {
-      console.error('StreamableHTTP transport not available:', e.message);
+      logger.warn('StreamableHTTP transport not available', { error: e.message });
     }
   }
 
@@ -1392,7 +1441,7 @@ register("elicitation_respond", {
    // Endpoint for SSE - Apply authentication middleware
    app.get('/sse', authenticate, async (req, res) => {
      const connectionId = uuidv4(); // Generate a unique ID for this connection
-     console.error(`[${new Date().toISOString()}] New SSE connection established with ID: ${connectionId}`); // Use error
+     logger.debug('New SSE connection established', { connectionId });
 
      // Set headers for SSE
      res.writeHead(200, {
@@ -1407,9 +1456,9 @@ register("elicitation_respond", {
 
      try {
        await server.connect(transport); // Connect the server to this specific transport
-       console.error(`[${new Date().toISOString()}] MCP Server connected to SSE transport for connection ID: ${connectionId}`);
+       logger.debug('MCP Server connected to SSE transport', { connectionId });
      } catch (error) {
-       console.error(`[${new Date().toISOString()}] Error connecting MCP Server to SSE transport for ID ${connectionId}:`, error);
+       logger.error('Error connecting MCP Server to SSE transport', { connectionId, error });
        sseConnections.delete(connectionId); // Clean up on connection error
        if (!res.writableEnded) {
          res.end();
@@ -1419,7 +1468,7 @@ register("elicitation_respond", {
 
      // Handle client disconnect
      req.on('close', () => {
-       console.error(`[${new Date().toISOString()}] SSE connection closed for ID: ${connectionId}`);
+       logger.debug('SSE connection closed', { connectionId });
        sseConnections.delete(connectionId);
        if (lastSseTransport === transport) {
          lastSseTransport = null; // Clear if it was the last one
@@ -1457,12 +1506,106 @@ register("elicitation_respond", {
      req.on('close', () => { clearInterval(timer); });
    });
 
+   // Batch job events SSE - multiplexes multiple job streams
+   app.get('/jobs/batch/events', authenticate, async (req, res) => {
+     const idsParam = req.query.ids || '';
+     const jobIds = idsParam.split(',').map(s => s.trim()).filter(Boolean);
+
+     if (!jobIds.length) {
+       return res.status(400).json({ error: 'ids query parameter required (comma-separated job IDs)' });
+     }
+
+     res.writeHead(200, {
+       'Content-Type': 'text/event-stream',
+       'Cache-Control': 'no-cache',
+       'Connection': 'keep-alive'
+     });
+
+     const lastEventIds = new Map(); // jobId -> lastEventId
+     jobIds.forEach(id => lastEventIds.set(id, 0));
+
+     const completedJobs = new Set();
+     const jobResults = new Map();
+
+     const send = (type, data) => {
+       try {
+         res.write(`event: ${type}\n`);
+         res.write(`data: ${JSON.stringify(data)}\n\n`);
+       } catch(_) {}
+     };
+
+     send('open', { ok: true, jobIds, jobCount: jobIds.length });
+
+     const timer = setInterval(async () => {
+       try {
+         // Poll each job for events
+         for (const jobId of jobIds) {
+           if (completedJobs.has(jobId)) continue;
+
+           const lastId = lastEventIds.get(jobId) || 0;
+           const events = await dbClient.getJobEvents(jobId, lastId, 100);
+
+           for (const ev of events) {
+             lastEventIds.set(jobId, ev.id);
+             send(ev.event_type || 'message', { ...ev, jobId });
+           }
+
+           const j = await dbClient.getJobStatus(jobId);
+           if (j && ['succeeded', 'failed', 'canceled'].includes(j.status)) {
+             completedJobs.add(jobId);
+             let result = j.result;
+             if (typeof result === 'string') {
+               try { result = JSON.parse(result); } catch (_) {}
+             }
+             jobResults.set(jobId, { status: j.status, result, reportId: result?.report_id || result?.reportId });
+             send('job_complete', { jobId, status: j.status, reportId: result?.report_id || result?.reportId });
+           }
+         }
+
+         // Emit progress summary
+         const progress = {
+           total: jobIds.length,
+           completed: completedJobs.size,
+           pending: jobIds.length - completedJobs.size,
+           percent: Math.round((completedJobs.size / jobIds.length) * 100)
+         };
+         send('batch_progress', progress);
+
+         // Check if all jobs complete
+         if (completedJobs.size === jobIds.length) {
+           const results = jobIds.map(id => ({
+             jobId: id,
+             ...jobResults.get(id)
+           }));
+           const reportIds = results.filter(r => r.reportId).map(r => r.reportId);
+           send('batch_complete', {
+             jobCount: jobIds.length,
+             results,
+             reportIds,
+             allSucceeded: results.every(r => r.status === 'succeeded')
+           });
+           clearInterval(timer);
+           if (!res.writableEnded) res.end();
+         }
+       } catch (e) {
+         send('error', { message: e.message });
+       }
+     }, 500); // Faster polling for batch - 500ms
+
+     req.on('close', () => { clearInterval(timer); });
+   });
+
    // Simple HTTP job submission for testing and automation
    app.post('/jobs', authenticate, express.json(), async (req, res) => {
      try {
        const params = req.body || {};
-       const jobId = await dbClient.createJob('research', params);
-       await dbClient.appendJobEvent(jobId, 'submitted', { query: params.query || params.q || '' });
+       // Normalize params before storage to ensure query field exists
+       const normalized = normalizeParamsForTool('research', params);
+       if (!normalized.query || typeof normalized.query !== 'string' || normalized.query.trim() === '') {
+         return res.status(400).json({ error: 'query parameter is required' });
+       }
+       const jobId = await dbClient.createJob('research', normalized);
+       await dbClient.appendJobEvent(jobId, 'submitted', { query: normalized.query });
        res.json({ job_id: jobId });
      } catch (e) {
        res.status(500).json({ error: e.message });
@@ -1552,20 +1695,60 @@ register("elicitation_respond", {
      }
    });
 
-   // Server discovery endpoint for MCP clients (no auth required per MCP draft spec Nov 2025)
+   // Server discovery endpoint for MCP clients (SEP-1649 Server Cards)
+   // No auth required per MCP draft spec Nov 2025
    app.get('/.well-known/mcp-server', (req, res) => {
+     const { Domain, Role, ToolCategory, ToolRequirements, getToolsByCategory, getToolsByRole } = require('../utils/preflight');
+
+     // Build tool taxonomy from Agent Zero type system
+     const toolTaxonomy = {
+       domains: Object.values(Domain),
+       roles: Object.values(Role),
+       categories: Object.values(ToolCategory),
+       byCategory: {},
+       byRole: {}
+     };
+
+     // Populate by category
+     for (const cat of Object.values(ToolCategory)) {
+       toolTaxonomy.byCategory[cat] = getToolsByCategory(cat);
+     }
+
+     // Populate by role
+     for (const role of Object.values(Role)) {
+       toolTaxonomy.byRole[role] = getToolsByRole(role);
+     }
+
+     // Tool interface specifications
+     const toolInterfaces = Object.entries(ToolRequirements).reduce((acc, [name, spec]) => {
+       if (spec.inputs && spec.output) {
+         acc[name] = {
+           inputs: spec.inputs,
+           output: spec.output,
+           role: spec.role,
+           category: spec.category
+         };
+       }
+       return acc;
+     }, {});
+
      res.json({
-       name: config.server.name,
-       version: config.server.version,
-       description: 'OpenRouter MCP server for multi-agent deep research',
-       specification: '2025-06-18',
-       specificationDraft: '2025-11-25',
+       // SEP-1649 Server Card format
+       serverInfo: {
+         name: config.server.name,
+         version: config.server.version,
+         title: 'OpenRouter Agents MCP Server',
+         description: 'Multi-agent deep research with knowledge graph and session time-travel'
+       },
+       protocolVersion: '2025-06-18',
+       protocolDraft: '2025-11-25',
        capabilities: {
-         tools: {},
+         tools: { listChanged: true },
          prompts: { listChanged: true },
          resources: { subscribe: true, listChanged: true },
-         async: true, // Supports async operations via job system
-         streaming: true, // Supports SSE streaming
+         logging: {},
+         async: true,
+         streaming: true,
          authentication: ['jwt', 'bearer', 'optional']
        },
        transports: [
@@ -1594,6 +1777,14 @@ register("elicitation_respond", {
          discovery: '/.well-known/mcp-server',
          ui: '/ui'
        },
+       // Agent Zero Type System - enables composition validation
+       agentZero: {
+         version: '1.0.0',
+         description: 'Interface domain taxonomy for tool composition validation',
+         compositionRule: 'A @ B valid iff A.output ∈ B.inputs',
+         taxonomy: toolTaxonomy,
+         interfaces: toolInterfaces
+       },
        extensions: {
          'async-operations': {
            version: '1.0',
@@ -1614,6 +1805,21 @@ register("elicitation_respond", {
            version: '1.0',
            description: 'Multi-agent orchestration (planning → research → synthesis)',
            features: ['domain-aware-planning', 'ensemble-execution', 'streaming-synthesis']
+         },
+         'observation-loop': {
+           version: '1.0',
+           description: 'Agent Zero feedback loop for convergence tracking',
+           features: ['tool-observation', 'convergence-metrics', 'self-improvement']
+         },
+         'session-time-travel': {
+           version: '1.0',
+           description: 'Session management with undo/redo and branching',
+           features: ['undo', 'redo', 'fork', 'checkpoint', 'time-travel']
+         },
+         'knowledge-graph': {
+           version: '1.0',
+           description: 'Graph-based knowledge navigation',
+           features: ['traverse', 'path-finding', 'clustering', 'pagerank', 'patterns']
          }
        },
        contact: {
@@ -1728,41 +1934,55 @@ register("elicitation_respond", {
     if (connectionId) {
       const transport = sseConnections.get(connectionId);
       if (!transport) {
-        console.error(`[${new Date().toISOString()}] Received POST /messages for unknown connectionId: ${connectionId}`);
+        logger.warn('POST /messages for unknown connectionId', { connectionId });
         return res.status(404).json({ error: 'Unknown connectionId' });
       }
-      console.error(`[${new Date().toISOString()}] Routing POST /messages to connectionId: ${connectionId}`);
+      logger.debug('Routing POST /messages', { connectionId });
       return transport.handlePostMessage(req, res);
     }
 
     // Legacy behavior: fall back to last transport if no connectionId provided
     if (!lastSseTransport) {
-      console.error(`[${new Date().toISOString()}] Received POST /messages without connectionId and no active SSE transport found.`);
+      logger.warn('POST /messages without connectionId and no active SSE transport');
       return res.status(500).json({ error: 'No active SSE transport available' });
     }
-    console.error(`[${new Date().toISOString()}] Handling legacy POST /messages via last active SSE transport.`);
+    logger.debug('Handling legacy POST /messages via last active SSE transport');
     return lastSseTransport.handlePostMessage(req, res);
   });
 
    // Start server
    app.listen(port, () => {
-     console.error(`MCP server listening on port ${port}`); // Use error
+     logger.info('MCP server listening', { port });
    });
   } // Close the else block for HTTP setup
  };
 
- // Start the server
- setupTransports().catch(error => {
-   console.error('Failed to start MCP server:', error.message); // Keep error
-   process.exit(1);
- });
+ /**
+  * Job worker function - processes async research jobs
+  * Only starts if database is initialized
+  */
+ function startJobWorker() {
+   const initState = dbClient.getInitState ? dbClient.getInitState() : null;
+   if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
+     logger.warn('Job worker not started: database not initialized', { initState });
+     return;
+   }
 
- // Start in-process job worker
- (async function startJobWorker(){
+   logger.info('Starting job worker', { concurrency: require('../../config').jobs.concurrency });
+
    const { concurrency, heartbeatMs } = require('../../config').jobs;
    const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
      while (true) {
        try {
+         // Pre-flight check before claiming work
+         const { quickCheck } = require('../utils/preflight');
+         const health = quickCheck(dbClient);
+         if (!health.ready) {
+           logger.warn('JobWorker unhealthy', { issues: health.issues });
+           await new Promise(r => setTimeout(r, 5000));
+           continue;
+         }
+
          const job = await dbClient.claimNextJob();
          if (!job) { await new Promise(r=>setTimeout(r, 750)); continue; }
          const jobId = job.id;
@@ -1772,6 +1992,11 @@ register("elicitation_respond", {
            if (job.type === 'research') {
              // Reuse conductResearch flow but stream events via job events
              const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+             // Validate query parameter before execution - fail fast with clear error
+             if (!params?.query || typeof params.query !== 'string' || params.query.trim() === '') {
+               logger.error('Job missing query parameter', { jobId, params: JSON.stringify(params).substring(0, 200) });
+               throw new Error(`Job ${jobId} missing required query parameter`);
+             }
              // Minimal bridge: send progress chunks into job events
              const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
              const resultText = await require('./tools').conductResearch(params, exchange, jobId);
@@ -1803,8 +2028,30 @@ register("elicitation_respond", {
             } catch (_) {}
            }
          } catch (e) {
-           await dbClient.setJobStatus(jobId, 'failed', { result: { error: e.message }, finished: true });
-           await dbClient.appendJobEvent(jobId, 'error', { message: e.message });
+           // Wrap error with full context for detailed diagnosis
+           const { wrapError, formatErrorForLog } = require('../utils/errors');
+           const wrapped = wrapError(e, `Job ${jobId} failed`, { requestId: jobId });
+
+           logger.error('Job failed', formatErrorForLog(wrapped, jobId));
+
+           await dbClient.setJobStatus(jobId, 'failed', {
+             result: {
+               error: wrapped.message,
+               category: wrapped.category,
+               code: wrapped.code,
+               isRetryable: wrapped.isRetryable,
+               originalError: e.message,
+               stack: e.stack?.split('\n').slice(0, 5).join('\n')
+             },
+             finished: true
+           });
+           await dbClient.appendJobEvent(jobId, 'error', {
+             message: wrapped.message,
+             category: wrapped.category,
+             code: wrapped.code,
+             isRetryable: wrapped.isRetryable,
+             originalError: e.message
+           });
           try {
             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
             if (params?.notify) {
@@ -1818,12 +2065,93 @@ register("elicitation_respond", {
          } finally {
            clearInterval(hb);
          }
-       } catch (_) {
-         await new Promise(r=>setTimeout(r, 1000));
+       } catch (loopError) {
+         // Log worker loop errors with full context instead of swallowing
+         const { formatErrorForLog } = require('../utils/errors');
+         logger.error('JobWorker loop error', formatErrorForLog(loopError));
+
+         // Distinguish transient vs fatal errors for backoff
+         const isFatal = loopError.message?.includes('database') ||
+                        loopError.message?.includes('connection') ||
+                        loopError.message?.includes('ECONNREFUSED');
+         await new Promise(r => setTimeout(r, isFatal ? 5000 : 1000));
        }
      }
    })());
-   await Promise.allSettled(runners);
- })();
+   Promise.allSettled(runners).catch(err => {
+     logger.error('Job worker runners failed', { error: err.message });
+   });
+ }
+
+ /**
+  * Main server startup sequence
+  * Ensures proper initialization order: DB -> Embedder -> Transports -> Job Worker
+  */
+ async function startServer() {
+   const startupConfig = require('../../config');
+   const startupTimeoutMs = startupConfig.server?.startupTimeoutMs || 30000;
+   const allowStartWithoutDb = startupConfig.server?.allowStartWithoutDb === true;
+
+   logger.info('Phase 1/4: Initializing database...');
+   try {
+     // Wait for database initialization with timeout
+     if (typeof dbClient.waitForInit === 'function') {
+       await dbClient.waitForInit(startupTimeoutMs);
+       logger.info('Database initialized successfully', { state: dbClient.getInitState?.() });
+     } else {
+       // Legacy fallback - just check if initialized
+       const isInit = dbClient.isDbInitialized?.();
+       if (!isInit && !allowStartWithoutDb) {
+         throw new Error('Database not initialized and ALLOW_START_WITHOUT_DB is not set');
+       }
+       logger.warn('Using legacy DB initialization check', { initialized: isInit });
+     }
+   } catch (dbError) {
+     if (allowStartWithoutDb) {
+       logger.warn('Database initialization failed, continuing in degraded mode', {
+         error: dbError.message,
+         allowStartWithoutDb: true
+       });
+     } else {
+       logger.error('FATAL: Database initialization failed', { error: dbError.message });
+       throw dbError;
+     }
+   }
+
+   logger.info('Phase 2/4: Initializing embedder...');
+   try {
+     // Initialize embedder (non-blocking - vector search is optional)
+     if (typeof dbClient.waitForEmbedder === 'function') {
+       await dbClient.waitForEmbedder(10000).catch(e => {
+         logger.warn('Embedder init failed (vector search degraded)', { error: e.message });
+       });
+     } else {
+       // Legacy check
+       const embedderReady = dbClient.isEmbedderReady?.();
+       logger.info('Embedder status', { ready: embedderReady });
+     }
+   } catch (embedError) {
+     logger.warn('Embedder initialization warning', { error: embedError.message });
+     // Continue - embedder is optional
+   }
+
+   logger.info('Phase 3/4: Starting transports...');
+   await setupTransports();
+   logger.info('Transports started successfully');
+
+   logger.info('Phase 4/4: Starting job worker...');
+   startJobWorker();
+
+   logger.info('Server startup complete', {
+     dbState: dbClient.getInitState?.() || (dbClient.isDbInitialized?.() ? 'INITIALIZED' : 'UNKNOWN'),
+     embedderReady: dbClient.isEmbedderReady?.() || false
+   });
+ }
+
+ // Single entry point with proper error handling
+ startServer().catch(error => {
+   logger.error('FATAL: Server startup failed', { error: error.message, stack: error.stack });
+   process.exit(1);
+ });
 
 } // Close else block for --setup-claude check

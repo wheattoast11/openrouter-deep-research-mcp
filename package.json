@@ -1,6 +1,6 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "OpenRouter MCP server for research agents",
   "main": "src/server/mcpServer.js",
   "bin": {

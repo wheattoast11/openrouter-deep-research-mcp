@@ -70,5 +70,8 @@
 - Notable bug fix (current code): ensured `onEvent` is threaded to `_executeSingleResearch` to prevent undefined reference.
 - SDKs & deps: MCP SDK 1.21.1 (upgraded from 1.17.4); Xenova transformers v2.17.x; express-rate-limit v7.4.1.
 - Production hardening (v1.6.0): Rate limiting middleware, request size limits, full MCP 2025-06-18 spec compliance.
-- Timestamp: Updated on 2025-11-12.
+- Claude Code Integration (v1.7.0): One-liner setup, slash commands, adaptive token limits, tool chaining.
+- MCP Apps & Knowledge Graph (v1.8.0): UI resources (SEP-1865), graph tools, session time-travel, @terminals-tech packages.
+- Error Visibility (v1.8.0): Structured error handling, pre-flight checks, cause chain preservation, mock embedder detection.
+- Timestamp: Updated on 2025-12-05.
 

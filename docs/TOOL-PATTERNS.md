@@ -2,7 +2,7 @@
 
 This document captures learnings, patterns, and common issues when using the MCP server tools.
 
-## Known Issues & Fixes (v1.6.0)
+## Known Issues & Fixes
 
 ### 1. `sample_message` - Fixed in commit
 **Issue**: Calling `samplingHandler.handleSampling()` but method is `createMessage()`

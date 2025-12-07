@@ -3,6 +3,9 @@ const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import parser
 const modelCatalog = require('../utils/modelCatalog'); // Model-aware token limits
+const logger = require('../utils/logger').child('ContextAgent');
+const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
+const citationValidator = require('../utils/citationValidator'); // Citation validation
 
 /**
  * Calculate adaptive max_tokens based on model capabilities and content size
@@ -33,7 +36,7 @@ async function calculateAdaptiveMaxTokens(model, researchResults, options = {}) 
   const maxAllowed = Math.floor(modelMax * 0.9);
   const result = Math.min(Math.max(tokens, tokenCfg.min), maxAllowed);
 
-  console.error(`[contextAgent] Adaptive tokens: calculated=${tokens}, modelMax=${modelMax}, final=${result}`);
+  logger.debug('Adaptive tokens calculated', { calculated: tokens, modelMax, final: result });
   return result;
 }
 
@@ -80,9 +83,15 @@ class ContextAgent {
       inputEmbeddings = null // Add inputEmbeddings
     } = options;
 
-    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Starting contextualization for query "${originalQuery.substring(0, 50)}..." (Images: ${images ? images.length : 0}, Docs: ${documents ? documents.length : 0}, Structured: ${structuredData ? structuredData.length : 0})`);
-    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Options: audienceLevel=${audienceLevel}, outputFormat=${outputFormat}, includeSources=${includeSources}, maxLength=${maxLength}`);
-    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Received ${researchResults.length} total research results from ensemble runs for ${allAgentQueries.length} planned sub-queries.`);
+    logger.info('Starting contextualization', {
+      requestId,
+      query: originalQuery.substring(0, 50),
+      images: images?.length || 0,
+      docs: documents?.length || 0,
+      structured: structuredData?.length || 0
+    });
+    logger.debug('Contextualization options', { requestId, audienceLevel, outputFormat, includeSources, maxLength });
+    logger.debug('Research results received', { requestId, resultCount: researchResults.length, subQueries: allAgentQueries.length });
 
     // Create a map of planned queries by ID for easy lookup
     const plannedQueriesMap = new Map(allAgentQueries.map(q => [q.id.toString(), q.query]));
@@ -149,6 +158,29 @@ ${resultsText}
 
     subQuerySummary += "\n"; // Add newline after summary
 
+    // Detect ensemble contradictions before synthesis
+    let contradictionWarning = '';
+    try {
+      const allResults = researchResults.filter(r => !r.error && r.result);
+      if (allResults.length > 1) {
+        // Use the factCheckAgent to detect contradictions
+        const contradictions = require('./factCheckAgent').detectEnsembleContradictions(
+          allResults.map(r => ({ model: r.model, content: r.result }))
+        );
+        if (contradictions.length > 0) {
+          contradictionWarning = `\n\nIMPORTANT - DETECTED CONTRADICTIONS BETWEEN MODELS:\n`;
+          contradictionWarning += `The following ${contradictions.length} contradiction(s) were detected between ensemble outputs. Mark these claims as LOW CONFIDENCE and do NOT present them as consensus:\n`;
+          for (const c of contradictions.slice(0, 5)) {
+            contradictionWarning += `- ${c.model1} says: "${c.claim1?.substring(0, 60)}..." BUT ${c.model2} says: "${c.claim2?.substring(0, 60)}..."\n`;
+          }
+          contradictionWarning += '\n';
+          logger.info('Ensemble contradictions detected', { requestId, count: contradictions.length });
+        }
+      }
+    } catch (e) {
+      // Ignore errors in contradiction detection
+      logger.debug('Contradiction detection skipped', { error: e.message });
+    }
 
     let outputInstructions = '';
     switch(outputFormat) {
@@ -165,6 +197,10 @@ ${resultsText}
     }
 
     const compact = require('../../config').prompts?.compact !== false;
+
+    // Inject verified local knowledge to prevent hallucinations
+    const localKnowledgeContext = localKnowledge.getKnowledgeContext(originalQuery);
+
     let systemPrompt = compact ? `
 Synthesize the ensemble results for the ORIGINAL QUERY with strict evidence:
 - Compare per-sub-query outputs: consensus, contradictions, unique info.
@@ -172,6 +208,7 @@ Synthesize the ensemble results for the ORIGINAL QUERY with strict evidence:
 - Integrate successful/partial sub-queries into one coherent answer.
 - Cite with explicit URLs (format: [Source: Title — https://...]). Label missing URLs as [Unverified].
 - Provide confidence for major claims.
+${localKnowledgeContext}
 ` : `
  You are an elite research synthesis specialist responsible for integrating and critically evaluating findings from multiple research agents, potentially using different models for the same sub-query.
  
@@ -186,6 +223,7 @@ Synthesize the ensemble results for the ORIGINAL QUERY with strict evidence:
  4. **Insight Generation:** Identify overarching themes, key insights, patterns, and connections that emerge from the integrated analysis of available results.
  5. Highlight significant gaps, inconsistencies, or limitations in the overall research, considering both the individual results, the ensemble comparison, and any failed sub-queries. Pay attention to confidence levels reported by individual agents.
  6. **Citations & Evidence:** For each key claim, include a brief inline citation with an explicit URL using the format [Source: Title — https://example.com]. If a claim lacks a URL, explicitly label it [Unverified] and down-weight it in conclusions.
+ ${localKnowledgeContext}
  `;
     
     // Prepare text document context for the user prompt
@@ -219,11 +257,12 @@ Synthesize the ensemble results for the ORIGINAL QUERY with strict evidence:
 ORIGINAL RESEARCH QUERY: ${originalQuery}
 ${textDocumentContext}
 ${structuredDataContext}
-${embeddingContext} 
+${embeddingContext}
+${contradictionWarning}
 ${subQuerySummary}ENSEMBLE RESEARCH RESULTS (Grouped by Sub-Query, including status and failures):
 ${formattedResults}
 
-Please perform a critical synthesis of these findings, considering the original query, the status of each sub-query (SUCCESS/PARTIAL/FAILED), and any provided documents, structured data, or their semantic embeddings. For each sub-query, compare the ensemble results (noting failures), then integrate the synthesized findings from available sub-queries into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, failed sub-queries, and overall confidence based on the available information.
+Please perform a critical synthesis of these findings, considering the original query, the status of each sub-query (SUCCESS/PARTIAL/FAILED), and any provided documents, structured data, or their semantic embeddings. For each sub-query, compare the ensemble results (noting failures), then integrate the synthesized findings from available sub-queries into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, failed sub-queries, and overall confidence based on the available information.${contradictionWarning ? ' Pay special attention to the detected contradictions above and mark conflicting claims as LOW CONFIDENCE.' : ''}
 `;
 
     // Construct user message content for synthesis, including images if provided
@@ -237,7 +276,7 @@ Please perform a critical synthesis of these findings, considering the original 
           image_url: { url: img.url, detail: img.detail }
         });
        });
-       console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Including ${images.length} image(s) in synthesis request.`);
+       logger.debug('Including images in synthesis', { requestId, count: images.length });
        // Adjust system prompt if images are present
        systemPrompt += "\n\nSynthesize the research results in the context of the provided image(s) as well.";
     }
@@ -254,7 +293,7 @@ Please perform a critical synthesis of these findings, considering the original 
 
 
     const startTime = Date.now();
-    console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Sending synthesis stream request to model ${this.model}...`);
+    logger.debug('Sending synthesis stream request', { requestId, model: this.model });
     let fullContent = '';
     let streamError = null;
 
@@ -277,12 +316,12 @@ Please perform a critical synthesis of these findings, considering the original 
           break; // Stream finished
         }
         if (chunk.usage) {
-          console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Stream usage:`, JSON.stringify(chunk.usage));
+          logger.debug('Stream usage', { requestId, usage: chunk.usage });
           yield { usage: chunk.usage };
         }
         if (chunk.error) {
           streamError = chunk.error;
-          console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Error received in stream:`, streamError);
+          logger.error('Error received in stream', { requestId, error: streamError });
           yield { error: `Stream error during synthesis: ${streamError.message || 'Unknown stream error'}` };
           break; // Stop processing on stream error
         }
@@ -294,24 +333,24 @@ Please perform a critical synthesis of these findings, considering the original 
 
       const duration = Date.now() - startTime;
       if (!streamError) {
-        console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Synthesis stream completed successfully in ${duration}ms.`);
+        logger.info('Synthesis stream completed', { requestId, durationMs: duration });
 
         // Check for truncation and warn if detected
         if (detectTruncation(fullContent)) {
-          console.warn(`[${new Date().toISOString()}] [${requestId}] ContextAgent: WARNING - Possible truncation detected in synthesis output`);
+          logger.warn('Possible truncation detected in synthesis output', { requestId });
           yield {
             warning: 'Response may have been truncated by token limit. Consider increasing SYNTHESIS_MAX_TOKENS or using a model with larger output capacity.',
             truncationDetected: true
           };
         }
       } else {
-         console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Synthesis stream finished with error after ${duration}ms.`);
+         logger.error('Synthesis stream finished with error', { requestId, durationMs: duration });
       }
-      
+
     } catch (error) {
       // Catch errors from initiating the stream or other unexpected issues
       const duration = Date.now() - startTime;
-      console.error(`[${new Date().toISOString()}] [${requestId}] ContextAgent: Unhandled error during synthesis stream after ${duration}ms. Query: "${originalQuery.substring(0, 50)}...". Model: ${this.model}. Error:`, error);
+      logger.error('Unhandled error during synthesis stream', { requestId, durationMs: duration, query: originalQuery.substring(0, 50), model: this.model, error });
       yield { error: `[${requestId}] ContextAgent failed to synthesize results stream for query "${originalQuery.substring(0, 50)}...": ${error.message}` };
     }
   }

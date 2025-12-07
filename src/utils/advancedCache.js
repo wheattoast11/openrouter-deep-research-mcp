@@ -58,8 +58,16 @@ class AdvancedCache {
         const reportId = String(bestMatch.id || bestMatch._id || '');
         const content = bestMatch.final_report || bestMatch.finalReport || '';
         const originalQuery = bestMatch.original_query || bestMatch.originalQuery || '';
-        console.error(`[${new Date().toISOString()}] AdvancedCache: Semantic cache hit (similarity: ${sim?.toFixed ? sim.toFixed(3) : sim}) for query "${query.substring(0, 50)}..."`);
-        
+
+        // CRITICAL: Validate similarity is actually high enough before returning cached result
+        // This prevents returning unrelated cached content
+        if (sim < this.similarityThreshold) {
+          console.error(`[${new Date().toISOString()}] AdvancedCache: Rejecting low-similarity match (${sim?.toFixed ? sim.toFixed(3) : sim} < ${this.similarityThreshold}). Query: "${query.substring(0, 50)}..." Cached: "${originalQuery.substring(0, 50)}..."`);
+          return null; // Force fresh research
+        }
+
+        console.error(`[${new Date().toISOString()}] AdvancedCache: Semantic cache hit (similarity: ${sim?.toFixed ? sim.toFixed(3) : sim}) for query "${query.substring(0, 50)}..." matched cached query "${originalQuery.substring(0, 40)}..."`);
+
         // Cache the semantic match for future exact retrieval
         this.resultCache.set(exactKey, {
           result: content,
@@ -68,12 +76,12 @@ class AdvancedCache {
           originalQuery: originalQuery,
           timestamp: new Date().toISOString()
         });
-        
-        return { 
+
+        return {
           result: content,
           reportId: reportId,
           cacheType: 'semantic',
-          similarity: sim 
+          similarity: sim
         };
       }
 

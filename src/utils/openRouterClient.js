@@ -25,6 +25,12 @@ class OpenRouterClient {
   }
 
   async chatCompletion(model, messages, options = {}) {
+    // Validate API key before making request
+    if (!this.apiKey) {
+      const { ConfigurationError } = require('./errors');
+      throw new ConfigurationError('OpenRouter API key not configured', 'OPENROUTER_API_KEY');
+    }
+
     try {
       const minMax = Number(config.models?.minMaxTokens || 0);
       const merged = { ...options };
@@ -46,6 +52,12 @@ class OpenRouterClient {
 
   // New method for streaming chat completions (robust SSE parsing)
   async *streamChatCompletion(model, messages, options = {}) {
+    // Validate API key before making request
+    if (!this.apiKey) {
+      const { ConfigurationError } = require('./errors');
+      throw new ConfigurationError('OpenRouter API key not configured', 'OPENROUTER_API_KEY');
+    }
+
     const url = `${this.baseUrl}/chat/completions`;
     const minMax = Number(config.models?.minMaxTokens || 0);
     const merged = { ...options };
@@ -128,7 +140,8 @@ class OpenRouterClient {
       };
       this._enqueue = push;
 
-      (async () => {
+      // Stream processing with proper error handling
+      const streamPromise = (async () => {
         try {
           for await (const chunk of response.body) {
             const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
@@ -136,13 +149,33 @@ class OpenRouterClient {
             if (isDone) break;
           }
         } catch (streamErr) {
-          push({ error: { message: `Stream failed: ${streamErr.message}` } });
+          // Enhanced error payload with classification
+          const errorPayload = {
+            error: {
+              message: `Stream failed: ${streamErr.message}`,
+              code: streamErr.code || 'STREAM_ERROR',
+              category: ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ENETUNREACH'].includes(streamErr.code) ? 'NETWORK' : 'UNKNOWN',
+              isRetryable: ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(streamErr.code),
+              originalError: {
+                name: streamErr.name,
+                message: streamErr.message,
+                code: streamErr.code
+              }
+            }
+          };
+          console.error(`[${new Date().toISOString()}] OpenRouterClient: Stream error:`, JSON.stringify(errorPayload));
+          push(errorPayload);
         } finally {
           // emit final usage if not already emitted
           if (finalUsage) push({ usage: finalUsage });
           push({ done: true });
         }
       })();
+
+      // Handle unhandled promise rejections from stream processing
+      streamPromise.catch(err => {
+        console.error(`[${new Date().toISOString()}] OpenRouterClient: Unhandled stream rejection:`, err.message, err.stack?.split('\n').slice(0, 3).join('\n'));
+      });
 
       // Drain queue as async generator output
       while (true) {

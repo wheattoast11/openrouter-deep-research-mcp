@@ -1,6 +1,8 @@
 // src/agents/planningAgent.js
 const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
+const logger = require('../utils/logger').child('PlanningAgent');
+const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
 
 // Define DOMAINS globally or import if moved to utils
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
@@ -47,14 +49,14 @@ class PlanningAgent {
       });
       let domain = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
       if (DOMAINS.includes(domain)) {
-        console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Classified overall query domain for "${query.substring(0, 50)}..." as: ${domain}`);
+        logger.debug('Classified query domain', { requestId, query: query.substring(0, 50), domain });
         return domain;
       } else {
-        console.warn(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Domain classification model returned invalid domain "${domain}" for overall query "${query.substring(0, 50)}...". Defaulting to 'general'.`);
+        logger.warn('Invalid domain classification, defaulting to general', { requestId, query: query.substring(0, 50), invalidDomain: domain });
         return 'general';
       }
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Error classifying overall query domain for "${query.substring(0, 50)}...". Defaulting to 'general'. Error:`, error);
+      logger.error('Error classifying query domain', { requestId, query: query.substring(0, 50), error });
       return 'general';
     }
   }
@@ -106,16 +108,16 @@ Refinement Guidelines:
 
     // Add text document content
     if (documents && documents.length > 0) {
-       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Including ${documents.length} text document(s) in planning request.`);
+       logger.debug('Including text documents in planning', { requestId, count: documents.length });
        documents.forEach(doc => {
           const truncatedContent = doc.content.length > 2000 ? doc.content.substring(0, 2000) + '...' : doc.content;
           userMessageContent.push({ type: 'text', text: `\n\n--- Text Document: ${doc.name} ---\n${truncatedContent}\n--- End Document ---` });
        });
     }
-    
+
     // Add structured data content
     if (structuredData && structuredData.length > 0) {
-       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Including ${structuredData.length} structured data item(s) in planning request.`);
+       logger.debug('Including structured data in planning', { requestId, count: structuredData.length });
        structuredData.forEach(data => {
           const truncatedContent = data.content.length > 2000 ? data.content.substring(0, 2000) + '...' : data.content;
           userMessageContent.push({ type: 'text', text: `\n\n--- Structured Data (${data.type}): ${data.name} ---\n${truncatedContent}\n--- End Data ---` });
@@ -130,7 +132,7 @@ Refinement Guidelines:
           image_url: { url: img.url, detail: img.detail }
          });
        });
-       console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Including ${images.length} image(s) in planning request.`);
+       logger.debug('Including images in planning', { requestId, count: images.length });
     }
 
     const messages = [
@@ -139,7 +141,7 @@ Refinement Guidelines:
     ];
 
     const requestType = previousResults ? "Refinement" : "Initial Plan";
-    console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Requesting ${requestType} for query "${query.substring(0, 50)}..."`);
+    logger.info('Requesting research plan', { requestId, type: requestType, query: query.substring(0, 50) });
 
     try {
       // Try primary planning model, then fall back through candidates
@@ -163,12 +165,12 @@ Refinement Guidelines:
       if (!response) throw lastErr || new Error('No planning model succeeded');
 
       const planResult = response.choices[0].message.content;
-      console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Successfully generated ${requestType}. Result: ${planResult.substring(0, 100)}...`);
+      logger.info('Successfully generated research plan', { requestId, type: requestType, resultPreview: planResult.substring(0, 100) });
       this.recordSuccess();
       return planResult;
 
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] [${requestId}] PlanningAgent: Error generating ${requestType} for query "${query.substring(0, 50)}...". Model: ${this.model}. Error:`, error);
+      logger.error('Error generating research plan', { requestId, type: requestType, query: query.substring(0, 50), model: this.model, error });
       this.recordFailure();
       throw new Error(`[${requestId}] PlanningAgent failed to generate ${requestType} for query "${query.substring(0, 50)}...": ${error.message}`);
     }
@@ -177,13 +179,28 @@ Refinement Guidelines:
   // Method to get the appropriate initial planning prompt based on domain, past reports, documents, structured data, and input embeddings
   getInitialPlanningPrompt(domain, query, pastReports = [], documents = [], structuredData = [], inputEmbeddings = {}, clientContext = null) {
     let knowledgeBaseContext = '';
-    if (pastReports && pastReports.length > 0) {
+
+    // Filter past reports by similarity score to prevent contamination from low-relevance matches
+    // Raised from 0.70 to 0.80 to prevent cache contamination from marginally-related reports
+    const MIN_SIMILARITY_FOR_CONTEXT = 0.80;
+    const relevantReports = (pastReports || []).filter(r => {
+      const score = r.similarityScore ?? 0;
+      if (score < MIN_SIMILARITY_FOR_CONTEXT) {
+        console.error(`[PlanningAgent] Excluding low-similarity report: "${r.query?.substring(0, 40)}..." (score: ${score.toFixed(3)} < ${MIN_SIMILARITY_FOR_CONTEXT})`);
+        return false;
+      }
+      return true;
+    });
+
+    if (relevantReports.length > 0) {
       knowledgeBaseContext = `
 Relevant Information from Past Research (note the date - use this to avoid redundant questions and build upon existing knowledge, considering its recency):
 ---
-${pastReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateString()} (Similarity: ${r.similarityScore.toFixed(2)})\nPast Query: ${r.query}\nSummary Snippet:\n${r.summary}`).join('\n\n')}
+${relevantReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateString()} (Similarity: ${r.similarityScore.toFixed(2)})\nPast Query: ${r.query}\nSummary Snippet:\n${r.summary}`).join('\n\n')}
 ---
 `;
+    } else if (pastReports && pastReports.length > 0) {
+      console.error(`[PlanningAgent] All ${pastReports.length} past reports filtered out due to low similarity scores`);
     }
 
     let clientContextText = '';
@@ -207,9 +224,12 @@ ${pastReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateString()
        documentContextInstruction += `Ensure your research plan considers and potentially analyzes the content and semantic meaning of these provided data sources in relation to the main query.`;
     }
 
+    // Inject verified local knowledge to prevent hallucinations about system capabilities
+    const localKnowledgeContext = localKnowledge.getKnowledgeContext(query);
 
     let basePrompt = `
  You are a research planning agent specialized in breaking down complex queries into well-structured components. The primary domain of this query is classified as: ${domain}.
+ ${localKnowledgeContext}
  ${knowledgeBaseContext}
  ${clientContextText}
  ${documentContextInstruction}

@@ -167,9 +167,120 @@ async function main() {
     log('  /mcp-search         - Search knowledge base', COLORS.dim);
     log('  /mcp-query          - Execute SQL query\n', COLORS.dim);
 
+    // First Research wizard
+    await runFirstResearchWizard();
+
   } catch (err) {
     log(`\nError: ${err.message}`, COLORS.red);
     process.exit(1);
+  }
+}
+
+/**
+ * First Research Wizard - helps new users run their first query
+ */
+async function runFirstResearchWizard() {
+  log('='.repeat(55), COLORS.cyan);
+  log('  First Research Wizard', COLORS.bright);
+  log('='.repeat(55) + '\n', COLORS.cyan);
+
+  // Check if API key is set
+  if (!process.env.OPENROUTER_API_KEY) {
+    log('Note: OPENROUTER_API_KEY not set in current shell.', COLORS.yellow);
+    log('You can still complete setup, but research requires the key.\n', COLORS.dim);
+  }
+
+  const tryFirst = await prompt('Would you like to run a test research query? [y/N]: ');
+
+  if (tryFirst.toLowerCase() !== 'y') {
+    log('\nSetup complete! Run /mcp-status in Claude Code to verify.\n', COLORS.green);
+    return;
+  }
+
+  // Example queries
+  log('\nExample queries:', COLORS.bright);
+  log('  1. What is the MCP (Model Context Protocol)?', COLORS.dim);
+  log('  2. Latest developments in AI agents', COLORS.dim);
+  log('  3. Best practices for prompt engineering', COLORS.dim);
+  log('  4. Custom query\n', COLORS.dim);
+
+  const queryChoice = await prompt('Select [1-4]: ');
+
+  const queries = {
+    '1': 'What is the MCP (Model Context Protocol) and how does it work?',
+    '2': 'What are the latest developments in AI agents and multi-agent systems?',
+    '3': 'What are best practices for prompt engineering in 2025?'
+  };
+
+  let query;
+  if (queryChoice === '4') {
+    query = await prompt('Enter your query: ');
+    if (!query.trim()) {
+      log('\nNo query entered. Setup complete!', COLORS.yellow);
+      return;
+    }
+  } else {
+    query = queries[queryChoice] || queries['1'];
+  }
+
+  log(`\nRunning research: "${query}"`, COLORS.cyan);
+  log('This may take 30-60 seconds...\n', COLORS.dim);
+
+  // Run the research using the ping tool first to verify connection
+  try {
+    const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+    const tools = require('../src/server/tools');
+    const dbClient = require('../src/utils/dbClient');
+
+    // Initialize database
+    log('Initializing database...', COLORS.dim);
+    await dbClient.init();
+
+    // Run a quick ping
+    log('Checking server connection...', COLORS.dim);
+    const pingResult = await tools.pingTool({});
+    if (pingResult) {
+      log('[OK] Server responding', COLORS.green);
+    }
+
+    // Check if API key exists for research
+    if (!process.env.OPENROUTER_API_KEY) {
+      log('\n[!] Skipping research - OPENROUTER_API_KEY not set', COLORS.yellow);
+      log('    Set the key and try: /mcp-research "' + query.substring(0, 40) + '..."\n', COLORS.dim);
+      return;
+    }
+
+    // Run quick research
+    log('Running research...', COLORS.dim);
+    const result = await tools.conductResearch({
+      query,
+      costPreference: 'low',
+      outputFormat: 'bullet_points'
+    });
+
+    if (result && result.content && result.content[0]) {
+      const text = result.content[0].text || JSON.stringify(result.content[0]);
+      log('\n' + '='.repeat(55), COLORS.green);
+      log('  Research Complete!', COLORS.bright);
+      log('='.repeat(55) + '\n', COLORS.green);
+
+      // Show abbreviated result
+      const lines = text.split('\n').slice(0, 15);
+      for (const line of lines) {
+        log(line, COLORS.dim);
+      }
+      if (text.split('\n').length > 15) {
+        log('\n... (truncated, see full report in research_outputs/)\n', COLORS.dim);
+      }
+    }
+
+    log('\nFirst research successful! Your server is ready.', COLORS.green);
+    log('Use /mcp-research in Claude Code for more queries.\n', COLORS.cyan);
+
+  } catch (err) {
+    log(`\nResearch test failed: ${err.message}`, COLORS.yellow);
+    log('This is OK - you can still use /mcp-research in Claude Code.', COLORS.dim);
+    log('Make sure OPENROUTER_API_KEY is set in your environment.\n', COLORS.dim);
   }
 }
 

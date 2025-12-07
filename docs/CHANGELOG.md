@@ -1,5 +1,127 @@
 # Changelog
 
+## v1.8.1 — 2025-12-06
+
+### Core Abstractions (Convergence Plan v2.0)
+- **Signal Protocol:** Unified message type for inter-agent communication
+  - `Signal` class with confidence scoring and source attribution
+  - `SignalBus` for event-driven signal routing
+  - `ConsensusCalculator` for multi-model consensus
+  - Crystallization pattern detection for understanding analysis
+- **Parameter Normalization:** Single declarative alias system
+  - Global aliases (q→query, k→limit, cost→costPreference)
+  - Tool-specific aliases (job_id→id, reportId→id)
+  - Replaces 10+ scattered normalizer functions
+- **Schema Registry:** Centralized Zod schemas with composable building blocks
+  - Domain-organized schemas (Research, KB, Job, Graph, Session, Util, Web)
+  - `validate()` and `safeValidate()` for consistent validation
+- **RoleShift Protocol:** Bidirectional communication
+  - Server can request client actions via MCP sampling
+  - User clarification via MCP elicitation
+  - Request tracking with timeout handling
+
+### Consolidated Handlers
+- New `src/server/handlers/` directory with domain-organized handlers
+  - `util.js` - ping, date_time, calc, list_tools
+  - `job.js` - job_status, cancel_job, task_*
+  - `session.js` - undo, redo, fork, time_travel, checkpoint
+  - `graph.js` - traverse, path, clusters, pagerank, patterns, stats
+  - `kb.js` - search, query, retrieve, get_report, history
+- Backwards-compatible with existing tools.js
+
+### Handler Integration (Phase F)
+- **Feature-flagged routing:** `CORE_HANDLERS_ENABLED=true` routes 28 tools through handlers/
+- **wrapWithHandler():** Unified wrapper function for handler → legacy fallback
+- **Zero behavioral change:** When handlers disabled, all tools use legacy tools.js implementations
+- **Tools integrated:**
+  - Utility: ping, date_time, calc, list_tools, search_tools
+  - Job: job_status, cancel_job, task_get, task_result, task_list, task_cancel
+  - Session: undo, redo, fork_session, time_travel, session_state, checkpoint
+  - Graph: graph_traverse, graph_path, graph_clusters, graph_pagerank, graph_patterns, graph_stats
+  - KB: search, query, retrieve, get_report, history
+- **Legacy-only tools (unchanged):** research, agent, research_follow_up, batch_research, sample_message, elicitation_respond, search_web, fetch_url, get_server_status
+- **Bug fix:** Removed duplicate `searchTool()` in tools.js
+
+### Codebase Cleanup
+- Removed 5 Windows .bat files (unused)
+- Removed old archive openrouter-agents-1.2.0.tgz
+- Removed 6 stale documentation files
+- Removed backups/ directory (4-month old)
+- Removed empty researchAgentDB/ directory
+
+### Private Experiments Integration
+- Experiments now use core Signal protocol
+- Neuralese externalization integrated with extractCrystallization
+- Multi-model consensus uses core ConsensusCalculator
+- Fast-cycle orchestrator imports SignalBus
+
+### Documentation
+- Clarified MCP spec versions (2025-06-18 stable, 2025-11-25 draft)
+- Added Core Abstractions section to CLAUDE.md
+- Added MCP Compliance Notes table
+- Environment variables for core features documented
+
+---
+
+## v1.8.0 — 2025-12-05
+
+### MCP Apps & Knowledge Graph (SEP-1865)
+- **UI Resources:** Server now declares `ui://` resources for autonomous UI surfacing
+  - `ui://research/viewer` - Interactive report viewer with JSON-RPC bridge
+  - `ui://knowledge/graph` - Force-directed graph explorer
+  - `ui://timeline/session` - Session timeline with undo/redo controls
+- **Knowledge Graph Tools:** New graph exploration capabilities
+  - `graph_traverse` - Explore graph from any node with BFS/DFS/semantic strategies
+  - `graph_path` - Find shortest path between nodes
+  - `graph_clusters` - Detect connected clusters using Louvain algorithm
+  - `graph_pagerank` - Calculate node importance rankings
+  - `graph_patterns` - Extract N-gram patterns and detect anomalies
+  - `graph_stats` - Get graph statistics (node count, edge count, type distribution)
+- **@terminals-tech/graph Integration:** Scalable graph algorithms for 100K+ events
+
+### Session Time-Travel (@terminals-tech/core)
+- **Event Sourcing:** Full session state management with event store
+- **Time-Travel Tools:**
+  - `undo` / `redo` - Navigate session history
+  - `fork_session` - Create alternate timelines
+  - `time_travel` - Jump to any timestamp
+  - `checkpoint` - Create named restore points
+  - `session_state` - Get current session state with undo/redo capability info
+
+### Error Visibility & Reliability
+- **Error Infrastructure:** New `src/utils/errors.js` with structured error handling
+  - `MCPError`, `APIError`, `ConfigurationError`, `DatabaseError` classes
+  - Error categorization (NETWORK, AUTHENTICATION, CONFIGURATION, etc.)
+  - Cause chain preservation for debugging
+  - `isRetryable` flag for retry logic
+- **Pre-flight Checks:** New `src/utils/preflight.js` validates system readiness
+  - API key validation (format and presence)
+  - Database initialization check
+  - Embedder readiness check
+  - Model configuration validation
+- **Job Worker Improvements:**
+  - Fixed silent `catch (_) {}` that swallowed all errors
+  - Added structured error logging with full context
+  - Enhanced job failure details (category, code, isRetryable, stack trace)
+- **OpenRouter Client Fixes:**
+  - Fixed unhandled async IIFE in streaming
+  - Added `.catch()` handler for stream errors
+  - API key validation before requests
+- **Embedder Improvements:**
+  - Exportable `initializeEmbedder()` promise for proper sequencing
+  - Mock provider detection with warning logs
+  - `isEmbedderMock()` status check
+
+### Package Ecosystem
+- **@terminals-tech/embeddings:** Vector embeddings with TransformersEmbeddingProvider
+- **@terminals-tech/graph:** Graph algorithms (PageRank, clustering, pattern detection)
+- **@terminals-tech/core:** Event sourcing and time-travel capabilities
+
+### Documentation
+- Updated CLAUDE.md with v1.8.0 tools and MCP Apps section
+- Added Session & Time-Travel tools reference
+- Added Knowledge Graph tools reference
+
 ## v1.7.0 — 2025-12-03
 
 ### Model-Aware Adaptive Tokens

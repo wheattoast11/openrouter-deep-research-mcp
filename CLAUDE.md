@@ -18,6 +18,7 @@ This document provides Claude and other LLMs with everything needed to effective
 |------|------------|------------|
 | `research` | Async (default) | `{"query":"...", "async":true}` returns job_id |
 | `conduct_research` | Sync | `{"query":"...", "async":false}` streams results |
+| `batch_research` | Both | `{"queries":[...], "waitForCompletion":true}` (NEW in v1.8.1) |
 | `agent` | Auto-routes | `{"action":"research\|follow_up\|retrieve\|query", ...}` |
 
 ### Knowledge Base Tools
@@ -124,6 +125,46 @@ The server is highly permissive with parameter formats. All of these work:
      "costPreference": "low"
    }
    → Context-aware follow-up using prior research
+```
+
+### Pattern 5: Efficient Parallel Research (NEW in v1.8.1)
+
+For multiple research queries, use `batch_research` instead of dispatching individual jobs:
+
+```javascript
+// Bad: N tool calls + polling loop burns tokens
+const job1 = await research({q: "topic1", async: true});
+const job2 = await research({q: "topic2", async: true});
+// ... synchronous polling wastes context
+
+// Good: Single call with batching
+batch_research {
+  "queries": [
+    "Non-Euclidean geometry rendering techniques",
+    "Brainwave entrainment for digital art",
+    {"query": "Las Vegas Sphere technology", "costPreference": "high"}
+  ],
+  "waitForCompletion": true,  // Block until all complete (up to 10 min)
+  "timeoutMs": 600000
+}
+→ Returns {"success": true, "results": [...], "reportIds": ["5","6","7"]}
+```
+
+**Hybrid Options:**
+- `waitForCompletion: true` - Blocks and returns all results (best for ≤5 queries)
+- `waitForCompletion: false` - Returns job IDs + SSE URL for background monitoring
+
+**SSE Batch Monitoring:**
+```
+GET /jobs/batch/events?ids=job_1,job_2,job_3
+→ SSE stream with batch_progress and batch_complete events
+```
+
+**Session Recovery:**
+Batch dispatches are tracked in session state. Query via:
+```javascript
+session_state {"sessionId": "default"}
+→ state.batchJobs contains pending/completed batches with reportIds
 ```
 
 ---
@@ -312,11 +353,90 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 1.8.0
+- **Server Version**: 1.8.1
 - **MCP SDK**: 1.21.1
-- **MCP Spec**: 2025-06-18 (Nov 2025 ready)
-- **Protocol Features**: Task Protocol, Sampling with Tools, Elicitation, Tool Chaining, MCP Apps (SEP-1865)
+- **MCP Spec (Stable)**: 2025-06-18 - Fully compliant
+- **MCP Spec (Draft)**: 2025-11-25 - Forward-compatible features
+- **Protocol Features**: Task Protocol (SEP-1686), Sampling (SEP-1577), Elicitation (SEP-1036), MCP Apps (SEP-1865)
 - **Package Integrations**: @terminals-tech/embeddings, @terminals-tech/graph, @terminals-tech/core
+
+### MCP Compliance Notes
+
+| Feature | Spec Version | Status |
+|---------|--------------|--------|
+| JSON-RPC 2.0 | Core | Compliant |
+| Tools/Resources/Prompts | 2025-06-18 | Compliant |
+| Task Protocol | 2025-11-25 draft | Implemented |
+| Sampling with Tools | 2025-11-25 draft | Implemented |
+| Elicitation | 2025-11-25 draft | Implemented |
+| MCP Apps (UI Resources) | 2025-11-25 draft | Implemented |
+
+---
+
+## Core Abstractions (v1.8.1+)
+
+The server includes a unified core abstraction layer for advanced use cases:
+
+### Signal Protocol (`src/core/signal.js`)
+Unified message type for inter-agent communication with confidence scoring and crystallization analysis.
+
+```javascript
+const { Signal, SignalBus, ConsensusCalculator } = require('./src/core');
+
+// Create signals
+const query = Signal.query("What is quantum computing?", "claude");
+const response = Signal.response(answer, "gemini", 0.95);
+
+// Calculate consensus from multiple model responses
+const calc = new ConsensusCalculator({ minAgreement: 0.6 });
+const consensus = calc.calculate([signal1, signal2, signal3]);
+```
+
+### Parameter Normalization (`src/core/normalize.js`)
+Declarative alias system for flexible tool parameter handling.
+
+### Schema Registry (`src/core/schemas/index.js`)
+Centralized Zod schemas with composable building blocks.
+
+### RoleShift Protocol (`src/core/roleShift.js`)
+Bidirectional communication enabling server → client requests via sampling/elicitation.
+
+### Environment Variables for Core Features
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CORE_HANDLERS_ENABLED` | `false` | Enable new consolidated handlers |
+| `SIGNAL_PROTOCOL_ENABLED` | `false` | Enable Signal protocol |
+| `ROLESHIFT_ENABLED` | `false` | Enable bidirectional protocol |
+| `STRICT_SCHEMA_VALIDATION` | `false` | Enforce strict schema validation |
+
+---
+
+## Logging Configuration
+
+The server uses a structured logging system with MCP SDK integration for proper channel semantics.
+
+### Environment Variables
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `info` | Minimum log level: `debug`, `info`, `warn`, `error` |
+| `LOG_OUTPUT` | `stderr` | Output mode: `stderr`, `mcp`, `both` |
+| `LOG_JSON` | `false` | Enable JSON format for log aggregation |
+
+### Output Modes
+- **`stderr`**: Traditional stderr logging (compatible with all clients)
+- **`mcp`**: Use MCP SDK `sendLoggingMessage()` notifications (client can filter by level)
+- **`both`**: Output to both channels
+
+### Log Levels
+| Level | Usage |
+|-------|-------|
+| `debug` | Detailed diagnostic info (disabled by default) |
+| `info` | General operational messages |
+| `warn` | Degraded functionality, non-fatal issues |
+| `error` | Operation failures, exceptions |
+
+### STDIO Mode Behavior
+When using `--stdio` transport, non-error logs are automatically suppressed to prevent JSON-RPC protocol corruption. Only errors are written to stderr.
 
 ---
 
@@ -355,7 +475,7 @@ window.parent.postMessage({
 | `docs/TOOL-PATTERNS.md` | Detailed tool patterns, gotchas, and error recovery |
 | `docs/CHANGELOG.md` | Version history and feature additions |
 | `docs/MCP-COMPLIANCE-REPORT.md` | MCP specification compliance status |
-| `docs/TESTING-GUIDE-v1.6.0.md` | Comprehensive testing procedures |
+| `docs/TESTING-GUIDE.md` | Comprehensive testing procedures |
 | `.claude/commands/` | Slash commands for common workflows |
 | `.claude/settings.json` | Pre-configured tool permissions |
 
