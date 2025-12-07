@@ -145,14 +145,20 @@ async function getReport(params, dbClient) {
 
   // Fetch report
   let report;
-  if (typeof dbClient.getReport === 'function') {
-    report = await dbClient.getReport(reportId);
+  if (typeof dbClient.getReportById === 'function') {
+    report = await dbClient.getReportById(reportId);
   } else {
     const rows = await dbClient.query(
-      'SELECT id, query, final_report, cost_preference, audience_level, created_at, rating, rating_comment FROM research_reports WHERE id = $1',
+      'SELECT id, original_query as query, final_report, parameters, created_at FROM research_reports WHERE id = $1',
       [reportId]
     );
     report = rows?.[0];
+    // Extract nested fields from parameters JSONB
+    if (report?.parameters) {
+      const params = typeof report.parameters === 'string' ? JSON.parse(report.parameters) : report.parameters;
+      report.cost_preference = params.costPreference;
+      report.audience_level = params.audienceLevel;
+    }
   }
 
   if (!report) {
@@ -222,11 +228,11 @@ async function getReport(params, dbClient) {
 async function listHistory(params, dbClient) {
   const { limit = 10, queryFilter } = params;
 
-  let sql = 'SELECT id, query, cost_preference, audience_level, created_at, rating FROM research_reports';
+  let sql = 'SELECT id, original_query, parameters, created_at FROM research_reports';
   const sqlParams = [];
 
   if (queryFilter) {
-    sql += ' WHERE query ILIKE $1';
+    sql += ' WHERE original_query ILIKE $1';
     sqlParams.push(`%${queryFilter}%`);
   }
 
@@ -239,14 +245,16 @@ async function listHistory(params, dbClient) {
     limit,
     filter: queryFilter || null,
     count: rows?.length || 0,
-    reports: (rows || []).map(r => ({
-      id: r.id,
-      query: r.query,
-      costPreference: r.cost_preference,
-      audienceLevel: r.audience_level,
-      createdAt: r.created_at,
-      rating: r.rating
-    }))
+    reports: (rows || []).map(r => {
+      const params = r.parameters ? (typeof r.parameters === 'string' ? JSON.parse(r.parameters) : r.parameters) : {};
+      return {
+        id: r.id,
+        query: r.original_query,
+        costPreference: params.costPreference,
+        audienceLevel: params.audienceLevel,
+        createdAt: r.created_at
+      };
+    })
   };
 }
 

@@ -358,7 +358,7 @@ async function _doInitDB() {
 
     // Create the reports table
     await db.query(`
-      CREATE TABLE IF NOT EXISTS reports (
+      CREATE TABLE IF NOT EXISTS research_reports (
         id SERIAL PRIMARY KEY,
         original_query TEXT NOT NULL,
         query_embedding VECTOR(${config.database.vectorDimension}),
@@ -380,8 +380,8 @@ async function _doInitDB() {
 
     // Add accuracy_score column if it doesn't exist (for existing databases)
     try {
-      await db.query(`ALTER TABLE reports ADD COLUMN IF NOT EXISTS accuracy_score REAL DEFAULT NULL;`);
-      await db.query(`ALTER TABLE reports ADD COLUMN IF NOT EXISTS fact_check_results JSONB DEFAULT NULL;`);
+      await db.query(`ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS accuracy_score REAL DEFAULT NULL;`);
+      await db.query(`ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS fact_check_results JSONB DEFAULT NULL;`);
     } catch (e) {
       // Column may already exist, ignore
     }
@@ -485,9 +485,9 @@ async function _doInitDB() {
     logger.info('tool_observations table created or verified');
 
     // Create indexes
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_original_query ON reports (original_query);`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports (created_at DESC);`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_query_embedding ON reports USING hnsw (query_embedding vector_cosine_ops);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_research_reports_original_query ON research_reports (original_query);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_research_reports_created_at ON research_reports (created_at DESC);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_research_reports_query_embedding ON research_reports USING hnsw (query_embedding vector_cosine_ops);`);
     logger.info('PGLite indexes created or verified');
 
     // Success!
@@ -512,7 +512,7 @@ async function _doInitDB() {
 
         // Create minimal table structure
         await db.query(`
-          CREATE TABLE IF NOT EXISTS reports (
+          CREATE TABLE IF NOT EXISTS research_reports (
             id SERIAL PRIMARY KEY,
             original_query TEXT NOT NULL,
             query_embedding VECTOR(${config.database.vectorDimension}),
@@ -739,7 +739,7 @@ async function searchHybrid(queryText, limit = 10) {
       const r = await db.query(
         `SELECT r.id, r.original_query, r.final_report, 1 - (r.query_embedding <=> $1::vector) AS sim,
                 COALESCE(u.uses,0) AS uses
-         FROM reports r
+         FROM research_reports r
          LEFT JOIN usage_counters u ON u.entity_type = 'report' AND u.entity_id = r.id::text
          WHERE r.query_embedding IS NOT NULL
          ORDER BY sim DESC
@@ -808,7 +808,7 @@ async function searchHybrid(queryText, limit = 10) {
 async function indexExistingReports(limit = 1000) {
   if (!config.indexer?.enabled) return 0;
   const rows = await executeWithRetry(async () => {
-    const r = await db.query(`SELECT id, original_query, final_report, created_at FROM reports ORDER BY id DESC LIMIT $1;`, [limit]);
+    const r = await db.query(`SELECT id, original_query, final_report, created_at FROM research_reports ORDER BY id DESC LIMIT $1;`, [limit]);
     return r.rows;
   }, 'loadReportsForIndex', []);
   let count = 0;
@@ -891,7 +891,7 @@ async function saveResearchReport({ originalQuery, parameters, finalReport, rese
   const result = await executeWithRetry(
     async () => {
       const res = await db.query(
-        `INSERT INTO reports (
+        `INSERT INTO research_reports (
           original_query,
           query_embedding,
           parameters,
@@ -974,7 +974,7 @@ async function addFeedbackToReport(reportId, feedback) {
     async () => {
       // First, get the current feedback entries
       const currentResult = await db.query(
-        `SELECT feedback_entries FROM reports WHERE id = $1;`,
+        `SELECT feedback_entries FROM research_reports WHERE id = $1;`,
         [reportIdNum]
       );
 
@@ -1006,7 +1006,7 @@ async function addFeedbackToReport(reportId, feedback) {
 
       // Update the report
       await db.query(
-        `UPDATE reports
+        `UPDATE research_reports
          SET feedback_entries = $1,
              updated_at = $2
          WHERE id = $3;`,
@@ -1024,7 +1024,7 @@ async function findReportsByQuery(query) {
   const result = await executeWithRetry(
     async () => {
       return await db.query(
-        `SELECT * FROM reports WHERE original_query = $1 ORDER BY created_at DESC;`,
+        `SELECT * FROM research_reports WHERE original_query = $1 ORDER BY created_at DESC;`,
         [query]
       );
     },
@@ -1083,7 +1083,7 @@ async function findReportsBySimilarity(queryText, limit = 5, minSimilarity = 0.8
              research_metadata,
              created_at,
              1 - (query_embedding <=> $1::vector) AS similarity_score
-           FROM reports
+           FROM research_reports
            WHERE query_embedding IS NOT NULL
            AND 1 - (query_embedding <=> $1::vector) >= $2
            ORDER BY similarity_score DESC
@@ -1141,7 +1141,7 @@ async function listRecentReports(limit = 10, queryFilter = null) {
             parameters,
             created_at,
             research_metadata
-          FROM reports
+          FROM research_reports
           WHERE original_query ILIKE $1
           ORDER BY created_at DESC
           LIMIT $2;
@@ -1155,7 +1155,7 @@ async function listRecentReports(limit = 10, queryFilter = null) {
             parameters,
             created_at,
             research_metadata
-          FROM reports
+          FROM research_reports
           ORDER BY created_at DESC
           LIMIT $1;
         `;
@@ -1461,7 +1461,7 @@ async function getReportById(reportId) {
            created_at,
            updated_at,
            feedback_entries
-         FROM reports
+         FROM research_reports
          WHERE id = $1;`,
         [reportIdNum]
       );
@@ -1539,9 +1539,9 @@ async function executeDDL(sql, params = []) {
 async function reindexVectors() {
   await executeWithRetry(
     async () => {
-      try { await db.query(`DROP INDEX IF EXISTS idx_reports_query_embedding;`); } catch (e) {}
+      try { await db.query(`DROP INDEX IF EXISTS idx_research_reports_query_embedding;`); } catch (e) {}
       // Recreate HNSW with conservative params for <50k vectors
-      await db.query(`CREATE INDEX IF NOT EXISTS idx_reports_query_embedding ON reports USING hnsw (query_embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);`);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_research_reports_query_embedding ON research_reports USING hnsw (query_embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);`);
     },
     'reindexVectors'
   );
