@@ -126,12 +126,141 @@ function getToolCategory(tool) {
 
 /**
  * Validate required parameters exist
+ *
+ * @param {Object} params - Parameters to validate
+ * @param {Array<string>} required - List of required parameter names
+ * @throws {Error} If any required parameter is missing
  */
 function validateRequired(params, required) {
   const missing = required.filter(key => !(key in params) || params[key] === undefined);
   if (missing.length > 0) {
     throw new Error(`Missing required parameters: ${missing.join(', ')}`);
   }
+}
+
+/**
+ * Validation rules for required parameters by operation.
+ *
+ * Each rule can specify:
+ * - required: Array of required field names
+ * - aliases: Alternative names to check for the field
+ * - message: Custom error message
+ */
+const PARAM_RULES = {
+  search: {
+    required: ['query'],
+    message: 'query is required for search'
+  },
+  sql: {
+    required: ['sql'],
+    message: 'sql is required'
+  },
+  query: {
+    required: ['sql'],
+    message: 'sql parameter is required'
+  },
+  report: {
+    required: ['reportId'],
+    aliases: { reportId: ['id', 'report_id'] },
+    message: 'reportId is required'
+  },
+  get_report: {
+    required: ['reportId'],
+    aliases: { reportId: ['id', 'report_id'] },
+    message: 'reportId is required'
+  },
+  traverse: {
+    required: ['startNode'],
+    aliases: { startNode: ['node', 'start_node'] },
+    message: 'startNode is required for traversal'
+  },
+  graph_traverse: {
+    required: ['startNode'],
+    aliases: { startNode: ['node', 'start_node'] },
+    message: 'startNode is required for traversal'
+  },
+  path: {
+    required: ['from', 'to'],
+    message: 'Both from and to parameters are required'
+  },
+  graph_path: {
+    required: ['from', 'to'],
+    message: 'Both from and to parameters are required'
+  },
+  time_travel: {
+    required: ['timestamp'],
+    message: 'timestamp is required for time travel'
+  },
+  checkpoint: {
+    required: ['name'],
+    message: 'name is required for checkpoint'
+  },
+  job_status: {
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'jobId'] },
+    message: 'job_id is required'
+  },
+  task_get: {
+    required: ['taskId'],
+    aliases: { taskId: ['id', 'task_id'] },
+    message: 'taskId is required'
+  },
+  task_result: {
+    required: ['taskId'],
+    aliases: { taskId: ['id', 'task_id'] },
+    message: 'taskId is required'
+  },
+  task_cancel: {
+    required: ['taskId'],
+    aliases: { taskId: ['id', 'task_id'] },
+    message: 'taskId is required'
+  },
+  calc: {
+    required: ['expr'],
+    message: 'expr parameter is required'
+  },
+  research_follow_up: {
+    required: ['originalQuery', 'followUpQuestion'],
+    message: 'originalQuery and followUpQuestion are required'
+  }
+};
+
+/**
+ * Validate parameters against operation-specific rules.
+ *
+ * Checks if required parameters are present, accounting for aliases.
+ *
+ * @param {string} operation - Operation name to validate for
+ * @param {Object} params - Parameters to validate
+ * @returns {Object} Validated parameters (unchanged)
+ * @throws {Error} If required parameters are missing
+ *
+ * @example
+ * validateParams('search', { query: 'test' }); // OK
+ * validateParams('search', {}); // throws "query is required for search"
+ */
+function validateParams(operation, params) {
+  const rule = PARAM_RULES[operation];
+  if (!rule) return params;
+
+  for (const field of rule.required) {
+    // Build list of names to check (canonical + aliases)
+    const namesToCheck = [field];
+    if (rule.aliases?.[field]) {
+      namesToCheck.push(...rule.aliases[field]);
+    }
+
+    // Check if any name has a value
+    const hasValue = namesToCheck.some(name =>
+      params[name] != null && params[name] !== ''
+    );
+
+    if (!hasValue) {
+      throw new Error(rule.message || `${field} is required`);
+    }
+  }
+
+  return params;
 }
 
 /**
@@ -165,9 +294,11 @@ module.exports = {
   normalize,
   applyAliases,
   validateRequired,
+  validateParams,
   coerceTypes,
   getToolCategory,
   GLOBAL_ALIASES,
   TOOL_ALIASES,
-  DEFAULTS
+  DEFAULTS,
+  PARAM_RULES
 };

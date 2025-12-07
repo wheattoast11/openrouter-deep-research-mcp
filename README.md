@@ -1,245 +1,47 @@
-[![Star on GitHub](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research?style=social)](https://github.com/wheattoast11/openrouter-deep-research)
 # OpenRouter Agents MCP Server
 
-[![npm version](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents) [![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-available-24292e?logo=github)](../../packages)
+[![npm](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents)
+[![MCP](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://spec.modelcontextprotocol.io/specification/2025-06-18/)
+[![GitHub](https://img.shields.io/github/stars/terminals-tech/openrouter-agents?style=social)](https://github.com/terminals-tech/openrouter-agents)
 
-## Overview
+Production MCP server for multi-agent AI research. Plan, parallelize, synthesize.
 
-Production-ready MCP server for multi-agent AI research with OpenRouter integration. Fully compliant with MCP Specification 2025-06-18 and prepared for November 2025 spec updates.
+## Install
 
-### Key Features
-  - **Multi-Agent Orchestration:** Plan → parallelize → synthesize workflow with adaptive concurrency
-  - **Async Operations:** Job system with SSE streaming for long-running research tasks
-  - **Knowledge Base:** Hybrid BM25+vector search with PGlite + pgvector
-  - **Model Support:** Dynamic catalog supporting Anthropic Sonnet-4, OpenAI GPT-5, Google Gemini, and more
-  - **Production Hardened:** Rate limiting, request size limits, multi-tier auth (JWT/API key)
-  - **MCP Compliant:** 100% spec compliance with server discovery and extension metadata
-  - **Three Modes:** AGENT (simple), MANUAL (granular), or ALL (both)
-
-## Install / Run
-- Install (project dependency)
-```bash
-npm install @terminals-tech/openrouter-agents
-```
-
-- Global install (optional)
-```bash
-npm install -g @terminals-tech/openrouter-agents
-```
-
-- Run with npx (no install)
 ```bash
 npx @terminals-tech/openrouter-agents --stdio
-# or daemon
-SERVER_API_KEY=devkey npx @terminals-tech/openrouter-agents
 ```
 
-## What's New (v1.8.0 - December 5, 2025)
-- **MCP Apps (SEP-1865):** UI resources for autonomous interface surfacing (`ui://research/viewer`, `ui://knowledge/graph`)
-- **Knowledge Graph:** New tools for graph exploration - `graph_traverse`, `graph_path`, `graph_clusters`, `graph_pagerank`
-- **Session Time-Travel:** Undo/redo, fork sessions, checkpoints, and time navigation via `@terminals-tech/core`
-- **Error Visibility:** Structured error handling with cause chains, pre-flight validation, and detailed diagnostics
-- **Package Ecosystem:** Integrated `@terminals-tech/embeddings`, `@terminals-tech/graph`, `@terminals-tech/core`
-
-[Changelog →](docs/CHANGELOG.md) | [Compliance Report →](docs/MCP-COMPLIANCE-REPORT.md)
-
-## Quick start
-1) Prereqs
-- Node 18+ (20 LTS recommended), npm, Git, OpenRouter API key
-
-2) Install
-```bash
-npm install
-```
-
-3) Verify installation (optional but recommended)
-```bash
-npx @terminals-tech/openrouter-agents --verify
-```
-
-### Configuration: .env vs .mcp.json
-
-Choose your configuration method based on your use case:
-
-```
-Are you working alone or with a team?
-│
-├─ ALONE (local development)
-│   │
-│   └─► Use .env file
-│       • Keeps secrets out of version control
-│       • Personal API keys stay private
-│       • Add .env to .gitignore
-│
-└─ TEAM (shared project)
-    │
-    └─► Use .mcp.json file
-        • Commit to version control
-        • Use ${VAR} syntax for secrets
-        • Team shares same configuration
-        • Each member sets own env vars
-```
-
-**Quick Decision:**
-- `.env` → Solo developer, local machine, prototype
-- `.mcp.json` → Team project, CI/CD, shareable config
-
-4) Configure (.env)
-```dotenv
-OPENROUTER_API_KEY=your_openrouter_key
-SERVER_API_KEY=your_http_transport_key
-SERVER_PORT=3002
-
-# Modes (pick one; default ALL)
-# AGENT  = agent-only + always-on ops (ping/status/jobs)
-# MANUAL = individual tools + always-on ops
-# ALL    = agent + individual tools + always-on ops
-MODE=ALL
-
-# Orchestration
-ENSEMBLE_SIZE=2
-PARALLELISM=4
-
-# Models (override as needed) - Updated with state-of-the-art cost-effective models
-PLANNING_MODEL=openai/gpt-5-chat
-PLANNING_CANDIDATES=openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4
-HIGH_COST_MODELS=x-ai/grok-4,openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4,morph/morph-v3-large
-LOW_COST_MODELS=deepseek/deepseek-chat-v3.1,z-ai/glm-4.5v,qwen/qwen3-coder,openai/gpt-5-mini,google/gemini-2.5-flash
-VERY_LOW_COST_MODELS=openai/gpt-5-nano,deepseek/deepseek-chat-v3.1
-
-# Storage
-PGLITE_DATA_DIR=./researchAgentDB
-PGLITE_RELAXED_DURABILITY=true
-REPORT_OUTPUT_PATH=./research_outputs/
-
-# Indexer
-INDEXER_ENABLED=true
-INDEXER_AUTO_INDEX_REPORTS=true
-INDEXER_AUTO_INDEX_FETCHED=true
-
-# MCP features
-MCP_ENABLE_PROMPTS=true
-MCP_ENABLE_RESOURCES=true
-
-# Prompt strategy
-PROMPTS_COMPACT=true
-PROMPTS_REQUIRE_URLS=true
-PROMPTS_CONFIDENCE=true
-
-```
-
-4) Run
-- STDIO (for Cursor/VS Code MCP):
-```bash
-node src/server/mcpServer.js --stdio
-```
-- HTTP/SSE (local daemon):
-```bash
-SERVER_API_KEY=$SERVER_API_KEY node src/server/mcpServer.js
-```
-
-### Windows PowerShell examples
-- STDIO
-```powershell
-$env:OPENROUTER_API_KEY='your_key'
-$env:INDEXER_ENABLED='true'
-node src/server/mcpServer.js --stdio
-```
-- HTTP/SSE
-```powershell
-$env:OPENROUTER_API_KEY='your_key'
-$env:SERVER_API_KEY='devkey'
-$env:SERVER_PORT='3002'
-node src/server/mcpServer.js
-```
-
-### One-liner demo scripts
-Dev (HTTP/SSE):
-```bash
-SERVER_API_KEY=devkey INDEXER_ENABLED=true node src/server/mcpServer.js
-```
-
-STDIO (Cursor/VS Code):
-```bash
-OPENROUTER_API_KEY=your_key INDEXER_ENABLED=true node src/server/mcpServer.js --stdio
-```
-
-### MCP client JSON configuration (no manual start required)
-You can register this server directly in MCP clients that support JSON server manifests.
-
-Minimal examples:
-
-1) STDIO transport (recommended for IDEs)
-```json
-{
-  "servers": {
-    "openrouter-agents": {
-      "command": "npx",
-      "args": ["@terminals-tech/openrouter-agents", "--stdio"],
-      "env": {
-        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
-        "SERVER_API_KEY": "${SERVER_API_KEY}",
-        "PGLITE_DATA_DIR": "./researchAgentDB",
-        "INDEXER_ENABLED": "true"
-      }
-    }
-  }
-}
-```
-
-2) HTTP/SSE transport (daemon mode)
-```json
-{
-  "servers": {
-    "openrouter-agents": {
-      "url": "http://127.0.0.1:3002",
-      "sse": "/sse",
-      "messages": "/messages",
-      "headers": {
-        "Authorization": "Bearer ${SERVER_API_KEY}"
-      }
-    }
-  }
-}
-```
-
-With the package installed globally (or via npx), MCP clients can spawn the server automatically. See your client's docs for where to place this JSON (e.g., `~/.config/client/mcp.json`).
-
-## Claude Code Integration
-
-One-liner setup for Claude Code:
-
+**Claude Code one-liner:**
 ```bash
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-Or interactive setup with slash commands and hooks:
+## What's New (v1.9.0)
 
-```bash
-npx @terminals-tech/openrouter-agents --setup-claude
-```
+- **Documentation overhaul** - Unified structure, fixed outdated references
+- **MCP Spec 2025-06-18** - Full compliance with current stable spec
+- **SEP-990/991** - Enterprise auth and client metadata support
+- **CI/CD automation** - npm test, prepublishOnly hooks, release-please
 
-### Included Slash Commands
+[Full Changelog](docs/CHANGELOG.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 
-| Command | Description |
-|---------|-------------|
-| `/mcp-status` | Check server health and recent activity |
-| `/mcp-research` | Run synchronous research query |
-| `/mcp-async-research` | Run async research (returns job_id) |
-| `/mcp-search` | Search the knowledge base |
-| `/mcp-query` | Execute SQL query |
+## Configuration
 
-### Environment Setup
+Set `OPENROUTER_API_KEY` in your environment, then configure via `.env` or `.mcp.json`:
 
-Set your API key before using:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENROUTER_API_KEY` | *required* | OpenRouter API key |
+| `SERVER_PORT` | `3002` | HTTP server port |
+| `MODE` | `ALL` | `AGENT`, `MANUAL`, or `ALL` |
+| `PGLITE_DATA_DIR` | `./researchAgentDB` | Database location |
+| `INDEXER_ENABLED` | `true` | Enable knowledge indexing |
 
-```bash
-export OPENROUTER_API_KEY="sk-or-..."
-```
+[Full ENV Reference](docs/ENV-REFERENCE.md)
 
-### Portable Project Configuration
-
-The setup creates a `.mcp.json` file for team-shareable configuration:
+<details>
+<summary><strong>.mcp.json example (team-shareable)</strong></summary>
 
 ```json
 {
@@ -249,157 +51,124 @@ The setup creates a `.mcp.json` file for team-shareable configuration:
       "args": ["@terminals-tech/openrouter-agents", "--stdio"],
       "env": {
         "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
-        "INDEXER_ENABLED": "true",
-        "MCP_ENABLE_TASKS": "true"
+        "INDEXER_ENABLED": "true"
       }
     }
   }
 }
 ```
+</details>
 
-### Verification
+## Tools
 
-After setup, verify the connection:
+<details>
+<summary><strong>Research</strong></summary>
+
+| Tool | Description |
+|------|-------------|
+| `research` | Async research (returns job_id) |
+| `conduct_research` | Sync research with streaming |
+| `batch_research` | Parallel batch queries |
+| `research_follow_up` | Context-aware follow-up |
+| `agent` | Unified entrypoint (auto-routes) |
+</details>
+
+<details>
+<summary><strong>Knowledge Base</strong></summary>
+
+| Tool | Description |
+|------|-------------|
+| `search` | Hybrid BM25+vector search |
+| `retrieve` | Index or SQL query |
+| `query` | SQL SELECT with params |
+| `get_report` | Get report by ID |
+| `history` | List recent reports |
+</details>
+
+<details>
+<summary><strong>Session & Graph</strong></summary>
+
+| Tool | Description |
+|------|-------------|
+| `undo` / `redo` | Session time-travel |
+| `checkpoint` | Named save points |
+| `fork_session` | Create alternate timeline |
+| `graph_traverse` | Explore knowledge graph |
+| `graph_clusters` | Find node clusters |
+| `graph_pagerank` | Importance rankings |
+</details>
+
+<details>
+<summary><strong>Utility</strong></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ping` | Health check |
+| `get_server_status` | Full diagnostics |
+| `job_status` | Check async job |
+| `date_time` | Current timestamp |
+| `calc` | Math evaluation |
+| `list_tools` | Available tools |
+</details>
+
+## MCP Compliance
+
+| Feature | Spec | Status |
+|---------|------|--------|
+| JSON-RPC 2.0 | Core | Compliant |
+| Tools/Resources/Prompts | 2025-06-18 | Compliant |
+| Task Protocol (SEP-1686) | Draft | Implemented |
+| Sampling (SEP-1577) | Draft | Implemented |
+| Elicitation (SEP-1036) | Draft | Implemented |
+| MCP Apps (SEP-1865) | Draft | Implemented |
+| Enterprise Auth (SEP-990) | Draft | Implemented |
+| Client Metadata (SEP-991) | Draft | Implemented |
+
+## Architecture
 
 ```
-/mcp-status
+User Query
+    │
+    ▼
+┌─────────────────┐
+│  Planning Agent │ ─── Decomposes into sub-queries
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    ▼         ▼
+┌───────┐ ┌───────┐
+│Agent 1│ │Agent N│ ─── Parallel research
+└───┬───┘ └───┬───┘
+    │         │
+    ▼         ▼
+┌─────────────────┐
+│   Synthesizer   │ ─── Consensus + citations
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Knowledge Base │ ─── PGlite + pgvector
+└─────────────────┘
 ```
 
-Or use the tools directly:
+![Architecture](docs/diagram-architecture-branded.svg)
 
-```javascript
-ping {}                    // → {"pong":true}
-get_server_status {}       // → Full health check
-list_tools {}              // → Available tools
-```
+## Links
 
-See [.claude/README.md](.claude/README.md) for detailed configuration options.
+- **Homepage:** [terminals.tech](https://terminals.tech)
+- **npm:** [@terminals-tech/openrouter-agents](https://www.npmjs.com/package/@terminals-tech/openrouter-agents)
+- **GitHub:** [terminals-tech/openrouter-agents](https://github.com/terminals-tech/openrouter-agents)
+- **Docs:** [CLAUDE.md](CLAUDE.md) | [Tool Patterns](docs/TOOL-PATTERNS.md)
 
-## Tools (high‑value)
-- Always‑on (all modes): `ping`, `get_server_status`, `job_status`, `get_job_status`, `cancel_job`
-- AGENT: `agent` (single entrypoint for research / follow_up / retrieve / query)
-- MANUAL/ALL toolset: `submit_research` (async), `conduct_research` (sync/stream), `research_follow_up`, `search` (hybrid), `retrieve` (index/sql), `query` (SELECT), `get_report_content`, `list_research_history`
-- Jobs: `get_job_status`, `cancel_job`
-- Retrieval: `search` (hybrid BM25+vector with optional LLM rerank), `retrieve` (index/sql wrapper)
-- SQL: `query` (SELECT‑only, optional `explain`)
-- Knowledge base: `get_past_research`, `list_research_history`, `get_report_content`
-- DB ops: `backup_db` (tar.gz), `export_reports`, `import_reports`, `db_health`, `reindex_vectors`
-- Models: `list_models`
-- Web: `search_web`, `fetch_url`
-- Indexer: `index_texts`, `index_url`, `search_index`, `index_status`
+## Publishing
 
-### Tool usage patterns (for LLMs)
-Use `tool_patterns` resource to view JSON recipes describing effective chaining, e.g.:
-- Search → Fetch → Research
-- Async research: submit, stream via SSE `/jobs/:id/events`, then get report content
-
-Notes
-- Data lives locally under `PGLITE_DATA_DIR` (default `./researchAgentDB`). Backups are tarballs in `./backups`.
-- Use `list_models` to discover current provider capabilities and ids.
-
-## Architecture at a glance
-See `docs/diagram-architecture.mmd` (Mermaid). Render to SVG with Mermaid CLI if installed:
 ```bash
-npx @mermaid-js/mermaid-cli -i docs/diagram-architecture.mmd -o docs/diagram-architecture.svg
-```
-Or use the script:
-```bash
-npm run gen:diagram
-```
-
-![Architecture Diagram (branded)](docs/diagram-architecture-branded.svg)
-
-If the image doesn’t render in your viewer, open `docs/diagram-architecture-branded.svg` directly.
-
-### Answer crystallization view
-![Answer Crystallization Diagram](docs/answer-crystallization-architecture.svg)
-
-How it differs from typical “agent chains”:
-- Not just hardcoded handoffs; the plan is computed, then parallel agents search, then a synthesis step reasons over consensus, contradictions, and gaps.
-- The system indexes what it reads during research, so subsequent queries get faster/smarter.
-- Guardrails shape attention: explicit URL citations, [Unverified] labelling, and confidence scoring.
-
-## Minimal‑token prompt strategy
-- Compact mode strips preambles to essential constraints; everything else is inferred.
-- Enforced rules: explicit URL citations, no guessing IDs/URLs, confidence labels.
-- Short tool specs: use concise param names and rely on server defaults.
-
-## Common user journeys
-- “Give me an executive briefing on MCP status as of July 2025.”
-  - Server plans sub‑queries, fetches authoritative sources, synthesizes with citations.
-  - Indexed outputs make related follow‑ups faster.
-
-- “Find vision‑capable models and route images gracefully.”
-  - `/models` discovered and filtered, router template generated, fallback to text models.
-
-- “Compare orchestration patterns for bounded parallelism.”
-  - Pulls OTel/Airflow/Temporal docs, produces a MECE synthesis and code pointers.
-
-## Cursor IDE usage
-- Add this server in Cursor MCP settings pointing to `node src/server/mcpServer.js --stdio`.
-- Use the new prompts (`planning_prompt`, `synthesis_prompt`) directly in Cursor to scaffold tasks.
-
-## FAQ (quick glance)
-- How does it avoid hallucinations?
-  - Strict citation rules, [Unverified] labels, retrieval of past work, on‑the‑fly indexing.
-- Can I disable features?
-  - Yes, via env flags listed above.
-- Does it support streaming?
-  - Yes, SSE for HTTP; stdio for MCP.
-
-## Command Map (quick reference)
-- Start (stdio): `npm run stdio`
-- Start (HTTP/SSE): `npm start`
-- Run via npx (scoped): `npx @terminals-tech/openrouter-agents --stdio`
-- Generate examples: `npm run gen:examples`
-- List models: MCP `list_models { refresh:false }`
-- Submit research (async): `submit_research { q:"<query>", cost:"low", aud:"intermediate", fmt:"report", src:true }`
-- Track job: `get_job_status { job_id:"..." }`, cancel: `cancel_job { job_id:"..." }`
-- Unified search: `search { q:"<query>", k:10, scope:"both" }`
-- SQL (read‑only): `query { sql:"SELECT ... WHERE id = $1", params:[1], explain:true }`
-- Get past research: `get_past_research { query:"<query>", limit:5 }`
-- Index URL (if enabled): `index_url { url:"https://..." }`
-- Micro UI (ghost): visit `http://localhost:3002/ui` to stream job events (SSE).
-
-## Package publishing
-- Name: `@terminals-tech/openrouter-agents`
-- Version: 1.8.0
-- Bin: `openrouter-agents`
-- Author: Tej Desai <admin@terminals.tech>
-- Homepage: https://terminals.tech
-
-Install and run without cloning:
-```bash
-npx @terminals-tech/openrouter-agents --stdio
-# or daemon
-SERVER_API_KEY=your_key npx @terminals-tech/openrouter-agents
+npm test                           # Run unit tests
+npm version minor                  # Bump version
+git push --follow-tags             # Push with tags
+npm publish --access public        # Publish to npm
 ```
 
-### Publish (scoped)
-```bash
-npm login
-npm version patch -m "chore(release): %s"
-git push --follow-tags
-npm publish --access public --provenance
-```
+---
 
-## Validation – MSeeP (Multi‑Source Evidence & Evaluation Protocol)
-- **Citations enforced**: explicit URLs, confidence tags; unknowns marked `[Unverified]`.
-- **Cross‑model triangulation**: plan fans out to multiple models; synthesis scores consensus vs contradictions.
-- **KB grounding**: local hybrid index (BM25+vector) retrieves past work for cross‑checking.
-- **Human feedback**: `rate_research_report { rating, comment }` stored to DB; drives follow‑ups.
-- **Reproducibility**: `export_reports` + `backup_db` capture artifacts for audit.
-
-## Quality feedback loop
-- Run examples: `npm run gen:examples`
-- Review: `list_research_history`, `get_report_content {reportId}`
-- Rate: `rate_research_report { reportId, rating:1..5, comment }`
-- Improve retrieval: `reindex_vectors`, `index_status`, `search_index { query }`
-
-## Architecture diagram (branded)
-- See `docs/diagram-architecture-branded.svg` (logo links to `https://terminals.tech`).
-
-## Stargazers
-[![Star on GitHub](https://img.shields.io/github/stars/wheattoast11/openrouter-deep-research?style=social)](https://github.com/wheattoast11/openrouter-deep-research)
-
-[![Star History Chart](https://api.star-history.com/svg?repos=wheattoast11/openrouter-deep-research&type=Date)](https://star-history.com/#wheattoast11/openrouter-deep-research)
+**Version:** 1.9.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT

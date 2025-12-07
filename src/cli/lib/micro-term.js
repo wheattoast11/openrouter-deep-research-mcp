@@ -39,13 +39,34 @@ const STYLE = {
 };
 
 /**
+ * Check if colors should be enabled.
+ * Respects NO_COLOR standard (https://no-color.org)
+ *
+ * @returns {boolean} True if colors should be used
+ */
+function shouldUseColor() {
+  // NO_COLOR takes highest precedence (any value disables color)
+  if (process.env.NO_COLOR !== undefined) {
+    return false;
+  }
+
+  // FORCE_COLOR overrides TTY detection
+  if (process.env.FORCE_COLOR !== undefined) {
+    return true;
+  }
+
+  // Default: use color only in TTY
+  return process.stdout.isTTY === true;
+}
+
+/**
  * Apply color/style to text
  * @param {string} text - Text to style
  * @param {...string} styles - Styles to apply
  */
 function style(text, ...styles) {
-  if (!process.stdout.isTTY && !process.env.FORCE_COLOR) {
-    return text; // No color in non-TTY unless forced
+  if (!shouldUseColor()) {
+    return text; // No color when disabled
   }
 
   const codes = styles.map(s => {
@@ -123,7 +144,7 @@ function error(text) {
 }
 
 module.exports = {
-  style, FG, BG, STYLE, RESET, ESC,
+  style, shouldUseColor, FG, BG, STYLE, RESET, ESC,
   red, green, yellow, blue, cyan, gray, bold, dim,
   cursor, screen, getSize, writeln, write, error
 };

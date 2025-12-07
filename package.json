@@ -1,7 +1,7 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.8.1",
-  "description": "OpenRouter MCP server for research agents",
+  "version": "1.9.0",
+  "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
   "bin": {
     "openrouter-agents": "src/server/mcpServer.js",
@@ -11,7 +11,9 @@
     "start": "node src/server/mcpServer.js",
     "dev": "nodemon src/server/mcpServer.js",
     "stdio": "node src/server/mcpServer.js --stdio",
+    "test": "node tests/unit/core.test.js && node tests/unit/shared.test.js && node tests/unit/config.test.js",
     "postinstall": "node scripts/postinstall.js",
+    "prepublishOnly": "npm test",
     "setup-claude": "node scripts/setup-claude-code.js",
     "gen:examples": "node scripts/generate-examples.js",
     "gen:docs": "node scripts/gen-docs.js",
@@ -25,7 +27,11 @@
     "scripts/setup-claude-code.js",
     ".claude/",
     "CLAUDE.md",
-    "docs/TOOL-PATTERNS.md"
+    "README.md",
+    "LICENSE",
+    "docs/CHANGELOG.md",
+    "docs/TOOL-PATTERNS.md",
+    "docs/ENV-REFERENCE.md"
   ],
   "publishConfig": {
     "access": "public"

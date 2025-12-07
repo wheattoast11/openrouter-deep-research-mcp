@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.9.0 — 2025-12-07
+
+### Documentation Overhaul
+- **README restructured** - Concise, scannable format with collapsible tool sections
+- **Fixed outdated references** - Updated all GitHub URLs from old org to terminals-tech
+- **MCP spec URL** - Updated from 2025-03-26 to current 2025-06-18 stable spec
+- **Version sync** - All documentation now reflects v1.9.0
+
+### CI/CD Automation
+- **npm test script** - Unit tests for core, shared, and config modules
+- **prepublishOnly hook** - Validates tests before publishing
+- **release-please config** - Semantic versioning automation via `.release-please.json`
+- **files array** - README.md, LICENSE, CHANGELOG.md now included in npm package
+
+### MCP Spec Compliance
+- **SEP-990 documented** - Enterprise Auth support in compliance table
+- **SEP-991 documented** - Client Metadata support in compliance table
+- **8 SEPs total** - Full November 2025 draft feature set documented
+
+### Package Updates
+- **Description improved** - "Production MCP server for multi-agent AI research with OpenRouter"
+- **ENV-REFERENCE.md** - Added to npm package files
+
+---
+
 ## v1.8.1 — 2025-12-06
 
 ### Core Abstractions (Convergence Plan v2.0)

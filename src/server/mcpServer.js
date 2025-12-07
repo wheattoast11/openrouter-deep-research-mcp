@@ -882,13 +882,13 @@ if (config.mcp?.features?.resources) {
       switch (uri) {
         case 'mcp://specs/core':
           content = {
-            spec: 'https://spec.modelcontextprotocol.io/specification/2025-03-26/',
+            spec: 'https://spec.modelcontextprotocol.io/specification/2025-06-18/',
             jsonrpc: 'https://www.jsonrpc.org/specification',
             org: 'https://github.com/modelcontextprotocol',
             docs: 'https://modelcontextprotocol.io/',
             sdk: 'https://github.com/modelcontextprotocol/sdk',
             implementations: {
-              openrouter_agents: 'https://github.com/wheattoast11/openrouter-deep-research',
+              openrouter_agents: 'https://github.com/terminals-tech/openrouter-agents',
               anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
             }
           };

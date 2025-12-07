@@ -8,8 +8,28 @@ const signal = require('./signal');
 const normalize = require('./normalize');
 const schemas = require('./schemas');
 const roleShift = require('./roleShift');
+const coreConfig = require('./config');
+const context = require('./context');
+const validation = require('./middleware/validation');
 
 module.exports = {
+  // Core Configuration Factory
+  getConfig: coreConfig.getConfig,
+  createConfig: coreConfig.createConfig,
+  CONFIG_DEFAULTS: coreConfig.DEFAULTS,
+
+  // Context Factory
+  DOMAIN_REQUIREMENTS: context.DOMAIN_REQUIREMENTS,
+  validateContext: context.validateContext,
+  contextFactory: context.contextFactory,
+  mergeContext: context.mergeContext,
+  getGraphClient: context.getGraphClient,
+
+  // Validation Middleware
+  isValidationEnabled: validation.isValidationEnabled,
+  withValidation: validation.withValidation,
+  validateParams: validation.validateParams,
+
   // Signal Protocol
   Signal: signal.Signal,
   SignalType: signal.SignalType,
@@ -23,10 +43,12 @@ module.exports = {
   normalize: normalize.normalize,
   applyAliases: normalize.applyAliases,
   validateRequired: normalize.validateRequired,
+  validateParams: normalize.validateParams,
   coerceTypes: normalize.coerceTypes,
   GLOBAL_ALIASES: normalize.GLOBAL_ALIASES,
   TOOL_ALIASES: normalize.TOOL_ALIASES,
   DEFAULTS: normalize.DEFAULTS,
+  PARAM_RULES: normalize.PARAM_RULES,
 
   // Schema Registry
   Schemas: schemas.Schemas,

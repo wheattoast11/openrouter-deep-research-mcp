@@ -353,11 +353,11 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 1.8.1
+- **Server Version**: 1.9.0
 - **MCP SDK**: 1.21.1
 - **MCP Spec (Stable)**: 2025-06-18 - Fully compliant
 - **MCP Spec (Draft)**: 2025-11-25 - Forward-compatible features
-- **Protocol Features**: Task Protocol (SEP-1686), Sampling (SEP-1577), Elicitation (SEP-1036), MCP Apps (SEP-1865)
+- **Protocol Features**: Task Protocol (SEP-1686), Sampling (SEP-1577), Elicitation (SEP-1036), MCP Apps (SEP-1865), Enterprise Auth (SEP-990), Client Metadata (SEP-991)
 - **Package Integrations**: @terminals-tech/embeddings, @terminals-tech/graph, @terminals-tech/core
 
 ### MCP Compliance Notes
@@ -370,6 +370,8 @@ When the server updates, check:
 | Sampling with Tools | 2025-11-25 draft | Implemented |
 | Elicitation | 2025-11-25 draft | Implemented |
 | MCP Apps (UI Resources) | 2025-11-25 draft | Implemented |
+| Enterprise Auth (SEP-990) | 2025-11-25 draft | Implemented |
+| Client Metadata (SEP-991) | 2025-11-25 draft | Implemented |
 
 ---
 

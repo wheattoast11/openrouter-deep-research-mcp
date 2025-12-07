@@ -130,15 +130,33 @@ class Signal {
 }
 
 /**
- * Extract crystallization score from text
+ * Extract crystallization score from text.
+ *
+ * Uses configurable weights for positive and negative patterns.
+ *
+ * @param {string|Object} payload - Text or object to analyze
+ * @param {Object} [config=null] - Optional config override (defaults from core/config)
+ * @returns {{ patterns: Object, score: number }} Crystallization analysis result
  */
-function extractCrystallization(payload) {
+function extractCrystallization(payload, config = null) {
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
   const patterns = {};
 
   const positive = ['ISOMORPHISM', 'PROGRESSIVE_DISCLOSURE', 'EVENT_SOURCING', 'PHASE_LOCK', 'PERPLEXITY_DROP'];
   const negative = ['UNCERTAINTY'];
 
+  // Load config lazily to avoid circular dependencies
+  let crystallizationConfig = config;
+  if (!crystallizationConfig) {
+    try {
+      const { getConfig } = require('./config');
+      crystallizationConfig = getConfig('crystallization');
+    } catch (e) {
+      crystallizationConfig = { positiveWeight: 0.2, negativeWeight: 0.1 };
+    }
+  }
+
+  const { positiveWeight = 0.2, negativeWeight = 0.1 } = crystallizationConfig;
   let score = 0;
 
   for (const [name, regex] of Object.entries(CrystallizationPatterns)) {
@@ -146,8 +164,8 @@ function extractCrystallization(payload) {
     const count = matches ? matches.length : 0;
     patterns[name] = { present: count > 0, count };
 
-    if (positive.includes(name)) score += count * 0.2;
-    if (negative.includes(name)) score -= count * 0.1;
+    if (positive.includes(name)) score += count * positiveWeight;
+    if (negative.includes(name)) score -= count * negativeWeight;
   }
 
   return {
@@ -222,15 +240,59 @@ class SignalBus {
 }
 
 /**
- * Consensus calculator for multi-model agreement
+ * Consensus calculator for multi-model agreement.
+ *
+ * Uses configurable minAgreement threshold and model weights.
+ *
+ * @class
+ * @example
+ * const calc = new ConsensusCalculator({ minAgreement: 0.7 });
+ * const result = calc.calculate([signal1, signal2, signal3]);
  */
 class ConsensusCalculator {
+  /**
+   * Create a new ConsensusCalculator instance.
+   *
+   * @param {Object} [opts={}] - Configuration options
+   * @param {number} [opts.minAgreement] - Minimum agreement threshold (default: from config or 0.6)
+   * @param {Object} [opts.modelWeights] - Model weight overrides
+   */
   constructor(opts = {}) {
-    this.minAgreement = opts.minAgreement ?? 0.6;
+    // Load config lazily to avoid circular dependencies
+    let consensusConfig;
+    try {
+      const { getConfig } = require('./config');
+      consensusConfig = getConfig('consensus');
+    } catch (e) {
+      consensusConfig = { minAgreement: 0.6, modelWeights: ModelWeights };
+    }
+
+    this.minAgreement = opts.minAgreement ?? consensusConfig.minAgreement;
+    this.modelWeights = opts.modelWeights ?? consensusConfig.modelWeights ?? ModelWeights;
   }
 
   /**
-   * Calculate weighted consensus from signals
+   * Get model weight for a source.
+   *
+   * @param {string} source - Model source identifier
+   * @returns {number} Weight for the source
+   */
+  getWeight(source) {
+    return this.modelWeights[source] ?? this.modelWeights.default ?? 0.5;
+  }
+
+  /**
+   * Calculate weighted consensus from signals.
+   *
+   * @param {Array<Signal>} signals - Array of signals to calculate consensus from
+   * @returns {Object} Consensus result with consensus, confidence, method, and metadata
+   *
+   * @example
+   * const result = calc.calculate([
+   *   Signal.response('answer A', 'claude-3', 0.9),
+   *   Signal.response('answer A', 'gpt-4', 0.85)
+   * ]);
+   * console.log(result.consensus, result.confidence);
    */
   calculate(signals) {
     if (!signals || signals.length === 0) {
@@ -250,15 +312,18 @@ class ConsensusCalculator {
     let weightedConfidence = 0;
 
     for (const signal of signals) {
-      const weight = signal.weight * signal.confidence;
+      const modelWeight = this.getWeight(signal.source);
+      const weight = modelWeight * signal.confidence;
       totalWeight += weight;
       weightedConfidence += signal.confidence * weight;
     }
 
     // Use highest-weighted signal as consensus
-    const sorted = [...signals].sort((a, b) =>
-      (b.weight * b.confidence) - (a.weight * a.confidence)
-    );
+    const sorted = [...signals].sort((a, b) => {
+      const aWeight = this.getWeight(a.source) * a.confidence;
+      const bWeight = this.getWeight(b.source) * b.confidence;
+      return bWeight - aWeight;
+    });
 
     return {
       consensus: sorted[0].payload,
