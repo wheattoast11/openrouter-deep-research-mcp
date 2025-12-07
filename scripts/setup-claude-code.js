@@ -234,7 +234,7 @@ async function runFirstResearchWizard() {
 
     // Initialize database
     log('Initializing database...', COLORS.dim);
-    await dbClient.init();
+    await dbClient.initDB();
 
     // Run a quick ping
     log('Checking server connection...', COLORS.dim);

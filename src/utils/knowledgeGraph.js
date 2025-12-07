@@ -51,14 +51,14 @@ class KnowledgeGraph {
 
   async ensureSchema() {
     const db = this.dbClient;
-    if (!db || !db.executeQuery) {
-      console.error('[KnowledgeGraph] dbClient not available for schema creation');
+    if (!db || !db.executeDDL) {
+      console.error('[KnowledgeGraph] dbClient.executeDDL not available for schema creation');
       return;
     }
 
     try {
       // Graph nodes table
-      await db.executeQuery(`
+      await db.executeDDL(`
         CREATE TABLE IF NOT EXISTS graph_nodes (
           id TEXT PRIMARY KEY,
           node_type TEXT NOT NULL,
@@ -71,7 +71,7 @@ class KnowledgeGraph {
       `, []);
 
       // Graph edges table with relationship types
-      await db.executeQuery(`
+      await db.executeDDL(`
         CREATE TABLE IF NOT EXISTS graph_edges (
           id SERIAL PRIMARY KEY,
           source_id TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
@@ -85,10 +85,10 @@ class KnowledgeGraph {
       `, []);
 
       // Indexes for efficient traversal
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);`, []);
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);`, []);
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);`, []);
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(node_type);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(node_type);`, []);
 
       process.stderr.write(`[${new Date().toISOString()}] Knowledge graph schema created/verified.\n`);
     } catch (err) {

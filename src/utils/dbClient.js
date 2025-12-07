@@ -1425,7 +1425,10 @@ module.exports = {
   recordToolObservation,
   getToolMetrics,
   getConvergenceMetrics,
-  hashInput
+  hashInput,
+
+  // Internal DDL execution (for schema management, not user-facing)
+  executeDDL
 };
 
 // Function to retrieve a single report by its ID
@@ -1507,6 +1510,29 @@ async function executeQuery(sql, params = []) {
 
   logger.debug('Query executed successfully', { rowCount: result.rows.length });
   return result.rows;
+}
+
+// Function to execute DDL statements (CREATE, ALTER, DROP) for internal schema management
+// This is NOT exposed to user-facing tools - only for internal initialization
+async function executeDDL(sql, params = []) {
+  const lowerSql = sql.trim().toLowerCase();
+  const allowedPrefixes = ['create ', 'alter ', 'drop ', 'insert ', 'update ', 'delete '];
+  const isAllowed = allowedPrefixes.some(prefix => lowerSql.startsWith(prefix));
+
+  if (!isAllowed) {
+    logger.warn('Blocking non-DDL statement in executeDDL', { sql: sql.substring(0, 100) });
+    throw new Error("Only DDL statements (CREATE, ALTER, DROP) or DML (INSERT, UPDATE, DELETE) are allowed via executeDDL.");
+  }
+
+  const result = await executeWithRetry(
+    async () => {
+      return await db.query(sql, params);
+    },
+    `executeDDL("${sql.substring(0, 50)}...")`
+  );
+
+  logger.debug('DDL executed successfully');
+  return result;
 }
 
 // Function to rebuild the vector index safely

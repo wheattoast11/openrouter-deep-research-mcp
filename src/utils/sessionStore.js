@@ -180,10 +180,10 @@ class SessionManager {
   }
 
   async ensureSchema() {
-    if (!this.dbClient?.executeQuery) return;
+    if (!this.dbClient?.executeDDL) return;
 
     try {
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         CREATE TABLE IF NOT EXISTS session_events (
           id SERIAL PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -195,11 +195,11 @@ class SessionManager {
         );
       `, []);
 
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id);
       `, []);
 
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         CREATE TABLE IF NOT EXISTS sessions (
           id TEXT PRIMARY KEY,
           parent_session_id TEXT,
@@ -242,7 +242,7 @@ class SessionManager {
     this.sessions.set(sessionId, store);
 
     // Register session in database
-    await this.dbClient.executeQuery(`
+    await this.dbClient.executeDDL(`
       INSERT INTO sessions (id, metadata)
       VALUES ($1, $2)
       ON CONFLICT (id) DO UPDATE SET last_activity_at = CURRENT_TIMESTAMP
@@ -252,12 +252,12 @@ class SessionManager {
   }
 
   async persistEvents(sessionId, events) {
-    if (!this.dbClient?.executeQuery) return;
+    if (!this.dbClient?.executeDDL) return;
 
     for (let i = 0; i < events.length; i++) {
       const event = events[i];
       try {
-        await this.dbClient.executeQuery(`
+        await this.dbClient.executeDDL(`
           INSERT INTO session_events (session_id, event_index, event_type, payload)
           VALUES ($1, $2, $3, $4)
           ON CONFLICT (session_id, event_index) DO NOTHING
@@ -299,7 +299,7 @@ class SessionManager {
     store.append({ type: eventType, payload });
 
     // Update last activity
-    await this.dbClient.executeQuery(`
+    await this.dbClient.executeDDL(`
       UPDATE sessions SET last_activity_at = CURRENT_TIMESTAMP WHERE id = $1
     `, [sessionId]);
 
@@ -358,7 +358,7 @@ class SessionManager {
       this.sessions.set(newSessionId, forkedStore);
 
       // Record fork relationship in database
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         INSERT INTO sessions (id, parent_session_id, metadata)
         VALUES ($1, $2, $3)
       `, [newSessionId, sessionId, JSON.stringify({ forkedAt: new Date().toISOString() })]);

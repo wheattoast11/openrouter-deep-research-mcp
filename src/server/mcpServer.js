@@ -1183,16 +1183,33 @@ register("batch_research", batchResearchSchema, async (p, ex) => {
 // ==========================================
 
 // Session tool legacy implementations (for when handlers disabled)
+// Each method calls ensureIntegrations() to guarantee sessionManager is initialized
 const sessionLegacy = {
-  undo: async (p) => JSON.stringify(await sessionManager.undo(p.sessionId || 'default'), null, 2),
-  redo: async (p) => JSON.stringify(await sessionManager.redo(p.sessionId || 'default'), null, 2),
+  undo: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.undo(p.sessionId || 'default'), null, 2);
+  },
+  redo: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.redo(p.sessionId || 'default'), null, 2);
+  },
   fork_session: async (p) => {
+    await ensureIntegrations();
     const newId = p.newSessionId || `fork_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
     return JSON.stringify(await sessionManager.forkSession(p.sessionId || 'default', newId), null, 2);
   },
-  time_travel: async (p) => JSON.stringify(await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp), null, 2),
-  session_state: async (p) => JSON.stringify(await sessionManager.getState(p.sessionId || 'default'), null, 2),
-  checkpoint: async (p) => JSON.stringify(await sessionManager.createCheckpoint(p.sessionId || 'default', p.name), null, 2)
+  time_travel: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp), null, 2);
+  },
+  session_state: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.getState(p.sessionId || 'default'), null, 2);
+  },
+  checkpoint: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.createCheckpoint(p.sessionId || 'default', p.name), null, 2);
+  }
 };
 
 register("undo", {
@@ -1227,13 +1244,32 @@ register("checkpoint", {
 // ==========================================
 
 // Graph tool legacy implementations (for when handlers disabled)
+// Each method calls ensureIntegrations() to guarantee knowledgeGraph is initialized
 const graphLegacy = {
-  traverse: async (p) => JSON.stringify(await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic'), null, 2),
-  path: async (p) => JSON.stringify(await knowledgeGraph.findPath(p.from, p.to), null, 2),
-  clusters: async () => JSON.stringify(await knowledgeGraph.getClusters(), null, 2),
-  pagerank: async (p) => JSON.stringify(await knowledgeGraph.getPageRank(p.topK || 20), null, 2),
-  patterns: async (p) => JSON.stringify(await knowledgeGraph.findPatterns(p.n || 3), null, 2),
-  stats: async () => JSON.stringify(await knowledgeGraph.getStats(), null, 2)
+  traverse: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic'), null, 2);
+  },
+  path: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.findPath(p.from, p.to), null, 2);
+  },
+  clusters: async () => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getClusters(), null, 2);
+  },
+  pagerank: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getPageRank(p.topK || 20), null, 2);
+  },
+  patterns: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.findPatterns(p.n || 3), null, 2);
+  },
+  stats: async () => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getStats(), null, 2);
+  }
 };
 
 register("graph_traverse", {
