@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.8.0...v1.9.0) (2025-12-07)
+
+
+### Features
+
+* **v1.8.1:** Core abstractions, handler integration, and error visibility ([c686386](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/c686386b6669cb485f009193c7b80498a3c65962))
+
 ## [1.8.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.7.0...v1.8.0) (2025-12-04)
 
 
