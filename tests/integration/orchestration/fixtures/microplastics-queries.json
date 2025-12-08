@@ -1,0 +1,91 @@
+{
+  "topic": "Microplastics and Cancer Links",
+  "description": "Abductive investigation into causal pathways between microplastic exposure and carcinogenesis",
+  "queries": [
+    {
+      "id": "MECH-1",
+      "tier": "mechanistic",
+      "query": "Cellular uptake mechanisms of microplastics and nanoplastics in human tissues",
+      "costPreference": "high",
+      "expectedDomains": ["biology", "cell-biology"]
+    },
+    {
+      "id": "MECH-2",
+      "tier": "mechanistic",
+      "query": "Inflammatory response pathways triggered by microplastic exposure in mammalian cells",
+      "costPreference": "high",
+      "expectedDomains": ["immunology", "pathology"]
+    },
+    {
+      "id": "EPI-1",
+      "tier": "epidemiological",
+      "query": "Epidemiological studies linking microplastic exposure to cancer incidence in occupational settings",
+      "costPreference": "low",
+      "expectedDomains": ["epidemiology", "public-health"]
+    },
+    {
+      "id": "EPI-2",
+      "tier": "epidemiological",
+      "query": "Geographic distribution of microplastic pollution correlated with cancer rates",
+      "costPreference": "low",
+      "expectedDomains": ["epidemiology", "environmental-science"]
+    },
+    {
+      "id": "MAT-1",
+      "tier": "materials",
+      "query": "Chemical additives in plastics known to be carcinogenic or endocrine disruptors",
+      "costPreference": "low",
+      "expectedDomains": ["chemistry", "toxicology"]
+    },
+    {
+      "id": "MAT-2",
+      "tier": "materials",
+      "query": "Nanoplastic size thresholds for crossing blood-brain barrier and cell membranes",
+      "costPreference": "low",
+      "expectedDomains": ["nanoscience", "pharmacology"]
+    },
+    {
+      "id": "EME-1",
+      "tier": "emerging",
+      "query": "2024-2025 peer-reviewed research on microplastics in human blood and organs",
+      "costPreference": "high",
+      "expectedDomains": ["medicine", "research"]
+    },
+    {
+      "id": "EME-2",
+      "tier": "emerging",
+      "query": "Microplastic detection methods in biological samples: sensitivity and limitations",
+      "costPreference": "low",
+      "expectedDomains": ["analytical-chemistry", "methodology"]
+    },
+    {
+      "id": "SYS-1",
+      "tier": "systems",
+      "query": "Dose-response relationships for microplastic toxicity in animal models",
+      "costPreference": "high",
+      "expectedDomains": ["toxicology", "pharmacology"]
+    },
+    {
+      "id": "SYS-2",
+      "tier": "systems",
+      "query": "Regulatory frameworks and safety thresholds for microplastic exposure globally",
+      "costPreference": "low",
+      "expectedDomains": ["policy", "regulation"]
+    }
+  ],
+  "expectedCorrelations": [
+    "inflammation",
+    "cellular",
+    "exposure",
+    "toxicity",
+    "cancer",
+    "plastic",
+    "health"
+  ],
+  "testMetrics": {
+    "minReports": 5,
+    "minConsensusConfidence": 0.6,
+    "maxTotalTimeMs": 600000,
+    "minParallelSpeedup": 3
+  }
+}
