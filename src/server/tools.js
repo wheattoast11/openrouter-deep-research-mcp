@@ -18,6 +18,7 @@ const structuredDataParser = require('../utils/structuredDataParser');
 const advancedCache = require('../utils/advancedCache');
 const robustWebScraper = require('../utils/robustWebScraper');
 const logger = require('../utils/logger').child('Tools');
+const { normalize: coreNormalize, GLOBAL_ALIASES } = require('../core/normalize');
 const robustScraperInstance = new robustWebScraper();
 
 // ===== RECURSIVE TOOL EXECUTION =====
@@ -119,21 +120,21 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
   }
 }
 
-// Compact param normalization for conduct_research
+// Compact param normalization - delegates to core/normalize.js
+// Handles: q, cost, aud, fmt, src, imgs, docs, data aliases
 function normalizeResearchParams(params) {
   if (!params || typeof params !== 'object') return params;
   // Only apply when simpleTools enabled (default true)
   try { if (require('../../config').simpleTools?.enabled === false) return params; } catch (_) {}
-  const out = { ...params };
-  if (out.q && !out.query) out.query = out.q;
-  if (out.cost && !out.costPreference) out.costPreference = out.cost;
-  if (out.aud && !out.audienceLevel) out.audienceLevel = out.aud;
-  if (out.fmt && !out.outputFormat) out.outputFormat = out.fmt;
-  if (typeof out.src === 'boolean' && out.includeSources === undefined) out.includeSources = out.src;
-  if (Array.isArray(out.imgs) && !out.images) out.images = out.imgs;
+
+  // Use core normalize for alias mapping
+  const out = coreNormalize('research', params);
+
+  // Handle complex transformations for docs/data arrays (not covered by core aliases)
   if (out.docs && !out.textDocuments) {
     if (Array.isArray(out.docs)) {
       out.textDocuments = out.docs.map((d, i) => typeof d === 'string' ? ({ name: `doc_${i+1}.txt`, content: d }) : d);
+      delete out.docs;
     }
   }
   if (out.data && !out.structuredData) {
@@ -142,6 +143,7 @@ function normalizeResearchParams(params) {
         if (typeof d === 'string') return ({ name: `data_${i+1}.json`, type: 'json', content: d });
         return d;
       });
+      delete out.data;
     }
   }
   return out;
@@ -298,12 +300,10 @@ const conductResearchSchemaBase = z.object({
   _requestId: z.string().optional().describe("Internal request ID for logging")
 });
 
-// Helper to normalize research params (q->query, cost->costPreference)
+// Helper to normalize research params - delegates to core/normalize.js
+// Zod transform wrapper for schema validation
 function normalizeResearchInputSchema(data) {
-  const result = { ...data };
-  if (result.q && !result.query) result.query = result.q;
-  if (result.cost && !result.costPreference) result.costPreference = result.cost;
-  return result;
+  return coreNormalize('research', data);
 }
 
 // Schema with transform for validation (used for conductResearch which is sync)

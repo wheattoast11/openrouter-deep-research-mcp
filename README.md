@@ -1,7 +1,8 @@
 # OpenRouter Agents MCP Server
 
 [![npm](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents)
-[![MCP](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://spec.modelcontextprotocol.io/specification/2025-06-18/)
+[![MCP Stable](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://spec.modelcontextprotocol.io/specification/2025-06-18/)
+[![MCP Draft](https://img.shields.io/badge/MCP-2025--11--25%20Draft-brightgreen)](docs/MCP-COMPLIANCE-REPORT.md)
 [![GitHub](https://img.shields.io/github/stars/terminals-tech/openrouter-agents?style=social)](https://github.com/terminals-tech/openrouter-agents)
 
 Production MCP server for multi-agent AI research. Plan, parallelize, synthesize.

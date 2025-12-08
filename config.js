@@ -244,20 +244,20 @@ config.caching = {
 
 // Core abstractions (Convergence Plan v2.0)
 config.core = {
-  // Enable new consolidated handlers (gradual migration)
+  // Enable new consolidated handlers (enabled by default since v1.9.0)
   handlers: {
-    enabled: process.env.CORE_HANDLERS_ENABLED === 'true',
+    enabled: process.env.CORE_HANDLERS_ENABLED !== 'false',
     // Which domains use new handlers (others fall back to tools.js)
     domains: (process.env.CORE_HANDLER_DOMAINS || '').split(',').filter(Boolean)
   },
-  // Signal protocol configuration
+  // Signal protocol configuration (enabled by default since v1.9.0)
   signal: {
-    enabled: process.env.SIGNAL_PROTOCOL_ENABLED === 'true',
+    enabled: process.env.SIGNAL_PROTOCOL_ENABLED !== 'false',
     maxHistorySize: parseInt(process.env.SIGNAL_MAX_HISTORY, 10) || 1000
   },
-  // RoleShift bidirectional protocol
+  // RoleShift bidirectional protocol (enabled by default since v1.9.0)
   roleShift: {
-    enabled: process.env.ROLESHIFT_ENABLED === 'true',
+    enabled: process.env.ROLESHIFT_ENABLED !== 'false',
     timeout: parseInt(process.env.ROLESHIFT_TIMEOUT_MS, 10) || 60000
   },
   // Schema registry options
@@ -271,7 +271,16 @@ config.version = pkg.version;
 config.mcpSpec = {
   stable: '2025-06-18',
   draft: '2025-11-25',
-  features: ['SEP-1686', 'SEP-1577', 'SEP-1036', 'SEP-1865']
+  // All 8 SEPs from MCP 2025-11-25 draft + RoleShift
+  features: [
+    'SEP-1686',  // Task Protocol
+    'SEP-1577',  // Sampling with Tools
+    'SEP-1036',  // URL Mode Elicitation
+    'SEP-1865',  // MCP Apps (UI Resources)
+    'SEP-990',   // Enterprise Auth (ID-JAG, Token Exchange)
+    'SEP-991',   // Client Metadata (CIMD)
+    'SEP-1649'   // Server Discovery (.well-known/mcp-server)
+  ]
 };
 
 module.exports = config;

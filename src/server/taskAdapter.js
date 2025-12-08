@@ -151,10 +151,17 @@ class TaskAdapter {
       } catch (_) {}
     }
 
+    // Wrap result in MCP tool result format with content array
+    const isError = job.status === 'failed';
+    const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+
     return {
       taskId,
       status: JOB_STATUS_TO_TASK_STATE[job.status],
-      result: result,
+      result: {
+        content: [{ type: 'text', text: resultText }],
+        isError
+      },
       completedAt: job.finished_at ? new Date(job.finished_at).toISOString() : new Date().toISOString()
     };
   }
@@ -295,6 +302,7 @@ class TaskAdapter {
 
   /**
    * Emit a task notification (for server to send to client)
+   * Uses MCP standard notifications/progress method with taskId as progressToken
    * @param {string} taskId - Task ID
    * @param {string} eventType - Event type
    * @param {Object} payload - Event payload
@@ -302,11 +310,14 @@ class TaskAdapter {
    */
   createTaskNotification(taskId, eventType, payload = {}) {
     return {
-      method: 'notifications/tasks/' + eventType,
+      method: 'notifications/progress',
       params: {
-        taskId,
-        timestamp: new Date().toISOString(),
-        ...payload
+        progressToken: taskId,
+        progress: {
+          eventType,
+          timestamp: new Date().toISOString(),
+          ...payload
+        }
       }
     };
   }
