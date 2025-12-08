@@ -7,17 +7,30 @@ const config = require('../../config');
 let EventStore;
 let coreInitialized = false;
 
-// Lazy load @terminals-tech/core
+// Lazy load @terminals-tech/core EventStore directly from core module
+// This avoids importing the React adapter which has peer dependency on react
 async function initCoreModule() {
   if (coreInitialized) return true;
   try {
-    const coreModule = await import('@terminals-tech/core');
-    EventStore = coreModule.EventStore;
+    // Import directly from core module to avoid React adapter dependency
+    const { EventStore: ES } = await import('@terminals-tech/core/dist/core/EventStore.js');
+    EventStore = ES;
     coreInitialized = true;
-    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/core initialized successfully.\n`);
+    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/core EventStore initialized successfully.\n`);
     return true;
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Failed to initialize @terminals-tech/core:`, err);
+    // Fallback: try main module if direct import fails
+    try {
+      const coreModule = await import('@terminals-tech/core');
+      EventStore = coreModule.default?.EventStore || coreModule.EventStore;
+      if (EventStore) {
+        coreInitialized = true;
+        process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/core initialized via fallback.\n`);
+        return true;
+      }
+    } catch (fallbackErr) {
+      console.error(`[${new Date().toISOString()}] Failed to initialize @terminals-tech/core:`, err.message);
+    }
     return false;
   }
 }

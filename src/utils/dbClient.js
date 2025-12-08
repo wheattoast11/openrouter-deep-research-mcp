@@ -1417,6 +1417,7 @@ module.exports = {
 
   // Query execution
   executeQuery,
+  query: executeQuery,  // Alias for backwards compatibility with handlers
   reindexVectors,
   generateEmbedding,
 
