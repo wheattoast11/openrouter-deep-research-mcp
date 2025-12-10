@@ -18,12 +18,12 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## What's New (v1.9.0)
+## What's New (v1.9.1)
 
-- **Documentation overhaul** - Unified structure, fixed outdated references
-- **MCP Spec 2025-06-18** - Full compliance with current stable spec
-- **SEP-990/991** - Enterprise auth and client metadata support
-- **CI/CD automation** - npm test, prepublishOnly hooks, release-please
+- **Parameter normalization** - Unified alias system (taskId → job_id, q → query)
+- **Semantic error messages** - Rust-style diagnostics with actionable suggestions
+- **Progress notifications** - Real-time job updates via MCP notifications/progress
+- **Token-efficient slash commands** - Streamlined Claude Code integrations
 
 [Full Changelog](docs/CHANGELOG.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 
@@ -242,4 +242,4 @@ npm publish --access public        # Publish to npm
 
 ---
 
-**Version:** 1.9.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
+**Version:** 1.9.1 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT

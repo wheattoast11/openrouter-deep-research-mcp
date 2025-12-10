@@ -353,7 +353,7 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 1.9.0
+- **Server Version**: 1.9.1
 - **MCP SDK**: 1.21.1
 - **MCP Spec (Stable)**: 2025-06-18 - Fully compliant
 - **MCP Spec (Draft)**: 2025-11-25 - Forward-compatible features

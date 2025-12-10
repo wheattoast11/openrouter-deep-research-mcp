@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.9.1 — 2025-12-10
+
+### UX Improvements
+
+#### Parameter Normalization (Phase 1)
+- **Unified alias system** - Single `normalize()` function replaces 10+ scattered normalizers
+- **MCP Task Protocol compatibility** - `taskId` → `job_id` aliasing for backward compat
+- **Global aliases** - `q` → `query`, `k` → `limit`, `cost` → `costPreference`
+- **Tool-specific aliases** - Consistent canonical forms per domain
+
+#### Semantic Borrow Checker (Phase 2)
+- **Rust-style error diagnostics** - Tree-formatted error messages with hints
+- **ID type confusion detection** - Detects job_id vs reportId misuse
+- **Actionable fix suggestions** - Shows exact tool calls to resolve issues
+- **New `src/utils/diagnostics.js`** - DiagnosticContext and formatSemanticError
+
+#### Server→Client Push Notifications (Phase 3)
+- **ProgressNotifier class** - Unified progress notification dispatch
+- **Phase tracking** - `planning` → `researching` → `synthesizing` → `complete`
+- **MCP 2025-11-25 compliance** - Uses `notifications/progress` with progressToken
+- **New `src/server/progressNotifier.js`** - Real-time job updates
+
+#### Token-Efficient Slash Commands (Phase 4)
+- **Streamlined `.claude/commands/*.md`** - Reduced token usage
+- **New `/mcp-job-to-report`** - Converts job_id to reportId workflow
+
+### Bug Fixes
+- **task_result succeeded status** - Now correctly returns results for 'succeeded' jobs
+- **Terminal state detection** - Handles `succeeded`, `failed`, `canceled`, `complete`
+- **Auth documentation** - Clarified that auth is OPTIONAL for basic usage
+
+---
+
 ## v1.9.0 — 2025-12-07
 
 ### Documentation Overhaul

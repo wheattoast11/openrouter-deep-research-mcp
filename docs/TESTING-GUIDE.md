@@ -1,7 +1,7 @@
 # Testing Guide: OpenRouter Agents
 
 **Package:** @terminals-tech/openrouter-agents
-**Version:** 1.8.0
+**Version:** 1.9.1
 **Date:** December 5, 2025
 
 ---
@@ -66,8 +66,8 @@ npm unlink -g @terminals-tech/openrouter-agents
 ### Option 3: Direct npx (After npm publish)
 
 ```bash
-# Once v1.8.0 is published to npm
-npx @terminals-tech/openrouter-agents@1.8.0 --stdio
+# Once v1.9.1 is published to npm
+npx @terminals-tech/openrouter-agents@1.9.1 --stdio
 ```
 
 ---
@@ -88,7 +88,7 @@ curl http://localhost:3002/.well-known/mcp-server | jq
 # Expected response:
 # {
 #   "name": "openrouter-agents",
-#   "version": "1.8.0",
+#   "version": "1.9.1",
 #   "specification": "2025-06-18",
 #   "specificationDraft": "2025-11-25",
 #   "capabilities": { ... },
@@ -104,7 +104,7 @@ curl http://localhost:3002/.well-known/mcp-server | jq
 
 **What to verify:**
 - ✅ Returns 200 OK
-- ✅ Contains `version: "1.8.0"`
+- ✅ Contains `version: "1.9.1"`
 - ✅ Shows `specificationDraft: "2025-11-25"`
 - ✅ Lists all three extensions
 - ✅ No authentication required
@@ -118,7 +118,7 @@ curl http://localhost:3002/health | jq
 # Expected response:
 # {
 #   "status": "healthy",
-#   "version": "1.8.0",
+#   "version": "1.9.1",
 #   "timestamp": "2025-11-12T...",
 #   "checks": {
 #     "database": "ok",
@@ -318,7 +318,7 @@ Use this checklist to verify all features:
 - [ ] Prompts API returns 3 prompts
 - [ ] Progress notifications stream correctly
 
-### New Features (v1.8.0)
+### New Features (v1.9.1)
 - [ ] `/.well-known/mcp-server` returns discovery info
 - [ ] `/health` endpoint works (no auth)
 - [ ] Extension metadata present in discovery
@@ -422,7 +422,7 @@ node -e "require('./src/utils/dbClient').initializeDb()"
 
 When reporting issues, include:
 
-1. **Version:** 1.8.0
+1. **Version:** 1.9.1
 2. **Branch:** `claude/mcp-compliance-review-hardening-011CV4DVd434Mj4UvYfrW9C3`
 3. **Environment:**
    - Node version: `node --version`
