@@ -65,16 +65,36 @@ async function getJobStatus(params, dbClient) {
     finished_at: job.finished_at
   };
 
-  // Add summary message
-  if (job.status === 'complete') {
+  // Add summary message and extract reportId for completed jobs
+  if (job.status === 'complete' || job.status === 'succeeded') {
     result.message = 'Job completed successfully';
+
+    // Extract reportId as first-class field using multiple strategies
+    let reportId = null;
+
     if (job.result) {
-      // Extract report ID if present
-      const reportMatch = job.result.match(/Report ID:\s*(\d+)/);
-      if (reportMatch) {
-        result.reportId = reportMatch[1];
-        result.hint = `Use get_report({ reportId: "${reportMatch[1]}" }) to retrieve the full report`;
+      // Strategy 1: Try parsing as JSON and look for reportId/report_id fields
+      try {
+        const parsed = typeof job.result === 'string' ? JSON.parse(job.result) : job.result;
+        reportId = parsed?.reportId || parsed?.report_id || parsed?.id;
+      } catch (_) {}
+
+      // Strategy 2: Regex extraction from message format
+      if (!reportId) {
+        const reportMatch = String(job.result).match(/Report ID:\s*(\d+)/i);
+        if (reportMatch) reportId = reportMatch[1];
       }
+
+      // Strategy 3: Check for numeric-only result (direct ID)
+      if (!reportId && /^\d+$/.test(String(job.result).trim())) {
+        reportId = String(job.result).trim();
+      }
+    }
+
+    if (reportId) {
+      result.reportId = reportId;
+      result.nextStep = `get_report({ reportId: "${reportId}" })`;
+      result.hint = `Use get_report({ reportId: "${reportId}" }) to retrieve the full report`;
     }
   } else if (job.status === 'failed') {
     result.message = 'Job failed';
@@ -190,7 +210,9 @@ async function getJobResult(params, dbClient) {
     return { job_id: jobId, error: 'Job not found' };
   }
 
-  if (job.status !== 'complete') {
+  // Check for terminal states (succeeded, failed, canceled, complete)
+  const terminalStates = ['succeeded', 'failed', 'canceled', 'complete'];
+  if (!terminalStates.includes(job.status)) {
     return {
       job_id: jobId,
       status: job.status,
@@ -199,12 +221,39 @@ async function getJobResult(params, dbClient) {
     };
   }
 
-  return {
+  // Extract reportId from result
+  let reportId = null;
+  let result = job.result;
+
+  // Try to parse result if it's a JSON string
+  if (typeof result === 'string') {
+    try {
+      const parsed = JSON.parse(result);
+      reportId = parsed?.reportId || parsed?.report_id || parsed?.id;
+      result = parsed;
+    } catch (_) {
+      // Try regex extraction from string result
+      const match = result.match(/Report ID:\s*(\d+)/i);
+      if (match) reportId = match[1];
+    }
+  } else if (result) {
+    reportId = result?.reportId || result?.report_id || result?.id;
+  }
+
+  const response = {
     job_id: jobId,
-    status: 'complete',
-    result: job.result,
+    status: job.status === 'succeeded' ? 'completed' : job.status,
+    result: result,
     finished_at: job.finished_at
   };
+
+  // Add first-class reportId and nextStep guidance
+  if (reportId) {
+    response.reportId = reportId;
+    response.nextStep = `get_report({ reportId: "${reportId}" })`;
+  }
+
+  return response;
 }
 
 /**

@@ -1,17 +1,20 @@
-# MCP Async Research Workflow
+# MCP Async Research
 
-Submit a research query asynchronously and monitor progress.
+Submit research asynchronously. Returns job_id for tracking.
 
-## Instructions
+## Steps
 
-1. Submit the research using `mcp__openrouter-agents__research` with:
-   - `query`: The user's research topic
-   - `async`: true (will return a job_id)
-2. Note the job_id from the response
-3. Poll `mcp__openrouter-agents__job_status` with the job_id every few seconds
-4. When status shows "completed", extract the report ID from the result
-5. Retrieve the full report using `mcp__openrouter-agents__get_report`
-6. Present the findings with citations
+1. `research({ query: "$ARGUMENTS", async: true })` -> note `job_id`
+2. `job_status({ job_id: "<id>" })` -> check status
+3. When status="succeeded", extract `reportId` from response
+4. `get_report({ reportId: "<id>" })` -> full report
 
-## Research Query
+## Key Points
+
+- job_id format: `job_<timestamp>_<random>` (e.g., job_1234567890_abc123)
+- reportId format: numeric (e.g., "5", "42")
+- Do NOT pass job_id to get_report - extract reportId first
+- Real-time progress via SSE: `sse_url` in initial response
+
+## Query
 $ARGUMENTS

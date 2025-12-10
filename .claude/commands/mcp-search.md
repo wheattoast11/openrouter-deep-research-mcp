@@ -1,15 +1,20 @@
-# MCP Knowledge Base Search
+# MCP Search
 
-Search the existing knowledge base for relevant information.
+Search existing knowledge base (reports + docs).
 
-## Instructions
+## Steps
 
-1. Use `mcp__openrouter-agents__search` with:
-   - `q`: The user's search query
-   - `k`: 10 (number of results)
-   - `scope`: "both" (search reports and documents)
-2. Review the results and summarize relevant findings
-3. If the user wants more detail on a specific report, use `mcp__openrouter-agents__get_report` with the reportId
+1. `search({ q: "$ARGUMENTS", k: 10, scope: "both" })`
+2. Summarize matches with relevance scores
+3. For details: `get_report({ reportId: "<id>" })`
 
-## Search Query
+## Options
+
+| Param | Values | Default |
+|-------|--------|---------|
+| k | 1-100 | 10 |
+| scope | "both", "reports", "docs" | both |
+| rerank | true/false | false |
+
+## Query
 $ARGUMENTS

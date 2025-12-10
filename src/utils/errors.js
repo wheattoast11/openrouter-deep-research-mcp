@@ -205,6 +205,41 @@ class EmbedderNotReadyError extends MCPError {
 }
 
 /**
+ * Validation error with diagnostic context
+ * Used for parameter validation failures with rich error guidance
+ */
+class ValidationError extends MCPError {
+  constructor(message, diagnostic = {}) {
+    super(message, {
+      category: ErrorCategory.VALIDATION,
+      code: 'VALIDATION_ERROR',
+      isRetryable: false,
+      context: diagnostic
+    });
+    this.name = 'ValidationError';
+    this.expected = diagnostic.expected || null;
+    this.provided = diagnostic.provided || null;
+    this.suggestions = diagnostic.suggestions || [];
+  }
+}
+
+/**
+ * Parameter mismatch error - wrong type of ID or format provided
+ * Captures what was provided vs expected with fix suggestions
+ */
+class ParameterMismatchError extends ValidationError {
+  constructor(paramName, provided, expected, suggestions = []) {
+    super(`Parameter ${paramName}: expected ${expected}, got "${provided}"`, {
+      expected,
+      provided,
+      suggestions
+    });
+    this.name = 'ParameterMismatchError';
+    this.paramName = paramName;
+  }
+}
+
+/**
  * Classify API errors based on status code and response
  */
 function classifyAPIError(statusCode, responseBody) {
@@ -370,6 +405,8 @@ module.exports = {
   InitializationError,
   RetryExhaustedError,
   EmbedderNotReadyError,
+  ValidationError,
+  ParameterMismatchError,
   classifyAPIError,
   inferCategory,
   wrapError,

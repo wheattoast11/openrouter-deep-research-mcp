@@ -34,6 +34,13 @@ const elicitationHandler = require('./elicitation');
 // Structured logging (MCP-compliant)
 const logger = require('../utils/logger');
 
+// Semantic error diagnostics (Rust-inspired)
+const {
+  createDiagnosticContext,
+  validateWithDiagnostics,
+  formatSemanticError
+} = require('../utils/diagnostics');
+
 const { 
   // Schemas
   conductResearchSchema,
@@ -455,11 +462,30 @@ async function routeThroughHandler(toolName, params, context) {
  * Wrap a legacy tool with handler routing
  * When CORE_HANDLERS_ENABLED=true, routes through handlers first
  * Falls back to legacy implementation if handlers unavailable or for LEGACY_ONLY_TOOLS
+ *
+ * Includes semantic error formatting (Rust-inspired "borrow checker" style)
+ * for actionable error messages that guide users to correct usage.
  */
 function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
   return async (params, exchange, requestId = `req-${Date.now()}`) => {
+    // Create diagnostic context at the start for rich error formatting
+    const diagnosticCtx = createDiagnosticContext(toolName, params);
+
     try {
-      const norm = needsNormalization ? normalizeParamsForTool(toolName, params) : params;
+      // Run tool-specific validation with diagnostics
+      const validation = validateWithDiagnostics(toolName, params);
+      if (!validation.valid) {
+        const formatted = formatSemanticError(toolName, new Error(validation.error), validation.ctx);
+        return {
+          content: [{ type: 'text', text: formatted }],
+          isError: true
+        };
+      }
+
+      // Use normalized params from validator if available, otherwise normalize
+      const norm = validation.normalized
+        ? { ...params, ...validation.normalized }
+        : (needsNormalization ? normalizeParamsForTool(toolName, params) : params);
 
       // Try handler routing for non-legacy tools
       if (handlers && !LEGACY_ONLY_TOOLS.has(toolName)) {
@@ -472,8 +498,10 @@ function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
       const text = await legacyFn(norm, exchange, requestId);
       return { content: [{ type: 'text', text }] };
     } catch (e) {
+      // Format error with semantic diagnostics
+      const formatted = formatSemanticError(toolName, e, diagnosticCtx);
       return {
-        content: [{ type: 'text', text: `Error ${toolName}: ${e.message}` }],
+        content: [{ type: 'text', text: formatted }],
         isError: true
       };
     }
@@ -1300,24 +1328,33 @@ register("graph_stats", {}, wrapWithHandler('graph_stats', graphLegacy.stats, fa
 // ==========================================
 
 // Task Protocol Tools (SEP-1686)
+// Note: taskId is accepted for backward compatibility but job_id is the canonical form
+// after normalization. The normalize.js TOOL_ALIASES converts taskId -> job_id.
 const taskLegacy = {
-  get: async (p) => JSON.stringify(await taskAdapter.getTask(p.taskId), null, 2),
-  result: async (p) => JSON.stringify(await taskAdapter.getTaskResult(p.taskId), null, 2),
-  cancel: async (p) => JSON.stringify(await taskAdapter.cancelTask(p.taskId), null, 2),
+  get: async (p) => JSON.stringify(await taskAdapter.getTask(p.job_id || p.taskId), null, 2),
+  result: async (p) => JSON.stringify(await taskAdapter.getTaskResult(p.job_id || p.taskId), null, 2),
+  cancel: async (p) => JSON.stringify(await taskAdapter.cancelTask(p.job_id || p.taskId), null, 2),
   list: async (p) => JSON.stringify(await taskAdapter.listTasks(p.cursor, p.limit || 20), null, 2)
 };
 
-register("task_get", { taskId: z.string().describe("Task/job ID to retrieve") },
-  wrapWithHandler('task_get', taskLegacy.get, false));
+// Accept both job_id (canonical) and taskId (backward compat) in schema
+register("task_get", {
+  job_id: z.string().optional().describe("Job ID to retrieve (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_get', taskLegacy.get, true));  // Enable normalization
 
-register("task_result", { taskId: z.string().describe("Task/job ID to get result for") },
-  wrapWithHandler('task_result', taskLegacy.result, false));
+register("task_result", {
+  job_id: z.string().optional().describe("Job ID to get result for (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_result', taskLegacy.result, true));  // Enable normalization
 
-register("task_cancel", { taskId: z.string().describe("Task/job ID to cancel") },
-  wrapWithHandler('task_cancel', taskLegacy.cancel, false));
+register("task_cancel", {
+  job_id: z.string().optional().describe("Job ID to cancel (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_cancel', taskLegacy.cancel, true));  // Enable normalization
 
 register("task_list", { cursor: z.string().optional(), limit: z.number().optional() },
-  wrapWithHandler('task_list', taskLegacy.list, false));
+  wrapWithHandler('task_list', taskLegacy.list, true));  // Enable normalization for consistency
 
 // Sampling with Tools (SEP-1577)
 register("sample_message", {
@@ -1399,6 +1436,9 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   const jwksUrl = process.env.AUTH_JWKS_URL || null;
   const expectedAudience = process.env.AUTH_EXPECTED_AUD || 'mcp-server';
 
+  // Supabase auth for terminals.tech OAuth (Google/GitHub)
+  const supabaseAuth = require('./auth/supabaseAuth');
+
   app.use(cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'], allowedHeaders: ['Content-Type', 'authorization', 'mcp-session-id'] }));
 
   // Rate limiting middleware - production hardening
@@ -1423,7 +1463,7 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
     });
   }
     
-  // Authentication Middleware (JWT first, fallback API key if configured)
+  // Authentication Middleware (Supabase JWT → Enterprise JWT → API key)
   const authenticate = async (req, res, next) => {
     const allowNoAuth = process.env.ALLOW_NO_API_KEY === 'true';
     const authHeader = req.headers.authorization || '';
@@ -1432,6 +1472,20 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
       return res.status(401).json({ error: 'Unauthorized: Missing bearer token' });
     }
     const token = authHeader.split(' ')[1];
+
+    // 1. Try Supabase auth first (terminals.tech Google/GitHub OAuth)
+    if (supabaseAuth.isEnabled()) {
+      try {
+        const user = await supabaseAuth.validateToken(token);
+        req.user = user;
+        req.userId = user.userId;
+        return next();
+      } catch (e) {
+        // Fall through to other auth methods
+      }
+    }
+
+    // 2. Try enterprise JWKS auth
     if (jwksUrl) {
       try {
         // Lazy import jose to keep dep optional
@@ -1443,26 +1497,31 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         }
         return next();
       } catch (e) {
-        if (!serverApiKey) {
+        if (!serverApiKey && !supabaseAuth.isEnabled()) {
           return res.status(403).json({ error: 'Forbidden: JWT verification failed' });
         }
         // Fall through to API key if configured
       }
     }
+
+    // 3. Try API key auth
     if (serverApiKey && token === serverApiKey) return next();
     if (allowNoAuth) return next();
     return res.status(403).json({ error: 'Forbidden: Auth failed' });
   };
  
   logger.info('Starting MCP server with HTTP/SSE transport', { port });
+  if (supabaseAuth.isEnabled()) {
+    logger.info('Supabase auth enabled (terminals.tech OAuth)', { providers: ['google', 'github'] });
+  }
   if (jwksUrl) {
-    logger.info('OAuth2/JWT auth enabled', { jwksUrl, audience: expectedAudience });
+    logger.info('Enterprise JWT auth enabled', { jwksUrl, audience: expectedAudience });
   } else if (serverApiKey) {
     logger.info('API key fallback enabled for HTTP transport');
   } else if (process.env.ALLOW_NO_API_KEY === 'true') {
     logger.warn('Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true)');
-  } else {
-    logger.error('SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail');
+  } else if (!supabaseAuth.isEnabled()) {
+    logger.error('No auth configured. Set SUPABASE_JWT_SECRET or SERVER_API_KEY');
   }
   
   // Streamable HTTP transport (preferred) guarded by feature flag
@@ -1740,6 +1799,103 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
          timestamp: new Date().toISOString()
        });
      }
+   });
+
+   // Auth configuration endpoint for clients (no auth required)
+   // Tells clients how to authenticate with this server
+   app.get('/auth/config', (req, res) => {
+     res.json({
+       supabase: supabaseAuth.getAuthConfig(),
+       enterprise: {
+         enabled: !!jwksUrl,
+         jwksUrl: jwksUrl || null
+       },
+       apiKey: {
+         enabled: !!serverApiKey
+       },
+       instructions: supabaseAuth.isEnabled()
+         ? 'Login at terminals.tech with Google or GitHub. Use the returned access_token in Authorization: Bearer <token>'
+         : jwksUrl
+           ? 'Use enterprise SSO JWT in Authorization: Bearer <token>'
+           : serverApiKey
+             ? 'Use SERVER_API_KEY in Authorization: Bearer <key>'
+             : 'No authentication configured'
+     });
+   });
+
+   // OAuth redirect helper - redirects to terminals.tech login
+   app.get('/auth/login/:provider', (req, res) => {
+     const { provider } = req.params;
+     const redirectTo = req.query.redirect_to || `${req.protocol}://${req.get('host')}/auth/callback`;
+
+     if (!supabaseAuth.isEnabled()) {
+       return res.status(400).json({ error: 'Supabase auth not configured' });
+     }
+
+     if (!['google', 'github'].includes(provider)) {
+       return res.status(400).json({ error: 'Invalid provider. Use google or github' });
+     }
+
+     try {
+       const loginUrl = supabaseAuth.getOAuthUrl(provider, redirectTo);
+       res.redirect(loginUrl);
+     } catch (e) {
+       res.status(500).json({ error: e.message });
+     }
+   });
+
+   // Callback handler - displays token for user to copy
+   app.get('/auth/callback', (req, res) => {
+     // Supabase redirects with tokens in URL hash (client-side)
+     // This page extracts them and displays for MCP client setup
+     res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>terminals.tech MCP Auth</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+    .token { background: #f0f0f0; padding: 10px; border-radius: 4px; word-break: break-all; font-family: monospace; font-size: 12px; }
+    .success { color: #22c55e; }
+    .error { color: #ef4444; }
+    button { margin-top: 10px; padding: 8px 16px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>terminals.tech MCP Authentication</h1>
+  <div id="result"></div>
+  <script>
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const accessToken = params.get('access_token');
+    const error = params.get('error_description') || params.get('error');
+
+    const result = document.getElementById('result');
+    if (accessToken) {
+      result.innerHTML = \`
+        <p class="success">Authentication successful!</p>
+        <p>Your access token (copy this for MCP client):</p>
+        <div class="token" id="token">\${accessToken}</div>
+        <button onclick="navigator.clipboard.writeText(document.getElementById('token').textContent)">Copy Token</button>
+        <p style="margin-top: 20px;">Use this in your MCP client configuration:</p>
+        <pre>Authorization: Bearer \${accessToken.substring(0, 20)}...</pre>
+      \`;
+    } else if (error) {
+      result.innerHTML = \`<p class="error">Error: \${error}</p>\`;
+    } else {
+      result.innerHTML = '<p>Waiting for authentication...</p>';
+    }
+  </script>
+</body>
+</html>`);
+   });
+
+   // Verify token endpoint - check if a token is valid
+   app.get('/auth/verify', authenticate, (req, res) => {
+     res.json({
+       valid: true,
+       user: req.user || null,
+       userId: req.userId || null
+     });
    });
 
    // Server discovery endpoint for MCP clients (SEP-1649 Server Cards)

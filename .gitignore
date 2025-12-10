@@ -48,3 +48,12 @@ researchAgentDB/
 .cache/
 .temp/
 .tmp/
+
+# Research outputs (generated artifacts)
+research_outputs/
+
+# Local binaries
+cloudflared/
+
+# Browser experiments (WIP)
+src/browser/

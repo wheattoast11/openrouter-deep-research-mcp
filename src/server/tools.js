@@ -19,6 +19,7 @@ const advancedCache = require('../utils/advancedCache');
 const robustWebScraper = require('../utils/robustWebScraper');
 const logger = require('../utils/logger').child('Tools');
 const { normalize: coreNormalize, GLOBAL_ALIASES } = require('../core/normalize');
+const { createNotifier, createNoOpNotifier } = require('./progressNotifier');
 const robustScraperInstance = new robustWebScraper();
 
 // ===== RECURSIVE TOOL EXECUTION =====
@@ -413,6 +414,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
     }
   };
 
+  // Create progress notifier for MCP 2025-11-25 push notifications
+  const notifier = mcpExchange ? createNotifier(mcpExchange, requestId, dbClient) : createNoOpNotifier();
+
   // Try semantic cache first (with strict similarity validation)
   try {
     const similarCache = await advancedCache.findSimilarResult(query, {
@@ -644,6 +648,13 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         const stagePrefixPlan = `Stage ${currentStageBase + 1}/${totalStages}`;
         logger.debug('Planning research', { requestId, stage: stagePrefixPlan, iteration: currentIteration, mode: previousResultsForRefinement ? 'refining' : 'planning' });
 
+        // Notify: Planning phase started
+        await notifier.phaseStarted('planning', {
+          query: safeSubstring(query, 0, 100),
+          iteration: currentIteration,
+          mode: previousResultsForRefinement ? 'refining' : 'planning'
+        });
+
         // Pass images, documents, structuredData, and past reports to the planning agent
         planningResultXml = await planningAgent.planResearch(
         query,
@@ -662,6 +673,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         );
         const planningDuration = Date.now() - planningStartTime;
         logger.debug('Planning completed', { requestId, stage: stagePrefixPlan, durationMs: planningDuration });
+
+        // Notify: Planning phase completed
+        await notifier.phaseComplete('planning', { durationMs: planningDuration });
       } catch (planningError) {
          logger.error('Error during planning/refinement', { requestId, error: planningError });
          throw new Error(`[${requestId}] Failed during planning agent call: ${planningError.message}`);
@@ -709,6 +723,14 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         const researchStartTime = Date.now();
         const stagePrefixResearch = `Stage ${currentStageBase + 3}/${totalStages}`;
         logger.info('Conducting parallel research', { requestId, stage: stagePrefixResearch, iteration: currentIteration, agentCount: currentAgentQueries.length });
+
+        // Notify: Researching phase started
+        await notifier.phaseStarted('researching', {
+          iteration: currentIteration,
+          agentCount: currentAgentQueries.length,
+          queries: currentAgentQueries.map(q => safeSubstring(q.query, 0, 50))
+        });
+
         // Pass images, documents, structuredData, inputEmbeddings, and requestId down to parallel research
         currentResearchResults = await researchAgent.conductParallelResearch(
            currentAgentQueries,
@@ -723,6 +745,15 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         );
         const researchDuration = Date.now() - researchStartTime;
         logger.info('Parallel research completed', { requestId, stage: stagePrefixResearch, durationMs: researchDuration });
+
+        // Notify: Researching phase completed
+        await notifier.phaseComplete('researching', {
+          iteration: currentIteration,
+          agentCount: currentResearchResults.length,
+          durationMs: researchDuration,
+          successCount: currentResearchResults.filter(r => !r.error).length,
+          errorCount: currentResearchResults.filter(r => r.error).length
+        });
       } catch (researchError) {
         // This catch block might be less necessary now with Promise.allSettled inside conductParallelResearch,
         // but kept for safety in case the call itself fails.
@@ -773,11 +804,18 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
     // Step 4 (Final Synthesis): Contextualize ALL accumulated results
     let finalReportContent = '';
     let streamError = null;
+    let synthesisTokenCount = 0;
     try {
       const contextStartTime = Date.now();
       const finalStagePrefix = `Stage ${totalStages}/${totalStages}`;
       logger.info('Contextualizing results', { requestId, stage: finalStagePrefix, resultCount: allResearchResults.length });
-      
+
+      // Notify: Synthesizing phase started
+      await notifier.phaseStarted('synthesizing', {
+        resultCount: allResearchResults.length,
+        queryCount: allAgentQueries.length
+      });
+
       // Pass allAgentQueries, images, documents, structuredData, and inputEmbeddings to the context agent
       const contextStream = contextAgent.contextualizeResultsStream(
         query,
@@ -806,6 +844,11 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         }
         if (chunk.content) {
           finalReportContent += chunk.content;
+          synthesisTokenCount += chunk.content.length; // Approximate token count
+          // Send periodic synthesis progress (every ~500 chars to avoid flooding)
+          if (synthesisTokenCount % 500 < chunk.content.length) {
+            await notifier.synthesisChunk(chunk.content, synthesisTokenCount);
+          }
         }
         if (chunk.error) {
           streamError = chunk.error;
@@ -815,6 +858,12 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       const contextDuration = Date.now() - contextStartTime;
       if (!streamError) {
         logger.info('Contextualization completed', { requestId, stage: finalStagePrefix, durationMs: contextDuration });
+        // Notify: Synthesizing phase completed
+        await notifier.phaseComplete('synthesizing', {
+          durationMs: contextDuration,
+          contentLength: finalReportContent.length,
+          tokensGenerated: synthesisTokenCount
+        });
       } else {
          logger.warn('Contextualization finished with error', { requestId, stage: finalStagePrefix, durationMs: contextDuration });
          // Do not throw here, allow process to continue to report the error
@@ -886,6 +935,11 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         factCheckResults: factCheckResults
         });
         logger.info('Report saved', { requestId, reportId: savedReportId, accuracyScore: accuracyScore ?? 'N/A' });
+
+        // Notify: Job complete with reportId
+        const totalDuration = Date.now() - overallStartTime;
+        await notifier.complete(savedReportId, totalDuration);
+
         // Index the saved report for hybrid search when enabled
         try {
           const cfg = require('../../config');
@@ -965,7 +1019,7 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
 
   } catch (error) { // Main catch block for errors *before* or *during* synthesis failure reporting
     const overallDuration = Date.now() - overallStartTime;
-    const { wrapError, formatErrorForLog } = require('../utils/errors');
+    const { wrapError, formatErrorForLog, inferCategory } = require('../utils/errors');
 
     // Wrap error with full context, preserving original error as cause
     const wrappedError = wrapError(error,
@@ -977,6 +1031,19 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
           duration: overallDuration,
           phase: 'research'
         }
+      }
+    );
+
+    // Notify: Job error
+    const errorCategory = inferCategory(error);
+    const isRetryable = ['NETWORK', 'RATE_LIMIT', 'TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(errorCategory);
+    await notifier.error(
+      wrappedError.code || errorCategory,
+      error.message,
+      {
+        isRetryable,
+        durationMs: overallDuration,
+        phase: wrappedError.context?.phase || 'unknown'
       }
     );
 

@@ -134,13 +134,38 @@ async function retrieve(params, dbClient) {
 
 /**
  * Get report by ID
+ *
+ * Includes job_id detection to provide helpful guidance when users
+ * mistakenly pass a job ID instead of a report ID.
  */
 async function getReport(params, dbClient) {
   const reportId = params.reportId || params.id || params.report_id;
   const { mode = 'full', maxChars = 2000, query: summaryQuery } = params;
 
   if (!reportId) {
-    throw new Error('reportId is required');
+    throw new Error('reportId is required. Use history() to list available reports.');
+  }
+
+  // Detect if user passed a job_id instead of reportId
+  // Job IDs have format: job_<timestamp>_<random>
+  if (/^job_\d+_[a-z0-9]{6,}$/i.test(String(reportId))) {
+    throw new Error(
+      `"${reportId}" appears to be a Job ID, not a Report ID.\n` +
+      `Report IDs are integers (e.g., "5", "42").\n\n` +
+      `To get the report from this job:\n` +
+      `1. job_status({ job_id: "${reportId}" }) -> check if status is "succeeded"\n` +
+      `2. Extract the reportId from the response\n` +
+      `3. get_report({ reportId: "<the_report_id>" })`
+    );
+  }
+
+  // Validate numeric format (report IDs are integers)
+  if (!/^\d+$/.test(String(reportId).trim())) {
+    throw new Error(
+      `Invalid report ID format: "${reportId}"\n` +
+      `Report IDs must be numeric (e.g., "5", "42").\n` +
+      `Use history() to list available reports with their IDs.`
+    );
   }
 
   // Fetch report

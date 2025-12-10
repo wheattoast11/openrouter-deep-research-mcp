@@ -22,13 +22,38 @@ const GLOBAL_ALIASES = {
 
 /**
  * Tool-specific aliases
+ *
+ * Design principle: Each domain has ONE canonical form
+ * - Job domain: canonical = 'job_id' (all task_* tools use job aliases)
+ * - Report domain: canonical = 'reportId'
+ * - Graph domain: canonical = 'startNode'
+ * - Session domain: canonical = 'sessionId'
  */
 const TOOL_ALIASES = {
-  job: { job_id: 'id', jobId: 'id' },
-  report: { reportId: 'id', report_id: 'id' },
-  graph: { startNode: 'node', start_node: 'node' },
-  session: { sessionId: 'id', session_id: 'id' },
-  task: { taskId: 'id', task_id: 'id' }
+  // Job domain: canonical = job_id
+  // Accepts: job_id, jobId, id, taskId, task_id (for MCP Task Protocol compat)
+  job: {
+    jobId: 'job_id',
+    id: 'job_id',
+    taskId: 'job_id',   // MCP Task Protocol alias (backward compat)
+    task_id: 'job_id'   // MCP Task Protocol alias (backward compat)
+  },
+  // Report domain: canonical = reportId
+  report: {
+    report_id: 'reportId',
+    id: 'reportId'
+  },
+  // Graph domain: canonical = startNode
+  graph: {
+    start_node: 'startNode',
+    node: 'startNode'
+  },
+  // Session domain: canonical = sessionId
+  session: {
+    session_id: 'sessionId',
+    id: 'sessionId'
+  }
+  // Note: 'task' category removed - task_* tools use 'job' aliases via getToolCategory
 };
 
 /**
@@ -95,27 +120,36 @@ function normalize(tool, params) {
 
 /**
  * Get tool category for alias/default lookup
+ *
+ * Note: task_* tools map to 'job' category because MCP Task Protocol
+ * is implemented on top of our job system. This allows taskId to be
+ * normalized to job_id for backward compatibility.
  */
 function getToolCategory(tool) {
   const categories = {
+    // Job tools (including MCP Task Protocol tools)
     job_status: 'job',
     get_job_status: 'job',
     cancel_job: 'job',
-    task_get: 'task',
-    task_result: 'task',
-    task_cancel: 'task',
-    task_list: 'task',
+    task_get: 'job',      // Maps to job for taskId -> job_id normalization
+    task_result: 'job',   // Maps to job for taskId -> job_id normalization
+    task_cancel: 'job',   // Maps to job for taskId -> job_id normalization
+    task_list: 'job',     // Maps to job for consistency
+    // Report tools
     get_report: 'report',
+    // Graph tools
     graph_traverse: 'graph',
     graph_path: 'graph',
     graph_clusters: 'graph',
     graph_pagerank: 'graph',
     graph_patterns: 'graph',
     graph_stats: 'graph',
+    // Session tools
     session_state: 'session',
     fork_session: 'session',
     time_travel: 'session',
     checkpoint: 'session',
+    // Research tools
     batch_research: 'batch',
     conduct_research: 'research',
     research_follow_up: 'research'
@@ -197,23 +231,24 @@ const PARAM_RULES = {
   },
   job_status: {
     required: ['job_id'],
-    aliases: { job_id: ['id', 'jobId'] },
+    aliases: { job_id: ['id', 'jobId', 'taskId', 'task_id'] },
     message: 'job_id is required'
   },
+  // MCP Task Protocol tools use job_id as canonical (taskId accepted for backward compat)
   task_get: {
-    required: ['taskId'],
-    aliases: { taskId: ['id', 'task_id'] },
-    message: 'taskId is required'
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'taskId', 'task_id', 'jobId'] },
+    message: 'job_id is required (taskId is accepted for backward compatibility)'
   },
   task_result: {
-    required: ['taskId'],
-    aliases: { taskId: ['id', 'task_id'] },
-    message: 'taskId is required'
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'taskId', 'task_id', 'jobId'] },
+    message: 'job_id is required (taskId is accepted for backward compatibility)'
   },
   task_cancel: {
-    required: ['taskId'],
-    aliases: { taskId: ['id', 'task_id'] },
-    message: 'taskId is required'
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'taskId', 'task_id', 'jobId'] },
+    message: 'job_id is required (taskId is accepted for backward compatibility)'
   },
   calc: {
     required: ['expr'],
