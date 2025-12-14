@@ -6,6 +6,7 @@ const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
 const logger = require('../utils/logger').child('ResearchAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
 const RobustWebScraper = require('../utils/robustWebScraper'); // Web grounding for real-time data
+const { Signal } = require('../core/signal'); // Signal Protocol integration
 const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
@@ -32,6 +33,30 @@ const WEB_GROUNDING_CONFIG = {
 
 // Singleton web scraper instance
 const webScraper = new RobustWebScraper();
+
+/**
+ * Convert a research result to a Signal object
+ * @param {Object} result - Research result from _executeSingleResearch
+ * @returns {Signal} Signal object for consensus/verification
+ */
+function resultToSignal(result) {
+  if (result.error) {
+    return Signal.error(result.errorMessage || result.result, result.model, {
+      tags: ['research', 'ensemble']
+    });
+  }
+
+  // Calculate confidence from result quality indicators
+  let confidence = 0.8; // Base confidence
+  const responseLength = (result.result || '').length;
+  if (responseLength > 2000) confidence += 0.05;
+  if (responseLength > 4000) confidence += 0.05;
+  if (/\[Source:|https?:\/\//.test(result.result || '')) confidence += 0.05;
+
+  return Signal.response(result.result, result.model, Math.min(confidence, 1.0), {
+    tags: ['research', 'ensemble', `agent-${result.agentId}`]
+  });
+}
 
 class ResearchAgent {
   constructor() {
@@ -461,7 +486,8 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
       
       const duration = Date.now() - startTime;
       logger.info('Research completed', { requestId, agentId, durationMs: duration, model });
-      return {
+
+      const resultObj = {
         agentId, // Keep original agentId for grouping
         model,   // Record the specific model used
         query,
@@ -469,11 +495,26 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
         error: false, // Indicate success
         usage
       };
+
+      // Create signal from result
+      resultObj.signal = resultToSignal(resultObj);
+
+      // Emit signal event for real-time consumers
+      if (onEvent) {
+        await onEvent('model_signal', {
+          signal: resultObj.signal.toJSON(),
+          agentId,
+          model
+        });
+      }
+
+      return resultObj;
     } catch (error) {
       const duration = Date.now() - startTime;
       logger.error('Research error', { requestId, agentId, durationMs: duration, query: query.substring(0, 50), model, error });
+
       // Return error information structured similarly to success response
-      return {
+      const errorObj = {
         agentId,
         model,
         query,
@@ -482,6 +523,11 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
         errorMessage: error.message,
         errorStack: error.stack // Include stack trace for better debugging
       };
+
+      // Create error signal
+      errorObj.signal = resultToSignal(errorObj);
+
+      return errorObj;
     }
   }
 

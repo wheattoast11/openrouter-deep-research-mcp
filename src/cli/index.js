@@ -304,8 +304,9 @@ class ZeroCLI {
         outputFormat: 'report'
       });
 
-      // Extract report ID from result
-      const reportMatch = result?.content?.[0]?.text?.match(/Report ID: (\d+)/);
+      // Extract report ID from result (handle both string and MCP object formats)
+      const resultText = typeof result === 'string' ? result : result?.content?.[0]?.text;
+      const reportMatch = resultText?.match(/Report ID: (\d+)/);
       const reportId = reportMatch?.[1];
 
       spin.update('Verifying results...');
@@ -314,24 +315,59 @@ class ZeroCLI {
       if (args.verify && this.verification) {
         // Get the report content
         const report = reportId
-          ? await tools.getReport({ reportId, mode: 'full' })
+          ? await tools.getReportContent({ reportId, mode: 'full' })
           : null;
 
-        const reportText = report?.content?.[0]?.text || result?.content?.[0]?.text || '';
+        // Handle both string and MCP object formats
+        const reportText = typeof report === 'string' ? report : (report?.content?.[0]?.text || resultText || '');
 
-        // Verify (single model for now, multi-model TODO)
+        // Retrieve actual ensemble signals from stored report
+        const { Signal } = require('../core/signal');
+        const dbClient = require('../utils/dbClient');
+
+        let signals = [];
+
+        // Try to get stored ensemble signals from the report
+        if (reportId) {
+          try {
+            signals = await dbClient.getReportSignals(reportId);
+            if (signals.length > 0) {
+              spin.update(`Verifying with ${signals.length} model signals...`);
+            }
+          } catch (e) {
+            // Log but don't fail - will fall back to synthetic signal
+            console.error('Could not retrieve stored signals:', e.message);
+          }
+        }
+
+        // Fallback: create synthetic signal if no stored signals
+        if (signals.length === 0) {
+          signals = [Signal.response(
+            reportText,
+            'research-agent',
+            0.85,
+            { tags: ['research', 'cli', 'synthetic'] }
+          )];
+        }
+
         const verification = await this.verification.verify({
-          signals: [], // Would need signals from multi-model ensemble
+          signals,
           reportText,
           reportId
         });
 
-        spin.succeed(`Research complete (Report #${reportId || 'N/A'})`);
+        spin.succeed(`Research complete (Report #${reportId || 'N/A'}) - Verified with ${signals.length} signal(s)`);
 
         // Show verification status
         writeln('');
         writeln(bold('Verification:'));
         writeln(this.verification.formatForOutput(verification));
+
+        // Show multi-model info if applicable
+        if (signals.length > 1) {
+          const sources = [...new Set(signals.map(s => s.source))];
+          writeln(dim(`  Models: ${sources.join(', ')}`));
+        }
 
         // Show warnings prominently
         if (verification.flags.length > 0) {

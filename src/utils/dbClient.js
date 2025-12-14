@@ -270,9 +270,15 @@ function getDatabaseUrl() {
       // (Avoids error noise in AppImage/Docker sandboxed environments)
       const parentDir = path.dirname(dataDir);
       try {
+        // First, try to create parent directory tree if it doesn't exist
+        if (!fs.existsSync(parentDir)) {
+          fs.mkdirSync(parentDir, { recursive: true });
+          logger.info('Created parent directory for PGLite data', { path: parentDir });
+        }
         fs.accessSync(parentDir, fs.constants.W_OK);
       } catch (accessErr) {
-        if (['EACCES', 'EROFS', 'ENOENT'].includes(accessErr.code)) {
+        // Only fall back for truly unrecoverable errors (read-only filesystem, permission denied)
+        if (['EACCES', 'EROFS'].includes(accessErr.code)) {
           logger.info('Parent directory not writable, using in-memory database', {
             path: parentDir,
             reason: accessErr.code,
@@ -283,6 +289,11 @@ function getDatabaseUrl() {
             return null;
           }
         }
+        // For other errors, log and continue to try creating the data directory
+        logger.debug('Parent directory access check failed, will attempt to create data directory', {
+          path: parentDir,
+          error: accessErr.code
+        });
       }
 
       try {
@@ -401,6 +412,7 @@ async function _doInitDB() {
     try {
       await db.query(`ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS accuracy_score REAL DEFAULT NULL;`);
       await db.query(`ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS fact_check_results JSONB DEFAULT NULL;`);
+      await db.query(`ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS ensemble_signals JSONB DEFAULT '[]'::jsonb;`);
     } catch (e) {
       // Column may already exist, ignore
     }
@@ -893,7 +905,7 @@ async function executeWithRetry(operation, operationName) {
   }
 }
 
-async function saveResearchReport({ originalQuery, parameters, finalReport, researchMetadata, images, textDocuments, structuredData, basedOnPastReportIds, accuracyScore, factCheckResults }) {
+async function saveResearchReport({ originalQuery, parameters, finalReport, researchMetadata, images, textDocuments, structuredData, basedOnPastReportIds, accuracyScore, factCheckResults, ensembleSignals }) {
   const { DatabaseError } = require('./errors');
 
   if (!isEmbedderReady) {
@@ -922,8 +934,9 @@ async function saveResearchReport({ originalQuery, parameters, finalReport, rese
           based_on_past_report_ids,
           accuracy_score,
           fact_check_results,
+          ensemble_signals,
           created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id;`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id;`,
         [
           originalQuery,
           queryEmbeddingFormatted,
@@ -936,6 +949,7 @@ async function saveResearchReport({ originalQuery, parameters, finalReport, rese
           JSON.stringify(basedOnPastReportIds || []),
           accuracyScore ?? null,
           JSON.stringify(factCheckResults || null),
+          JSON.stringify(ensembleSignals || []),
           new Date().toISOString()
         ]
       );
@@ -1398,6 +1412,7 @@ module.exports = {
   findReportsBySimilarity,
   listRecentReports,
   getReportById,
+  getReportSignals,
 
   // Database initialization - REQUIRED before operations
   initDB,
@@ -1567,6 +1582,37 @@ async function reindexVectors() {
   );
   logger.debug('Vector index rebuilt');
   return true;
+}
+
+/**
+ * Retrieve stored ensemble signals for a report
+ * @param {string|number} reportId - Report ID
+ * @returns {Promise<Signal[]>} Array of Signal objects
+ */
+async function getReportSignals(reportId) {
+  try {
+    const result = await db.query(
+      'SELECT ensemble_signals FROM research_reports WHERE id = $1',
+      [reportId]
+    );
+
+    if (!result.rows[0] || !result.rows[0].ensemble_signals) {
+      return [];
+    }
+
+    const { Signal } = require('../core/signal');
+    const signalsJson = result.rows[0].ensemble_signals;
+
+    // Handle both string and object (PGlite may return parsed JSON)
+    const signalsArray = typeof signalsJson === 'string'
+      ? JSON.parse(signalsJson)
+      : signalsJson;
+
+    return signalsArray.map(json => Signal.fromJSON(json));
+  } catch (error) {
+    logger.warn('Failed to retrieve report signals', { reportId, error: error.message });
+    return [];
+  }
 }
 
 // --- Usage counters helpers ---

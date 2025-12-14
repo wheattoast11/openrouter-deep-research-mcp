@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.9.2] - 2025-12-14
+
+### Features
+* **signal-protocol:** Wire Signal Protocol into research ensemble flow
+  - Multi-model consensus verification with weighted confidence
+  - Signal creation in ResearchAgent with `resultToSignal()`
+  - Signal collection and persistence in tools.js
+  - Database storage with `ensemble_signals` JSONB column
+  - CLI retrieval via `getReportSignals(reportId)`
+
+### Bug Fixes
+* **tools.js:** Fix undefined `aggregatedResults` passed to factCheck
+* **cli:** Fix report ID extraction for string return type
+* **cli:** Fix `getReport` → `getReportContent` function name
+* **mcpServer:** Add 60s debounce for job worker health warnings
+
 ## [1.8.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.7.0...v1.8.0) (2025-12-04)
 
 

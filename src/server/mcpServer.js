@@ -2181,6 +2181,11 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   * Job worker function - processes async research jobs
   * Only starts if database is initialized
   */
+ // Debounce state for health warnings (shared across workers)
+ let lastHealthWarningTime = 0;
+ let lastHealthIssues = '';
+ const HEALTH_WARNING_DEBOUNCE_MS = 60000; // Only log once per minute per unique issue set
+
  function startJobWorker() {
    const initState = dbClient.getInitState ? dbClient.getInitState() : null;
    if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
@@ -2198,7 +2203,14 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
          const { quickCheck } = require('../utils/preflight');
          const health = quickCheck(dbClient);
          if (!health.ready) {
-           logger.warn('JobWorker unhealthy', { issues: health.issues });
+           // Debounce health warnings - only log once per minute per unique issue set
+           const issueKey = JSON.stringify(health.issues);
+           const now = Date.now();
+           if (issueKey !== lastHealthIssues || now - lastHealthWarningTime > HEALTH_WARNING_DEBOUNCE_MS) {
+             logger.warn('JobWorker unhealthy', { issues: health.issues, nextLogIn: '60s' });
+             lastHealthWarningTime = now;
+             lastHealthIssues = issueKey;
+           }
            await new Promise(r => setTimeout(r, 5000));
            continue;
          }

@@ -394,6 +394,29 @@ const calc = new ConsensusCalculator({ minAgreement: 0.6 });
 const consensus = calc.calculate([signal1, signal2, signal3]);
 ```
 
+### Signal Protocol Integration (v1.9.2)
+Research results now generate Signal objects for multi-model consensus:
+
+- Each model response creates a Signal with confidence scoring
+- Signals are collected during research iterations via `allSignals.push()`
+- Persisted to `ensemble_signals` JSONB column in reports table
+- Retrieved for CLI verification: `dbClient.getReportSignals(reportId)`
+
+**Events emitted:**
+- `model_signal` - Individual model signal created (per model response)
+- `ensemble_signals` - Batch of signals collected per iteration
+
+**Data flow:**
+```
+ResearchAgent._executeSingleResearch() → Signal.response()
+    ↓
+tools.conductResearch() → allSignals collection
+    ↓
+dbClient.saveResearchReport({ensembleSignals}) → DB
+    ↓
+CLI: getReportSignals(reportId) → verification.verify({signals})
+```
+
 ### Parameter Normalization (`src/core/normalize.js`)
 Declarative alias system for flexible tool parameter handling.
 

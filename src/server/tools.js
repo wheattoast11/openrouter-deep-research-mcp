@@ -524,6 +524,7 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   let currentIteration = 1;
   let allAgentQueries = [];
   let allResearchResults = [];
+  let allSignals = []; // Collect signals from ensemble for verification
   let savedReportId = null;
 
   logger.info('Starting iterative research', { requestId, query: safeSubstring(query, 0, 50), maxIterations: MAX_ITERATIONS });
@@ -791,6 +792,22 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       }
 
       allResearchResults.push(...currentResearchResults);
+
+      // Extract and collect signals from research results
+      const currentSignals = currentResearchResults
+        .filter(r => r.signal)
+        .map(r => r.signal);
+      allSignals.push(...currentSignals);
+
+      // Emit ensemble signals event for real-time consumers
+      if (onEvent && currentSignals.length > 0) {
+        await onEvent('ensemble_signals', {
+          iteration: currentIteration,
+          signals: currentSignals.map(s => s.toJSON()),
+          signalCount: currentSignals.length
+        });
+      }
+
       previousResultsForRefinement = currentResearchResults;
       currentIteration++;
     } // End of while loop
@@ -899,7 +916,14 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         iterations: currentIteration - 1,
         totalSubQueries: allAgentQueries.length,
           requestId: requestId, // Store requestId with metadata
-          usage: usageAgg
+          usage: usageAgg,
+          signalSummary: {
+            count: allSignals.length,
+            sources: [...new Set(allSignals.map(s => s.source))],
+            avgConfidence: allSignals.length > 0
+              ? allSignals.reduce((sum, s) => sum + s.confidence, 0) / allSignals.length
+              : 0
+          }
         };
 
         // Run fact-checking on the final report before saving
@@ -907,7 +931,13 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         let accuracyScore = null;
         try {
           factCheckResults = await factCheckAgent.factCheck(finalReportContent, {
-            ensembleResults: aggregatedResults,
+            ensembleResults: allResearchResults.map(r => ({
+              model: r.model,
+              content: r.result,
+              agentId: r.agentId,
+              query: r.query
+            })),
+            signals: allSignals,
             requestId
           });
           accuracyScore = factCheckResults.accuracyScore?.score ?? null;
@@ -932,7 +962,8 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         structuredData: structuredData,
         basedOnPastReportIds: relevantPastReports.map(r => r.reportId),
         accuracyScore: accuracyScore,
-        factCheckResults: factCheckResults
+        factCheckResults: factCheckResults,
+        ensembleSignals: allSignals.map(s => s.toJSON())
         });
         logger.info('Report saved', { requestId, reportId: savedReportId, accuracyScore: accuracyScore ?? 'N/A' });
 
