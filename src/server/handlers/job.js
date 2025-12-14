@@ -156,7 +156,7 @@ async function cancelJob(params, dbClient) {
   }
 
   // Update job status
-  await dbClient.updateJobStatus(jobId, 'cancelled');
+  await dbClient.cancelJob(jobId);
 
   return {
     job_id: jobId,
