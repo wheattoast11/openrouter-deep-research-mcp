@@ -57,3 +57,4 @@ cloudflared/
 
 # Browser experiments (WIP)
 src/browser/
+cloudflared

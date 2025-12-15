@@ -1,22 +1,10 @@
 // src/server/auth/supabaseAuth.js
-// Supabase JWT validation for terminals.tech OAuth (Google/GitHub)
-// Works with CLI auth tokens obtained via PKCE or device flow
+// Supabase JWT validation for terminals.tech OAuth (Google/GitHub via Supabase)
+// Simplest integration: validate Supabase JWTs on MCP requests
 
-'use strict';
+const config = require('../../../config');
 
-/**
- * Supabase Auth Handler
- *
- * Validates JWT tokens issued by Supabase Auth when users log in via:
- * - terminals.tech OAuth (browser PKCE flow)
- * - Device code flow (headless/SSH)
- * - Google/GitHub SSO pass-through
- *
- * Token validation uses the SUPABASE_JWT_SECRET for HS256 signatures
- * or SUPABASE_JWKS_URL for RS256 asymmetric verification.
- */
-
-// Lazy load jose for JWT verification
+// Lazy load jose for JWT validation
 let jose = null;
 async function getJose() {
   if (!jose) {
@@ -27,292 +15,206 @@ async function getJose() {
 
 class SupabaseAuthHandler {
   constructor() {
-    // Configuration from environment
-    this.jwtSecret = process.env.SUPABASE_JWT_SECRET;
-    this.projectUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-    this.jwksUrl = process.env.SUPABASE_JWKS_URL;
+    // Supabase project configuration
+    this.supabaseUrl = process.env.SUPABASE_URL || config.mcp?.auth?.supabaseUrl;
+    this.supabaseAnonKey = process.env.SUPABASE_ANON_KEY || config.mcp?.auth?.supabaseAnonKey;
+    this.supabaseJwtSecret = process.env.SUPABASE_JWT_SECRET || config.mcp?.auth?.supabaseJwtSecret;
 
     // Derived values
-    this.expectedIssuer = this.projectUrl ? `${this.projectUrl}/auth/v1` : null;
-    this.expectedAudience = process.env.SUPABASE_JWT_AUDIENCE || 'authenticated';
+    this.projectRef = this.supabaseUrl ? new URL(this.supabaseUrl).hostname.split('.')[0] : null;
+    this.issuer = this.supabaseUrl ? `${this.supabaseUrl}/auth/v1` : null;
 
-    // JWKS cache
-    this.jwksCache = null;
-    this.jwksCacheTime = 0;
-    this.jwksCacheTtl = 3600000; // 1 hour
+    // Enable if configured
+    this.enabled = !!(this.supabaseUrl && this.supabaseJwtSecret);
 
-    // Secret key cache for HS256
-    this.secretKey = null;
+    if (this.enabled) {
+      process.stderr.write(`[${new Date().toISOString()}] SupabaseAuth: Enabled for project ${this.projectRef}\n`);
+    }
   }
 
   /**
    * Check if Supabase auth is configured
-   * @returns {boolean}
    */
   isEnabled() {
-    return !!(this.jwtSecret || this.jwksUrl);
+    return this.enabled;
   }
 
   /**
-   * Get the secret key for HS256 verification
-   * @returns {Uint8Array}
-   */
-  async getSecretKey() {
-    if (!this.secretKey && this.jwtSecret) {
-      const encoder = new TextEncoder();
-      this.secretKey = encoder.encode(this.jwtSecret);
-    }
-    return this.secretKey;
-  }
-
-  /**
-   * Get JWKS for RS256 verification (if configured)
-   * @returns {Function} JWKS getter function
-   */
-  async getJWKS() {
-    if (!this.jwksUrl) {
-      throw new Error('JWKS URL not configured');
-    }
-
-    const { createRemoteJWKSet } = await getJose();
-    const now = Date.now();
-
-    if (!this.jwksCache || (now - this.jwksCacheTime) > this.jwksCacheTtl) {
-      this.jwksCache = createRemoteJWKSet(new URL(this.jwksUrl));
-      this.jwksCacheTime = now;
-    }
-
-    return this.jwksCache;
-  }
-
-  /**
-   * Validate a Supabase JWT token
-   *
-   * @param {string} token - JWT access token from Supabase
-   * @returns {Object} Validated user info
+   * Validate a Supabase JWT access token
+   * @param {string} token - JWT from Supabase (access_token from session)
+   * @returns {Object} Validated user claims
    * @throws {Error} If validation fails
    */
   async validateToken(token) {
-    if (!this.isEnabled()) {
+    if (!this.enabled) {
       throw new Error('Supabase auth not configured');
     }
 
-    const { jwtVerify, decodeJwt } = await getJose();
-
-    // Validate JWT format
-    const parts = token.split('.');
-    if (parts.length !== 3) {
-      throw new Error('Invalid JWT format: expected 3 parts');
+    if (!token) {
+      throw new Error('No token provided');
     }
 
-    let header;
+    // Remove 'Bearer ' prefix if present
+    const jwt = token.startsWith('Bearer ') ? token.slice(7) : token;
+
+    const { jwtVerify } = await getJose();
+
+    // Supabase uses HS256 with the JWT secret
+    const secret = new TextEncoder().encode(this.supabaseJwtSecret);
+
     try {
-      header = JSON.parse(Buffer.from(parts[0], 'base64url').toString());
-    } catch (e) {
-      throw new Error('Invalid JWT header encoding');
-    }
-
-    if (!header.alg) {
-      throw new Error('Missing algorithm in JWT header');
-    }
-
-    let payload;
-
-    if (header.alg === 'HS256' && this.jwtSecret) {
-      // Symmetric verification with secret
-      const secretKey = await this.getSecretKey();
-      const result = await jwtVerify(token, secretKey, {
-        issuer: this.expectedIssuer,
-        audience: this.expectedAudience
+      const { payload } = await jwtVerify(jwt, secret, {
+        issuer: this.issuer,
+        audience: 'authenticated'
       });
-      payload = result.payload;
-    } else if (header.alg === 'RS256' && this.jwksUrl) {
-      // Asymmetric verification with JWKS
-      const JWKS = await this.getJWKS();
-      const result = await jwtVerify(token, JWKS, {
-        issuer: this.expectedIssuer,
-        audience: this.expectedAudience
-      });
-      payload = result.payload;
-    } else {
-      throw new Error(`Unsupported algorithm: ${header.alg}`);
-    }
 
-    // Validate required claims
-    if (!payload.sub) {
-      throw new Error('Missing subject claim');
-    }
-
-    // Extract user metadata from Supabase token structure
-    const userMetadata = payload.user_metadata || {};
-    const appMetadata = payload.app_metadata || {};
-
-    return {
-      userId: payload.sub,
-      email: payload.email,
-      emailVerified: payload.email_confirmed_at != null,
-      role: payload.role || appMetadata.role || 'authenticated',
-      provider: appMetadata.provider || 'unknown',
-      providers: appMetadata.providers || [],
-      name: userMetadata.full_name || userMetadata.name,
-      avatarUrl: userMetadata.avatar_url,
-      expiresAt: payload.exp ? new Date(payload.exp * 1000) : null,
-      issuedAt: payload.iat ? new Date(payload.iat * 1000) : null,
-      claims: payload
-    };
-  }
-
-  /**
-   * Validate a refresh token by calling Supabase API
-   * Used for token refresh in long-running CLI sessions
-   *
-   * @param {string} refreshToken - Refresh token
-   * @returns {Object} New tokens
-   */
-  async refreshAccessToken(refreshToken) {
-    if (!this.projectUrl) {
-      throw new Error('SUPABASE_URL not configured');
-    }
-
-    const response = await fetch(`${this.projectUrl}/auth/v1/token?grant_type=refresh_token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': process.env.SUPABASE_ANON_KEY || ''
-      },
-      body: JSON.stringify({ refresh_token: refreshToken })
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Token refresh failed: ${error}`);
-    }
-
-    const tokens = await response.json();
-
-    return {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiresIn: tokens.expires_in,
-      expiresAt: tokens.expires_at,
-      tokenType: tokens.token_type || 'Bearer'
-    };
-  }
-
-  /**
-   * Get user by ID from Supabase Admin API
-   * Requires service role key
-   *
-   * @param {string} userId - User UUID
-   * @returns {Object} User data
-   */
-  async getUserById(userId) {
-    if (!this.projectUrl) {
-      throw new Error('SUPABASE_URL not configured');
-    }
-
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) {
-      throw new Error('SUPABASE_SERVICE_ROLE_KEY required for admin operations');
-    }
-
-    const response = await fetch(`${this.projectUrl}/auth/v1/admin/users/${userId}`, {
-      headers: {
-        'Authorization': `Bearer ${serviceKey}`,
-        'apikey': serviceKey
+      // Validate required claims
+      if (!payload.sub) {
+        throw new Error('Missing subject (sub) claim');
       }
-    });
 
-    if (!response.ok) {
-      throw new Error(`Failed to get user: ${response.status}`);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Revoke a user's sessions (sign out everywhere)
-   * Requires service role key
-   *
-   * @param {string} userId - User UUID
-   */
-  async revokeUserSessions(userId) {
-    if (!this.projectUrl) {
-      throw new Error('SUPABASE_URL not configured');
-    }
-
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) {
-      throw new Error('SUPABASE_SERVICE_ROLE_KEY required for admin operations');
-    }
-
-    const response = await fetch(`${this.projectUrl}/auth/v1/admin/users/${userId}/logout`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${serviceKey}`,
-        'apikey': serviceKey
+      // Check role is authenticated (not anon)
+      if (payload.role !== 'authenticated') {
+        throw new Error('Token is not for authenticated user');
       }
-    });
 
-    if (!response.ok) {
-      throw new Error(`Failed to revoke sessions: ${response.status}`);
+      process.stderr.write(`[${new Date().toISOString()}] SupabaseAuth: Validated token for user ${payload.sub}\n`);
+
+      return {
+        userId: payload.sub,
+        email: payload.email,
+        role: payload.role,
+        provider: payload.app_metadata?.provider,
+        providers: payload.app_metadata?.providers || [],
+        userMetadata: payload.user_metadata || {},
+        expiresAt: payload.exp ? new Date(payload.exp * 1000) : null,
+        issuedAt: payload.iat ? new Date(payload.iat * 1000) : null,
+        sessionId: payload.session_id,
+        claims: payload
+      };
+    } catch (error) {
+      process.stderr.write(`[${new Date().toISOString()}] SupabaseAuth: Token validation failed: ${error.message}\n`);
+      throw new Error(`Invalid token: ${error.message}`);
     }
   }
 
   /**
-   * Get OpenID Connect discovery document
-   * @returns {Object} OIDC configuration
-   */
-  async getOIDCConfig() {
-    if (!this.projectUrl) {
-      throw new Error('SUPABASE_URL not configured');
-    }
-
-    const response = await fetch(`${this.projectUrl}/auth/v1/.well-known/openid-configuration`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch OIDC config: ${response.status}`);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Create middleware for Express
+   * Express/Connect middleware for protecting routes
    * @param {Object} options - Middleware options
-   * @returns {Function} Express middleware
+   * @param {boolean} options.required - If true, reject unauthenticated requests (default: true)
+   * @returns {Function} Middleware function
    */
   middleware(options = {}) {
-    const { required = true, extractUser = true } = options;
+    const { required = true } = options;
 
     return async (req, res, next) => {
-      const authHeader = req.headers.authorization || '';
-
-      if (!authHeader.startsWith('Bearer ')) {
+      // Skip auth if not enabled
+      if (!this.enabled) {
         if (required) {
-          return res.status(401).json({ error: 'Missing authorization header' });
+          return res.status(503).json({ error: 'Authentication not configured' });
         }
         return next();
       }
 
-      const token = authHeader.slice(7);
+      // Get token from Authorization header
+      const authHeader = req.headers.authorization;
+
+      if (!authHeader) {
+        if (required) {
+          return res.status(401).json({
+            error: 'Unauthorized',
+            message: 'Missing Authorization header. Use: Authorization: Bearer <supabase_access_token>'
+          });
+        }
+        return next();
+      }
 
       try {
-        const user = await this.validateToken(token);
-        if (extractUser) {
-          req.user = user;
-          req.userId = user.userId;
-        }
+        const user = await this.validateToken(authHeader);
+        req.user = user;
+        req.userId = user.userId;
         next();
       } catch (error) {
         if (required) {
-          return res.status(401).json({ error: `Invalid token: ${error.message}` });
+          return res.status(401).json({
+            error: 'Unauthorized',
+            message: error.message
+          });
         }
         next();
       }
     };
   }
+
+  /**
+   * Validate token from MCP request params or headers
+   * For use in MCP tool handlers
+   * @param {Object} context - Request context with headers
+   * @returns {Object|null} User info or null if not authenticated
+   */
+  async validateMcpRequest(context) {
+    if (!this.enabled) {
+      return null;
+    }
+
+    // Try Authorization header first
+    const authHeader = context.headers?.authorization ||
+                       context.headers?.Authorization ||
+                       context.meta?.authorization;
+
+    if (authHeader) {
+      try {
+        return await this.validateToken(authHeader);
+      } catch (error) {
+        process.stderr.write(`[${new Date().toISOString()}] SupabaseAuth: MCP request auth failed: ${error.message}\n`);
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Generate OAuth login URL for terminals.tech
+   * @param {string} provider - 'google' or 'github'
+   * @param {string} redirectTo - URL to redirect after login
+   * @returns {string} OAuth login URL
+   */
+  getOAuthUrl(provider, redirectTo) {
+    if (!this.supabaseUrl) {
+      throw new Error('Supabase URL not configured');
+    }
+
+    const url = new URL(`${this.supabaseUrl}/auth/v1/authorize`);
+    url.searchParams.set('provider', provider);
+
+    if (redirectTo) {
+      url.searchParams.set('redirect_to', redirectTo);
+    }
+
+    return url.toString();
+  }
+
+  /**
+   * Get server auth configuration for MCP clients
+   * Returns info needed for clients to authenticate
+   */
+  getAuthConfig() {
+    return {
+      enabled: this.enabled,
+      type: 'supabase',
+      supabaseUrl: this.supabaseUrl,
+      providers: ['google', 'github'],
+      loginUrl: this.supabaseUrl ? `${this.supabaseUrl}/auth/v1/authorize` : null,
+      instructions: this.enabled ?
+        'Authenticate via terminals.tech, then include your Supabase access_token in the Authorization header' :
+        'Authentication not configured on this server'
+    };
+  }
 }
 
-// Export singleton instance
-module.exports = new SupabaseAuthHandler();
+// Singleton instance
+const supabaseAuth = new SupabaseAuthHandler();
+
+module.exports = supabaseAuth;
+module.exports.SupabaseAuthHandler = SupabaseAuthHandler;
