@@ -5,7 +5,11 @@
 [![MCP Draft](https://img.shields.io/badge/MCP-2025--11--25%20Draft-brightgreen)](docs/MCP-COMPLIANCE-REPORT.md)
 [![GitHub](https://img.shields.io/github/stars/terminals-tech/openrouter-agents?style=social)](https://github.com/terminals-tech/openrouter-agents)
 
-Production MCP server for multi-agent AI research. Plan, parallelize, synthesize.
+**Zero**: Self-referential MCP server for multi-agent AI research. The fixed point of client-server duality.
+
+```
+f(x) = x → Zero
+```
 
 ## Install
 
@@ -18,14 +22,32 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## What's New (v1.9.1)
+## Documentation
 
-- **Parameter normalization** - Unified alias system (taskId → job_id, q → query)
-- **Semantic error messages** - Rust-style diagnostics with actionable suggestions
-- **Progress notifications** - Real-time job updates via MCP notifications/progress
-- **Token-efficient slash commands** - Streamlined Claude Code integrations
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/GETTING-STARTED.md) | First 5 minutes - install to first research |
+| [Concepts](docs/CONCEPTS.md) | Plain English terminology guide |
+| [Command Cookbook](docs/COMMAND-COOKBOOK.md) | "I want to..." quick reference |
+| [Architecture](docs/ARCHITECTURE.md) | Codebase structure and module status |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common errors and fixes |
+| [ENV Reference](docs/ENV-REFERENCE.md) | All environment variables |
+| [Changelog](docs/CHANGELOG.md) | Version history |
 
-[Full Changelog](docs/CHANGELOG.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
+## What's New (v1.10.0)
+
+**Zero Protocol** - Self-referential MCP architecture:
+- **ZERO.md / ZERO.json** - The realizability specification
+- **`zero://` URI scheme** - Self-connection, peer discovery, session forking
+- **Dual-Role Node** - Server acts as client via RoleShift protocol
+- **Protocol Adapters** - Unified abstraction for MCP/ACP/LSP/A2A/ANP
+
+**PGlite Extensions:**
+- `pg_trgm` - Trigram fuzzy search
+- `fuzzystrmatch` - Soundex/Levenshtein for typo tolerance
+- `unaccent` - Accent-insensitive search
+
+[Full Changelog](docs/CHANGELOG.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md) | [ZERO Specification](ZERO.md)
 
 ## Configuration
 
@@ -242,4 +264,4 @@ npm publish --access public        # Publish to npm
 
 ---
 
-**Version:** 1.9.1 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
+**Version:** 1.10.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT

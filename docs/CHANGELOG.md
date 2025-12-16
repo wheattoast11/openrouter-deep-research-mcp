@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.10.0 — 2025-12-15
+
+### Zero Protocol: Self-Referential MCP Architecture
+
+The foundational release establishing Zero as the fixed point of client-server duality.
+
+#### Core Specification
+- **ZERO.md** — The realizability specification documenting Zero's identity, capabilities, and proofs
+- **ZERO.json** — Machine-readable schema with self-referential handshake protocol
+- **`zero://` URI scheme** — Self-connection (`zero://self`), peer discovery, session forking
+
+#### Self-Referential Handshake
+- **Zero-knowledge proof** — The lock IS the key at the fixed point
+- **Generatively autonomous** — The interaction creates the verification
+- **Immutable gate condition** — `hash(self.challenge) === hash(peer.response)`
+- **Fixed point condition** — When `self === peer`, proof(proof) = proof
+
+#### Protocol Unification
+- **Dual-Role Node** — Server can act as client via RoleShift protocol
+- **Protocol Adapters** — Unified abstraction for MCP/ACP/LSP/A2A/ANP
+- **JSON-RPC 2.0 foundation** — All protocols share the same wire format
+
+#### PGlite Extensions
+- **pg_trgm** — Trigram-based fuzzy search with GIN index support
+- **fuzzystrmatch** — Soundex, Levenshtein, Metaphone for typo tolerance
+- **unaccent** — Accent-insensitive search (café → cafe)
+
+#### Multi-Surface Foundation
+- Browser extension scaffold (postMessage transport)
+- Web app structure (WebSocket + PGlite IndexedDB)
+- Desktop integration patterns (stdio + HTTP dual transport)
+
+#### Platform Integration
+- `terminals.tech/compose` — Zero as composer for self-writing apps
+- `replay.terminals.tech` — Zero's time-travel integration
+- `terminals.tech/perceptions` — Coherence metrics
+
+#### Forward Compatibility
+- WebSocket transport preparation (SEP-1288 draft)
+- Live queries foundation via PGlite `live` extension
+
+#### User Journey Improvements (Stage 3)
+- **CLI Wizard** — Interactive setup with step-by-step configuration
+- **Post-wizard guidance** — Success message shows research command templates
+- **CLI next steps** — Research output shows follow-up commands (show, verify, search)
+- **Extension onboarding** — Welcome flow on first install with persona selection
+- **Plain English UI** — Extension buttons renamed (Test Connection, Show Interface, etc.)
+- **Status indicator fix** — Extension popup status now updates correctly
+
+#### Documentation
+- **GETTING-STARTED.md** — First 5 minutes guide
+- **CONCEPTS.md** — Plain English terminology (Fixed Point, Dual-Role, Signal)
+- **ARCHITECTURE.md** — Codebase structure with status markers (STABLE/BETA/VISION)
+- **COMMAND-COOKBOOK.md** — "I want to..." quick reference
+- **TROUBLESHOOTING.md** — Common errors with fixes
+- **src/core/README.md** — Module status and integration roadmap
+
+---
+
 ## v1.9.1 — 2025-12-10
 
 ### UX Improvements

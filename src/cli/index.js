@@ -32,6 +32,11 @@ const { version } = require('../../package.json');
  * CLI command definitions
  */
 const COMMANDS = {
+  init: {
+    description: 'Run setup wizard for first-time configuration',
+    usage: 'zero init',
+    aliases: ['setup', 'wizard']
+  },
   login: {
     description: 'Authenticate with OAuth or API key',
     usage: 'zero login [--method oauth|device|api-key]',
@@ -232,8 +237,8 @@ class ZeroCLI {
       process.exit(1);
     }
 
-    // Initialize for most commands
-    if (!['help', 'version'].includes(resolvedCommand)) {
+    // Initialize for most commands (skip for help, version, and init)
+    if (!['help', 'version', 'init'].includes(resolvedCommand)) {
       await this.initialize();
     }
 
@@ -271,6 +276,8 @@ class ZeroCLI {
    */
   async executeCommand(command, positionals, args) {
     switch (command) {
+      case 'init':
+        return this.cmdInit(positionals, args);
       case 'login':
         return this.cmdLogin(positionals, args);
       case 'logout':
@@ -291,6 +298,21 @@ class ZeroCLI {
         return this.cmdStatus(args);
       default:
         return this.showHelp();
+    }
+  }
+
+  /**
+   * Init command - run the setup wizard
+   */
+  async cmdInit(positionals, args) {
+    try {
+      const { runWizard } = require('./wizard');
+      await runWizard();
+    } catch (err) {
+      error(`Setup wizard failed: ${err.message}`);
+      if (args.debug) {
+        writeln(err.stack);
+      }
     }
   }
 
@@ -405,6 +427,16 @@ class ZeroCLI {
         writeln(JSON.stringify(result, null, 2));
       } else {
         writeln(result?.content?.[0]?.text || 'No result');
+      }
+
+      // Show next steps
+      if (reportId) {
+        writeln('');
+        writeln(dim('─'.repeat(50)));
+        writeln(bold('Next steps:'));
+        writeln(dim(`  • View full report:  zero show ${reportId}`));
+        writeln(dim(`  • Verify claims:     zero verify ${reportId}`));
+        writeln(dim(`  • Search similar:    zero search "${query.slice(0, 20)}..."`));
       }
     } catch (err) {
       spin.fail(`Research failed: ${err.message}`);

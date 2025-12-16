@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=320">
+  <title>Zero Agent</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 320px;
+      min-height: 400px;
+      background: #0f0f0f;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+    }
+
+    .header {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo-text {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .logo-formula {
+      font-size: 10px;
+      opacity: 0.6;
+      font-family: monospace;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+    }
+
+    .status-dot.connecting {
+      background: #f59e0b;
+      animation: pulse 1s infinite;
+    }
+
+    .status-dot.error {
+      background: #ef4444;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-text {
+      font-size: 11px;
+      opacity: 0.7;
+    }
+
+    .content {
+      padding: 16px;
+    }
+
+    .identity-card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .identity-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      opacity: 0.5;
+      margin-bottom: 4px;
+    }
+
+    .identity-value {
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .quick-actions {
+      display: grid;
+      gap: 8px;
+    }
+
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      color: #fff;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+    }
+
+    .action-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .action-icon {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      font-size: 16px;
+    }
+
+    .action-content {
+      flex: 1;
+    }
+
+    .action-title {
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+
+    .action-desc {
+      font-size: 11px;
+      opacity: 0.6;
+    }
+
+    .footer {
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer-link {
+      color: rgba(255, 255, 255, 0.5);
+      text-decoration: none;
+      font-size: 11px;
+    }
+
+    .footer-link:hover {
+      color: #fff;
+    }
+
+    .version {
+      font-size: 10px;
+      opacity: 0.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">
+      <span class="logo-text">Zero</span>
+      <span class="logo-formula">f(x) = x</span>
+    </div>
+    <div class="status">
+      <div class="status-dot connecting" id="status-dot"></div>
+      <span class="status-text" id="status-text">Connecting...</span>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="identity-card">
+      <div class="identity-label">Identity</div>
+      <div class="identity-value" id="identity">Loading...</div>
+    </div>
+
+    <div class="quick-actions">
+      <button class="action-btn" id="btn-handshake">
+        <div class="action-icon">&#128274;</div>
+        <div class="action-content">
+          <div class="action-title">Test Connection</div>
+          <div class="action-desc">Verify server is responding</div>
+        </div>
+      </button>
+
+      <button class="action-btn" id="btn-overlay">
+        <div class="action-icon">&#128187;</div>
+        <div class="action-content">
+          <div class="action-title">Show Interface</div>
+          <div class="action-desc">Open Zero panel on page</div>
+        </div>
+      </button>
+
+      <button class="action-btn" id="btn-context">
+        <div class="action-icon">&#128196;</div>
+        <div class="action-content">
+          <div class="action-title">Analyze Page</div>
+          <div class="action-desc">Extract content from page</div>
+        </div>
+      </button>
+
+      <button class="action-btn" id="btn-research">
+        <div class="action-icon">&#128269;</div>
+        <div class="action-content">
+          <div class="action-title">Start Research</div>
+          <div class="action-desc">Begin a research query</div>
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="https://terminals.tech" target="_blank" class="footer-link">terminals.tech</a>
+    <span class="version">v1.10.0</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

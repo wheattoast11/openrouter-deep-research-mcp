@@ -1,0 +1,291 @@
+/**
+ * Zero Setup Wizard - Interactive first-time configuration
+ *
+ * 4-step wizard for noob-friendly onboarding:
+ * 1. API Key Setup (with validation)
+ * 2. Mode Selection (STDIO/HTTP)
+ * 3. Feature Selection (Graph, Time-Travel, Verification)
+ * 4. Storage Location
+ *
+ * @module cli/wizard
+ */
+
+'use strict';
+
+const readline = require('readline');
+const fs = require('fs');
+const path = require('path');
+
+// Wizard steps
+const apiKeyStep = require('./steps/apiKey');
+const modeStep = require('./steps/mode');
+const featuresStep = require('./steps/features');
+const storageStep = require('./steps/storage');
+
+/**
+ * ANSI color codes for terminal output
+ */
+const colors = {
+  reset: '\x1b[0m',
+  bright: '\x1b[1m',
+  dim: '\x1b[2m',
+  cyan: '\x1b[36m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  magenta: '\x1b[35m',
+};
+
+/**
+ * Print styled text
+ */
+function print(text, color = '') {
+  const colorCode = colors[color] || '';
+  console.log(`${colorCode}${text}${colors.reset}`);
+}
+
+/**
+ * Print the Zero banner
+ */
+function printBanner() {
+  console.log('');
+  print('  ╔═══════════════════════════════════════════╗', 'cyan');
+  print('  ║                                           ║', 'cyan');
+  print('  ║      ○       Z E R O                      ║', 'cyan');
+  print('  ║     / \\      Self-Referential MCP Agent   ║', 'cyan');
+  print('  ║    f(x)=x    The Fixed Point              ║', 'cyan');
+  print('  ║                                           ║', 'cyan');
+  print('  ╚═══════════════════════════════════════════╝', 'cyan');
+  console.log('');
+}
+
+/**
+ * Print step header
+ */
+function printStep(number, total, title) {
+  console.log('');
+  print(`  Step ${number}/${total}: ${title}`, 'bright');
+  print('  ' + '─'.repeat(40), 'dim');
+}
+
+/**
+ * Create readline interface
+ */
+function createReadline() {
+  return readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+}
+
+/**
+ * Ask a question and get input
+ */
+async function ask(rl, question, defaultValue = '') {
+  return new Promise((resolve) => {
+    const prompt = defaultValue
+      ? `  ${question} [${defaultValue}]: `
+      : `  ${question}: `;
+
+    rl.question(prompt, (answer) => {
+      resolve(answer.trim() || defaultValue);
+    });
+  });
+}
+
+/**
+ * Ask a yes/no question
+ */
+async function askYesNo(rl, question, defaultYes = true) {
+  const hint = defaultYes ? '[Y/n]' : '[y/N]';
+  const answer = await ask(rl, `${question} ${hint}`, defaultYes ? 'y' : 'n');
+  return answer.toLowerCase().startsWith('y');
+}
+
+/**
+ * Ask for selection from options
+ */
+async function askSelection(rl, question, options) {
+  console.log(`\n  ${question}`);
+  options.forEach((opt, i) => {
+    const marker = opt.default ? '*' : ' ';
+    print(`  ${marker}${i + 1}. ${opt.label}`, opt.default ? 'green' : '');
+    if (opt.description) {
+      print(`      ${opt.description}`, 'dim');
+    }
+  });
+
+  const defaultIndex = options.findIndex(o => o.default) + 1 || 1;
+  const answer = await ask(rl, `Select (1-${options.length})`, String(defaultIndex));
+  const index = parseInt(answer, 10) - 1;
+
+  return options[index] || options[defaultIndex - 1];
+}
+
+/**
+ * Main wizard class
+ */
+class SetupWizard {
+  constructor() {
+    this.rl = null;
+    this.config = {
+      apiKey: null,
+      mode: 'stdio',
+      features: {},
+      storage: {},
+    };
+  }
+
+  /**
+   * Run the wizard
+   */
+  async run() {
+    this.rl = createReadline();
+
+    try {
+      printBanner();
+      print('  Welcome to Zero! Let\'s get you set up.', 'green');
+      print('  This wizard will configure your environment.', 'dim');
+
+      // Step 1: API Key
+      printStep(1, 4, 'API Key Configuration');
+      this.config.apiKey = await apiKeyStep.run(this.rl, ask, askYesNo);
+
+      // Step 2: Mode Selection
+      printStep(2, 4, 'Transport Mode');
+      this.config.mode = await modeStep.run(this.rl, askSelection);
+
+      // Step 3: Feature Selection
+      printStep(3, 4, 'Features');
+      this.config.features = await featuresStep.run(this.rl, askYesNo);
+
+      // Step 4: Storage Location
+      printStep(4, 4, 'Storage Configuration');
+      this.config.storage = await storageStep.run(this.rl, ask, askYesNo);
+
+      // Generate configuration
+      await this.generateConfig();
+
+      // Success message
+      this.printSuccess();
+
+    } catch (error) {
+      if (error.message === 'USER_CANCELLED') {
+        print('\n  Setup cancelled. Run `zero init` to try again.', 'yellow');
+      } else {
+        print(`\n  Error: ${error.message}`, 'red');
+      }
+      process.exit(1);
+    } finally {
+      this.rl.close();
+    }
+  }
+
+  /**
+   * Generate .env and config files
+   */
+  async generateConfig() {
+    console.log('');
+    print('  Generating configuration...', 'cyan');
+
+    // Build .env content
+    const envLines = [
+      '# Zero MCP Agent Configuration',
+      `# Generated by setup wizard on ${new Date().toISOString()}`,
+      '',
+      '# API Configuration',
+      `OPENROUTER_API_KEY=${this.config.apiKey || 'your_api_key_here'}`,
+      '',
+      '# Server Configuration',
+      `MODE=${this.config.mode.value?.toUpperCase() || 'ALL'}`,
+      `SERVER_PORT=${this.config.mode.port || 3002}`,
+      '',
+      '# Feature Flags',
+      `INDEXER_ENABLED=${this.config.features.knowledgeGraph || false}`,
+      `SESSION_TIME_TRAVEL=${this.config.features.timeTravel || false}`,
+      `GRAPH_ENABLED=${this.config.features.knowledgeGraph || false}`,
+      '',
+      '# Storage',
+      `DATA_DIR=${this.config.storage.dataDir || './data'}`,
+      `PGLITE_IN_MEMORY=${this.config.storage.inMemory || false}`,
+    ];
+
+    // Write .env file
+    const envPath = path.join(process.cwd(), '.env');
+    const envContent = envLines.join('\n') + '\n';
+
+    // Check if .env exists
+    if (fs.existsSync(envPath)) {
+      print('  .env file exists, creating .env.zero instead', 'yellow');
+      fs.writeFileSync(path.join(process.cwd(), '.env.zero'), envContent);
+    } else {
+      fs.writeFileSync(envPath, envContent);
+      print('  Created .env', 'green');
+    }
+
+    // Create data directory if needed
+    if (this.config.storage.dataDir && !this.config.storage.inMemory) {
+      const dataDir = path.resolve(this.config.storage.dataDir);
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+        print(`  Created data directory: ${dataDir}`, 'green');
+      }
+    }
+  }
+
+  /**
+   * Print success message with next steps
+   */
+  printSuccess() {
+    console.log('');
+    print('  ╔═══════════════════════════════════════════╗', 'green');
+    print('  ║  Setup Complete!                          ║', 'green');
+    print('  ╚═══════════════════════════════════════════╝', 'green');
+    console.log('');
+
+    // Always show the quick start commands first
+    print('  Try your first research query:', 'bright');
+    print('     zero research "What is machine learning?"', 'cyan');
+    console.log('');
+
+    print('  Or search past research:', 'bright');
+    print('     zero search "AI"', 'cyan');
+    console.log('');
+
+    // Show mode-specific server instructions
+    print('  Server commands:', 'dim');
+    if (this.config.mode.value === 'stdio') {
+      print('     zero --stdio         (for MCP clients)', 'dim');
+      print('     zero status          (check health)', 'dim');
+    } else {
+      print(`     zero --port ${this.config.mode.port || 3002}      (start HTTP server)`, 'dim');
+      print('     zero status          (check health)', 'dim');
+    }
+
+    console.log('');
+    print('  Documentation: https://terminals.tech/docs', 'dim');
+    console.log('');
+  }
+}
+
+/**
+ * Run the wizard
+ */
+async function runWizard() {
+  const wizard = new SetupWizard();
+  await wizard.run();
+}
+
+module.exports = {
+  SetupWizard,
+  runWizard,
+  // Utilities for custom wizards
+  createReadline,
+  ask,
+  askYesNo,
+  askSelection,
+  print,
+  printBanner,
+  printStep,
+  colors,
+};
