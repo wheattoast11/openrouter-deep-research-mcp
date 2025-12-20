@@ -5,6 +5,7 @@
  */
 
 const { normalize } = require('../../core/normalize');
+const { ConsensusCalculator } = require('../../core/signal');
 
 /**
  * Unified KB handler
@@ -234,7 +235,8 @@ async function getReport(params, dbClient) {
       break;
   }
 
-  return {
+  // Build base response
+  const response = {
     reportId,
     query: report.query,
     costPreference: report.cost_preference,
@@ -245,6 +247,33 @@ async function getReport(params, dbClient) {
     mode,
     content: outputContent
   };
+
+  // Add confidence metadata from Signal protocol if available
+  try {
+    if (typeof dbClient.getReportSignals === 'function') {
+      const signals = await dbClient.getReportSignals(reportId);
+      if (signals && signals.length > 0) {
+        const calc = new ConsensusCalculator();
+        const consensus = calc.calculate(signals);
+        response.confidence = {
+          score: consensus.confidence,
+          topModel: consensus.topSource,
+          signalCount: consensus.signalCount,
+          method: consensus.method
+        };
+      }
+    }
+  } catch (_) {
+    // Silently continue if signals unavailable
+  }
+
+  // Add truncation indicator
+  if (mode !== 'full' && content.length > outputContent.length) {
+    response.truncated = true;
+    response.fullLength = content.length;
+  }
+
+  return response;
 }
 
 /**

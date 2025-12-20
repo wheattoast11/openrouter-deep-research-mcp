@@ -22,6 +22,9 @@ const { prompt, confirm, select } = require('./lib/micro-prompt');
 // Verification layer
 const { VerificationPipeline, FactStatus } = require('./verification');
 
+// Authentication
+const auth = require('./auth');
+
 // Version
 const { version } = require('../../package.json');
 
@@ -29,6 +32,16 @@ const { version } = require('../../package.json');
  * CLI command definitions
  */
 const COMMANDS = {
+  login: {
+    description: 'Authenticate with OAuth or API key',
+    usage: 'zero login [--method oauth|device|api-key]',
+    aliases: ['auth', 'signin']
+  },
+  logout: {
+    description: 'Clear authentication credentials',
+    usage: 'zero logout',
+    aliases: ['signout']
+  },
   research: {
     description: 'Run verified research query',
     usage: 'zero research "query" [--cost low|high] [--verify]',
@@ -258,6 +271,10 @@ class ZeroCLI {
    */
   async executeCommand(command, positionals, args) {
     switch (command) {
+      case 'login':
+        return this.cmdLogin(positionals, args);
+      case 'logout':
+        return this.cmdLogout(args);
       case 'research':
         return this.cmdResearch(positionals, args);
       case 'search':
@@ -559,6 +576,61 @@ class ZeroCLI {
   }
 
   /**
+   * Login command
+   */
+  async cmdLogin(positionals, args) {
+    const method = args.method || (auth.isHeadless() ? 'device' : 'oauth');
+
+    const spin = spinner('Authenticating...').start();
+
+    const result = await auth.login({
+      strategy: method,
+      provider: args.provider || 'terminals',
+      onProgress: (msg) => {
+        if (!args.quiet) {
+          spin.update(msg);
+        }
+      }
+    });
+
+    if (result.success) {
+      spin.succeed(`Authenticated via ${result.method}`);
+      writeln('');
+      writeln(green('Login successful'));
+    } else {
+      spin.fail(`Authentication failed: ${result.error}`);
+      process.exit(1);
+    }
+  }
+
+  /**
+   * Logout command
+   */
+  async cmdLogout(args) {
+    const status = auth.getAuthStatus();
+
+    if (!status.authenticated) {
+      writeln(dim('Not currently authenticated'));
+      return;
+    }
+
+    const shouldRevoke = !args['no-revoke'];
+    const result = await auth.logout({ revokeTokens: shouldRevoke });
+
+    if (result.success) {
+      writeln(green('Logout successful'));
+      if (result.cleared.oauth) {
+        writeln(dim('  OAuth credentials cleared'));
+      }
+      if (result.cleared.apiKey) {
+        writeln(dim('  API key cleared'));
+      }
+    } else {
+      writeln(yellow('No credentials to clear'));
+    }
+  }
+
+  /**
    * Config command
    */
   async cmdConfig(positionals, args) {
@@ -566,25 +638,56 @@ class ZeroCLI {
     const key = positionals[1];
     const value = positionals[2];
 
-    writeln(dim('Config management (encrypted storage coming soon)'));
-    writeln('');
-
     switch (action) {
       case 'list':
+        writeln(bold('Configuration:'));
+        writeln('');
+
+        // Authentication status
+        const status = auth.getAuthStatus();
+        writeln(bold('Authentication:'));
+        if (status.authenticated) {
+          writeln(`  Method: ${green(status.method)}`);
+          if (status.method === 'oauth') {
+            writeln(`  Provider: ${status.provider}`);
+            writeln(`  Expired: ${status.expired ? red('yes') : green('no')}`);
+            if (status.expiresAt) {
+              writeln(`  Expires: ${new Date(status.expiresAt).toLocaleString()}`);
+            }
+            writeln(dim(`  Credentials: ${status.credsPath}`));
+          } else if (status.method === 'api_key') {
+            writeln(`  Source: ${status.source}`);
+          }
+        } else {
+          writeln(`  Status: ${red('not authenticated')}`);
+          writeln(dim('  Run "zero login" to authenticate'));
+        }
+
+        writeln('');
         writeln(bold('Environment:'));
-        writeln(`  OPENROUTER_API_KEY: ${process.env.OPENROUTER_API_KEY ? green('set') : red('not set')}`);
         writeln(`  LOG_LEVEL: ${process.env.LOG_LEVEL || 'info'}`);
         writeln(`  MODE: ${process.env.MODE || 'ALL'}`);
         break;
+
       case 'get':
         if (key) {
           writeln(`${key}: ${process.env[key] || dim('not set')}`);
         }
         break;
+
       case 'set':
-        writeln(yellow('Setting environment variables via CLI not yet implemented.'));
-        writeln(dim('Use shell export or .env file.'));
+        if (key === 'api-key' && value) {
+          auth.apiKey.saveApiKey(value);
+          writeln(green('API key saved'));
+          writeln(dim(`Stored in: ${auth.apiKey.API_KEY_FILE}`));
+        } else {
+          writeln(yellow('Setting environment variables via CLI not supported.'));
+          writeln(dim('Use shell export or .env file.'));
+          writeln('');
+          writeln('To set API key: zero config set api-key <your-key>');
+        }
         break;
+
       default:
         writeln(dim(`Unknown action: ${action}`));
     }
@@ -597,6 +700,9 @@ class ZeroCLI {
     const spin = spinner('Checking status...').start();
 
     try {
+      // Get auth status first
+      const authStatus = auth.getAuthStatus();
+
       const tools = require('../server/tools');
       const status = await tools.getServerStatus({});
 
@@ -605,6 +711,15 @@ class ZeroCLI {
       writeln(bold('Zero CLI Status'));
       writeln(dim('─'.repeat(40)));
       writeln(`Version: ${version}`);
+      writeln('');
+
+      // Authentication
+      writeln(bold('Authentication:'));
+      if (authStatus.authenticated) {
+        writeln(`  ✓ ${green('Authenticated')} (${authStatus.method})`);
+      } else {
+        writeln(`  ✗ ${red('Not authenticated')}`);
+      }
       writeln('');
 
       if (typeof status === 'string') {

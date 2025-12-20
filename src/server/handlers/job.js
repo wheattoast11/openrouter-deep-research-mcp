@@ -65,6 +65,12 @@ async function getJobStatus(params, dbClient) {
     finished_at: job.finished_at
   };
 
+  // Compact format: ultra-terse response for LLM token efficiency (~15-20 tokens)
+  // Format: {state}:{id}:{progress_or_result}:{timing}
+  if (format === 'compact') {
+    return formatCompact(job, jobId);
+  }
+
   // Add summary message and extract reportId for completed jobs
   if (job.status === 'complete' || job.status === 'succeeded') {
     result.message = 'Job completed successfully';
@@ -254,6 +260,76 @@ async function getJobResult(params, dbClient) {
   }
 
   return response;
+}
+
+/**
+ * Format compact job status for LLM token efficiency
+ * @param {Object} job - Job record from database
+ * @param {string} jobId - Job ID
+ * @returns {Object} Compact response with poll recommendation
+ *
+ * Format: {state}:{id}:{progress_or_result}:{timing}
+ * Examples:
+ *   R:job_abc:45%:12s   (running, 45% complete, 12s elapsed)
+ *   C:job_abc:rpt:7     (complete, report ID 7)
+ *   F:job_abc:timeout   (failed with timeout)
+ */
+function formatCompact(job, jobId) {
+  const states = { queued: 'Q', running: 'R', complete: 'C', succeeded: 'C', failed: 'F', cancelled: 'X' };
+  const s = states[job.status] || '?';
+  const elapsed = Math.round((Date.now() - new Date(job.created_at)) / 1000);
+
+  // Terminal states: completed
+  if (['complete', 'succeeded'].includes(job.status)) {
+    let reportId = null;
+    if (job.result) {
+      try {
+        const parsed = typeof job.result === 'string' ? JSON.parse(job.result) : job.result;
+        reportId = parsed?.reportId || parsed?.report_id || parsed?.id;
+      } catch (_) {
+        const m = String(job.result).match(/Report ID:\s*(\d+)/i);
+        if (m) reportId = m[1];
+      }
+    }
+    return {
+      compact: `${s}:${jobId}:rpt:${reportId || 'null'}`,
+      reportId: reportId || null,
+      poll: 0,
+      next: reportId ? `get_report({reportId:"${reportId}"})` : null
+    };
+  }
+
+  // Terminal states: failed
+  if (job.status === 'failed') {
+    const errMsg = (job.error || 'error').slice(0, 15).replace(/\s+/g, '_');
+    return { compact: `${s}:${jobId}:${errMsg}`, poll: 0 };
+  }
+
+  // Terminal states: cancelled
+  if (job.status === 'cancelled') {
+    return { compact: `${s}:${jobId}:cancelled`, poll: 0 };
+  }
+
+  // In-progress: calculate adaptive backoff
+  const progress = job.progress || 0;
+  const poll = calcBackoff(progress);
+  return {
+    compact: `${s}:${jobId}:${progress}%:${elapsed}s`,
+    poll,
+    next: `job_status({job_id:"${jobId}",format:"compact"})`
+  };
+}
+
+/**
+ * Calculate adaptive polling backoff based on progress
+ * @param {number} progress - Job progress (0-100)
+ * @returns {number} Recommended poll interval in seconds
+ */
+function calcBackoff(progress) {
+  if (progress === 0) return 5;   // Not started yet
+  if (progress < 25) return 3;    // Planning phase
+  if (progress < 75) return 2;    // Researching phase
+  return 1;                       // Synthesizing - near completion
 }
 
 /**

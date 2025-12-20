@@ -7,6 +7,7 @@
  * - Session Store for time-travel (undo/redo)
  * - Signal Protocol for multi-model consensus
  * - Fact-verification to prevent hallucinations
+ * - Multi-agent orchestration via tmux
  *
  * Zero external dependencies for core CLI.
  *
@@ -20,9 +21,6 @@ const path = require('path');
 
 // Ensure we're in the right context
 process.title = 'zero';
-
-// Load CLI orchestrator
-const cli = require('../src/cli/index.js');
 
 // Handle uncaught errors gracefully
 process.on('uncaughtException', (err) => {
@@ -38,8 +36,36 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
-// Run CLI
-cli.run(process.argv.slice(2)).then(() => {
+/**
+ * Determine which mode to run in and execute
+ */
+async function main() {
+  const args = process.argv.slice(2);
+
+  // Check if orchestrator mode (args contain known agent IDs)
+  let orchestrator;
+  try {
+    orchestrator = require('../src/cli/orchestrator/index.js');
+  } catch (err) {
+    // Orchestrator module not available, use standard CLI
+    orchestrator = null;
+  }
+
+  // Route to orchestrator if:
+  // 1. Orchestrator module is available
+  // 2. Args contain known agent IDs or --orchestrate flag
+  if (orchestrator && orchestrator.isOrchestratorMode(args)) {
+    await orchestrator.run(args);
+    return;
+  }
+
+  // Standard CLI mode
+  const cli = require('../src/cli/index.js');
+  await cli.run(args);
+}
+
+// Run
+main().then(() => {
   // Explicit exit needed because PGLite/embeddings keep handles open
   process.exit(0);
 }).catch((err) => {

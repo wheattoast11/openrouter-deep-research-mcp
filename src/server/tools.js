@@ -1961,18 +1961,107 @@ async function dateTimeTool(params) {
 }
 
 const calcSchema = z.object({ expr: z.string(), precision: z.number().int().min(0).max(12).optional().default(6) }).describe("Evaluate a simple arithmetic expression (+,-,*,/,^,(), decimals). Safe parser.");
+
+// Safe recursive descent parser for arithmetic expressions
+function tokenize(expr) {
+  const tokens = [];
+  let i = 0;
+  while (i < expr.length) {
+    if (/\s/.test(expr[i])) { i++; continue; }
+    if ('+-*/^()'.includes(expr[i])) {
+      tokens.push(expr[i++]);
+      continue;
+    }
+    if (/[0-9.]/.test(expr[i])) {
+      let num = '';
+      while (i < expr.length && /[0-9.]/.test(expr[i])) {
+        num += expr[i++];
+      }
+      tokens.push(parseFloat(num));
+      continue;
+    }
+    throw new Error(`Invalid char: ${expr[i]}`);
+  }
+  return tokens;
+}
+
+function safeEval(expr) {
+  const tokens = tokenize(expr);
+  let pos = 0;
+
+  function peek() { return tokens[pos]; }
+  function consume() { return tokens[pos++]; }
+
+  function parseExpr() {
+    let left = parseTerm();
+    while (peek() === '+' || peek() === '-') {
+      const op = consume();
+      const right = parseTerm();
+      left = op === '+' ? left + right : left - right;
+    }
+    return left;
+  }
+
+  function parseTerm() {
+    let left = parseFactor();
+    while (peek() === '*' || peek() === '/') {
+      const op = consume();
+      const right = parseFactor();
+      left = op === '*' ? left * right : left / right;
+    }
+    return left;
+  }
+
+  function parseFactor() {
+    let base = parsePrimary();
+    while (peek() === '^') {
+      consume();
+      const exp = parseFactor(); // Right-associative
+      base = Math.pow(base, exp);
+    }
+    return base;
+  }
+
+  function parsePrimary() {
+    const tok = peek();
+    if (tok === '(') {
+      consume();
+      const val = parseExpr();
+      if (consume() !== ')') throw new Error('Missing )');
+      return val;
+    }
+    if (tok === '-') {
+      consume();
+      return -parsePrimary();
+    }
+    if (typeof tok === 'number') {
+      consume();
+      return tok;
+    }
+    throw new Error(`Unexpected token: ${tok}`);
+  }
+
+  const result = parseExpr();
+  if (pos !== tokens.length) throw new Error('Unexpected tokens');
+  return result;
+}
+
 async function calcTool(params) {
   const src = String(params.expr || '').trim();
-  // Allow digits, operators, parens, decimal, caret, and whitespace (space, tab)
-  if (!/^[0-9+\-*/().^ \t]+$/.test(src)) return JSON.stringify({ error: 'Invalid characters' });
+  // Allow digits, operators, parens, decimal, caret, and whitespace
+  if (!/^[0-9+\-*/().^ \t]+$/.test(src)) {
+    return JSON.stringify({ error: 'Invalid characters' });
+  }
+
   try {
-    // Replace ^ with ** for exponent
-    const js = src.replace(/\^/g, '**');
-    // eslint-disable-next-line no-new-func
-    const fn = new Function(`return (${js});`);
-    const val = fn();
-    if (typeof val !== 'number' || !isFinite(val)) return JSON.stringify({ error: 'Computation failed' });
-    return JSON.stringify({ expr: src, result: Number(val.toFixed(params.precision || 6)) });
+    const result = safeEval(src);
+    if (typeof result !== 'number' || !isFinite(result)) {
+      return JSON.stringify({ error: 'Computation failed' });
+    }
+    return JSON.stringify({
+      expr: src,
+      result: Number(result.toFixed(params.precision || 6))
+    });
   } catch (e) {
     return JSON.stringify({ error: e.message });
   }

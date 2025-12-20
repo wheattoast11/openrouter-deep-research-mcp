@@ -11,6 +11,26 @@ const roleShift = require('./roleShift');
 const coreConfig = require('./config');
 const context = require('./context');
 const validation = require('./middleware/validation');
+const responseEnvelope = require('./responseEnvelope');
+const router = require('./router');
+
+// Transport and Bridge (loaded lazily to avoid circular deps)
+let transport = null;
+let bridge = null;
+
+function getTransport() {
+  if (!transport) {
+    transport = require('./transport');
+  }
+  return transport;
+}
+
+function getBridge() {
+  if (!bridge) {
+    bridge = require('./bridge');
+  }
+  return bridge;
+}
 
 module.exports = {
   // Core Configuration Factory
@@ -65,5 +85,23 @@ module.exports = {
   // RoleShift Protocol
   RoleMode: roleShift.RoleMode,
   RoleShiftProtocol: roleShift.RoleShiftProtocol,
-  createRoleShift: roleShift.createRoleShift
+  createRoleShift: roleShift.createRoleShift,
+
+  // Response Envelope
+  ResponseEnvelope: responseEnvelope.ResponseEnvelope,
+  Responses: responseEnvelope.Responses,
+
+  // Semantic Router (Agent Zero)
+  SemanticRouter: router.SemanticRouter,
+  RouteType: router.RouteType,
+  ModelProfiles: router.ModelProfiles,
+  ClassificationPatterns: router.ClassificationPatterns,
+  createRouter: router.createRouter,
+  defaultRouter: router.defaultRouter,
+
+  // Transport Layer (lazy-loaded)
+  getTransport,
+
+  // Bridge Layer (lazy-loaded)
+  getBridge
 };

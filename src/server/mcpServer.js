@@ -390,7 +390,9 @@ const server = new McpServer({
     tools: {},
     prompts: { listChanged: true },
     resources: { subscribe: true, listChanged: true },
-    logging: {} // Enable MCP logging notifications
+    logging: {},
+    // MCP 2025-11-25: Enable progress and job notifications for LLM agents
+    notifications: { progress: true, job_complete: true }
   }
 });
 

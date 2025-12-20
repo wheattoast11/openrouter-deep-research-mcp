@@ -296,18 +296,28 @@ ${relevantReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateStri
     let finalPrompt = `${basePrompt}\n\n${specificInstructions}\n\n${dimensions}\n\n`;
 
     finalPrompt += `
+CRITICAL: Each sub-query MUST include the original topic "${query}" explicitly. Never output generic dimension names alone.
+
 For each distinct aspect, create an XML tag with format:
-<agent_1>First research question focusing on [specific aspect; include verification if needed]</agent_1>
-<agent_2>Second research question focusing on [specific aspect]</agent_2>
+<agent_1>Complete research question that includes the topic and focuses on [specific aspect]</agent_1>
+<agent_2>Complete research question that includes the topic and focuses on [specific aspect]</agent_2>
+
+CORRECT examples for query "What is JSON-RPC 2.0?":
+<agent_1>What are the core concepts and fundamental definitions of JSON-RPC 2.0?</agent_1>
+<agent_2>What is the historical context and evolution of JSON-RPC 2.0?</agent_2>
+
+WRONG examples (DO NOT output these):
+<agent_1>Core concepts and definitions</agent_1>  <!-- Missing topic! -->
+<agent_2>Historical context and evolution</agent_2>  <!-- Missing topic! -->
 
 Ensure each question is:
-- Self-contained and specific
+- Self-contained and specific (can be understood without seeing the original query)
+- MUST explicitly mention the topic "${query.substring(0, 50)}" or its core subject
 - Phrased to elicit verifiable facts with sources
 - Focused on a distinct aspect with minimal overlap
-- Appropriate for query complexity
 - Optimized for web/evidence retrieval (names, dates, identifiers)
 
-OUTPUT ONLY THE XML TAGS (e.g., <agent_1>...</agent_1>, <agent_2>...</agent_2>).`;
+OUTPUT ONLY THE XML TAGS with complete, topic-contextualized questions.`;
 
     return finalPrompt;
   }

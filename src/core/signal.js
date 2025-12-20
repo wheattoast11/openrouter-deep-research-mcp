@@ -44,7 +44,12 @@ const SignalType = {
   RESPONSE: 'response',
   CONSENSUS: 'consensus',
   CRYSTALLIZATION: 'crystallization',
-  ERROR: 'error'
+  ERROR: 'error',
+  // Combinator types (Agent Zero)
+  COMPOSE: 'compose',
+  REDUCE: 'reduce',
+  SUBSTITUTION: 'substitution',
+  TEMPLATE: 'template'
 };
 
 /**
@@ -126,6 +131,197 @@ class Signal {
    */
   static error(message, source, opts = {}) {
     return new Signal(SignalType.ERROR, { message }, { source, confidence: 0, ...opts });
+  }
+
+  // ============================================
+  // COMBINATOR PRIMITIVES (Agent Zero)
+  // Lambda calculus-inspired thread reduction
+  // ============================================
+
+  /**
+   * Compose two signals into unified response.
+   * Merges payloads with confidence-weighted combination.
+   *
+   * @param {Signal} sig1 - First signal
+   * @param {Signal} sig2 - Second signal
+   * @param {Object} opts - Composition options
+   * @returns {Signal} Composed signal with merged payload
+   */
+  static compose(sig1, sig2, opts = {}) {
+    const w1 = sig1.weight * sig1.confidence;
+    const w2 = sig2.weight * sig2.confidence;
+    const totalWeight = w1 + w2;
+
+    // Merge payloads (string concatenation or object merge)
+    let mergedPayload;
+    if (typeof sig1.payload === 'string' && typeof sig2.payload === 'string') {
+      mergedPayload = `${sig1.payload}\n\n${sig2.payload}`;
+    } else {
+      mergedPayload = {
+        sources: [
+          { source: sig1.source, payload: sig1.payload, weight: w1 },
+          { source: sig2.source, payload: sig2.payload, weight: w2 }
+        ],
+        merged: true
+      };
+    }
+
+    return new Signal(SignalType.COMPOSE, mergedPayload, {
+      confidence: (sig1.confidence * w1 + sig2.confidence * w2) / totalWeight,
+      source: `compose(${sig1.source},${sig2.source})`,
+      tags: [...(sig1.tags || []), ...(sig2.tags || []), 'composed'],
+      ...opts
+    });
+  }
+
+  /**
+   * Reduce multiple signals to single consensus via combinator semantics.
+   * Applies pairwise composition with crystallization-weighted convergence.
+   *
+   * @param {Array<Signal>} signals - Signals to reduce
+   * @param {Object} opts - Reduction options
+   * @returns {Signal} Reduced signal
+   */
+  static reduce(signals, opts = {}) {
+    if (!signals || signals.length === 0) {
+      return new Signal(SignalType.ERROR, { message: 'No signals to reduce' }, { confidence: 0 });
+    }
+
+    if (signals.length === 1) {
+      return new Signal(SignalType.REDUCE, signals[0].payload, {
+        confidence: signals[0].confidence,
+        source: `reduce(${signals[0].source})`,
+        tags: ['reduced', 'single'],
+        ...opts
+      });
+    }
+
+    // Sort by weighted confidence for optimal reduction order
+    const sorted = [...signals].sort((a, b) => {
+      const aScore = a.weight * a.confidence;
+      const bScore = b.weight * b.confidence;
+      return bScore - aScore;
+    });
+
+    // Pairwise reduction (fold left)
+    let accumulated = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      accumulated = Signal.compose(accumulated, sorted[i]);
+    }
+
+    // Extract crystallization for convergence detection
+    const crystallization = extractCrystallization(accumulated.payload);
+
+    return new Signal(SignalType.REDUCE, {
+      result: accumulated.payload,
+      crystallization: crystallization.score,
+      patterns: crystallization.patterns,
+      sourceCount: signals.length,
+      reductionPath: sorted.map(s => s.source)
+    }, {
+      confidence: accumulated.confidence,
+      source: `reduce(${signals.length} signals)`,
+      tags: ['reduced', ...(crystallization.score > 0.5 ? ['crystallized'] : [])],
+      ...opts
+    });
+  }
+
+  /**
+   * Create a template signal for structured generation.
+   *
+   * @param {string} templateString - Template with ${variable} placeholders
+   * @param {Object} opts - Template options
+   * @returns {Signal} Template signal
+   */
+  static template(templateString, opts = {}) {
+    // Extract variable names from template
+    const variables = [];
+    const varRegex = /\$\{(\w+)\}/g;
+    let match;
+    while ((match = varRegex.exec(templateString)) !== null) {
+      variables.push(match[1]);
+    }
+
+    return new Signal(SignalType.TEMPLATE, {
+      template: templateString,
+      variables,
+      bound: {}
+    }, {
+      confidence: 1.0,
+      source: 'template',
+      tags: ['template'],
+      ...opts
+    });
+  }
+
+  /**
+   * Substitute bindings into template signal.
+   * Lambda calculus β-reduction semantics.
+   *
+   * @param {Signal} templateSignal - Template to instantiate
+   * @param {Object} bindings - Variable -> Signal mappings
+   * @param {Object} opts - Substitution options
+   * @returns {Signal} Instantiated signal
+   */
+  static substitute(templateSignal, bindings, opts = {}) {
+    if (templateSignal.type !== SignalType.TEMPLATE) {
+      return new Signal(SignalType.ERROR, {
+        message: 'substitute requires a template signal'
+      }, { confidence: 0 });
+    }
+
+    const { template, variables } = templateSignal.payload;
+
+    // Check all variables are bound
+    const unbound = variables.filter(v => !(v in bindings));
+    if (unbound.length > 0) {
+      return new Signal(SignalType.ERROR, {
+        message: `Unbound variables: ${unbound.join(', ')}`
+      }, { confidence: 0 });
+    }
+
+    // Perform substitution
+    let result = template;
+    let totalConfidence = 0;
+    let bindingCount = 0;
+    const sources = [];
+
+    for (const [varName, binding] of Object.entries(bindings)) {
+      const payload = binding instanceof Signal ? binding.payload : binding;
+      const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      result = result.replace(new RegExp(`\\$\\{${varName}\\}`, 'g'), payloadStr);
+
+      if (binding instanceof Signal) {
+        totalConfidence += binding.confidence;
+        bindingCount++;
+        sources.push(binding.source);
+      }
+    }
+
+    const avgConfidence = bindingCount > 0 ? totalConfidence / bindingCount : 1.0;
+
+    return new Signal(SignalType.SUBSTITUTION, {
+      result,
+      template: template,
+      bindings: Object.keys(bindings),
+      sources
+    }, {
+      confidence: avgConfidence * templateSignal.confidence,
+      source: `substitute(${sources.join(',') || 'literal'})`,
+      tags: ['substituted'],
+      ...opts
+    });
+  }
+
+  /**
+   * Check if signal represents a converged/crystallized state.
+   * Used for reduction termination detection.
+   *
+   * @returns {boolean} True if signal shows crystallization
+   */
+  isConverged() {
+    const { score } = this.crystallization;
+    return score > 0.5;
   }
 }
 
