@@ -1,6 +1,23 @@
 // src/utils/dbClient.js
 const { PGlite } = require('@electric-sql/pglite');
 const { vector } = require('@electric-sql/pglite/vector');
+
+// Zero Protocol: Enable full-text search extensions for fuzzy matching
+// - pg_trgm: Trigram-based fuzzy search with GIN index support
+// - fuzzystrmatch: Soundex, Levenshtein, Metaphone for typo tolerance
+// - unaccent: Accent-insensitive search (café → cafe)
+let pg_trgm, fuzzystrmatch, unaccent;
+try {
+  // These extensions are optional - gracefully degrade if not available
+  const contrib = require('@electric-sql/pglite/contrib');
+  pg_trgm = contrib.pg_trgm;
+  fuzzystrmatch = contrib.fuzzystrmatch;
+  unaccent = contrib.unaccent;
+} catch (e) {
+  // Contrib extensions not available - will use vector-only mode
+  console.warn('[dbClient] PGlite contrib extensions not available, using vector-only mode');
+}
+
 const config = require('../../config');
 const openRouterClient = require('./openRouterClient');
 const path = require('path');
@@ -363,28 +380,63 @@ async function _doInitDB() {
     // Get database URL based on environment
     const dbUrl = getDatabaseUrl();
 
-    // Initialize PGLite with the vector extension
+    // Initialize PGLite with extensions
+    // Build extensions object dynamically based on available extensions
+    const extensions = { vector };
+    if (pg_trgm) extensions.pg_trgm = pg_trgm;
+    if (fuzzystrmatch) extensions.fuzzystrmatch = fuzzystrmatch;
+    if (unaccent) extensions.unaccent = unaccent;
+
+    const availableExtensions = Object.keys(extensions);
+    logger.info('PGLite extensions available', { extensions: availableExtensions });
+
     if (dbUrl) {
       logger.info('Initializing PGLite', { storage: dbPathInfo });
 
       // Use modern async creation pattern
       db = await PGlite.create({
         url: dbUrl,
-        extensions: { vector },
+        extensions,
         relaxedDurability: config.database.relaxedDurability
       });
     } else {
       // In-memory is only used if explicitly configured or no URL available
       logger.info('Initializing PGLite', { storage: dbPathInfo });
       db = await PGlite.create({
-        extensions: { vector }
+        extensions
       });
       usingInMemoryFallback = true;
     }
 
-    // Enable the vector extension
+    // Enable extensions
     await db.query("CREATE EXTENSION IF NOT EXISTS vector;");
     logger.info('PGLite vector extension enabled');
+
+    // Enable Zero Protocol fuzzy search extensions (if available)
+    if (pg_trgm) {
+      try {
+        await db.query("CREATE EXTENSION IF NOT EXISTS pg_trgm;");
+        logger.info('PGLite pg_trgm extension enabled (trigram fuzzy search)');
+      } catch (e) {
+        logger.warn('Failed to enable pg_trgm extension', { error: e.message });
+      }
+    }
+    if (fuzzystrmatch) {
+      try {
+        await db.query("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;");
+        logger.info('PGLite fuzzystrmatch extension enabled (Soundex/Levenshtein)');
+      } catch (e) {
+        logger.warn('Failed to enable fuzzystrmatch extension', { error: e.message });
+      }
+    }
+    if (unaccent) {
+      try {
+        await db.query("CREATE EXTENSION IF NOT EXISTS unaccent;");
+        logger.info('PGLite unaccent extension enabled (accent-insensitive)');
+      } catch (e) {
+        logger.warn('Failed to enable unaccent extension', { error: e.message });
+      }
+    }
 
     // Create the reports table
     await db.query(`
@@ -538,8 +590,18 @@ async function _doInitDB() {
       logger.warn('FALLBACK: Attempting in-memory database (DATA WILL NOT PERSIST)');
       try {
         dbPathInfo = 'In-Memory (Error Fallback)';
-        db = await PGlite.create({ extensions: { vector } });
+        // Build fallback extensions object
+        const fallbackExtensions = { vector };
+        if (pg_trgm) fallbackExtensions.pg_trgm = pg_trgm;
+        if (fuzzystrmatch) fallbackExtensions.fuzzystrmatch = fuzzystrmatch;
+        if (unaccent) fallbackExtensions.unaccent = unaccent;
+
+        db = await PGlite.create({ extensions: fallbackExtensions });
         await db.query("CREATE EXTENSION IF NOT EXISTS vector;");
+        // Enable optional extensions in fallback mode too
+        if (pg_trgm) try { await db.query("CREATE EXTENSION IF NOT EXISTS pg_trgm;"); } catch (_) {}
+        if (fuzzystrmatch) try { await db.query("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;"); } catch (_) {}
+        if (unaccent) try { await db.query("CREATE EXTENSION IF NOT EXISTS unaccent;"); } catch (_) {}
 
         // Create minimal table structure
         await db.query(`

@@ -353,11 +353,12 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 1.9.1
+- **Server Version**: 1.10.0
 - **MCP SDK**: 1.21.1
 - **MCP Spec (Stable)**: 2025-06-18 - Fully compliant
 - **MCP Spec (Draft)**: 2025-11-25 - Forward-compatible features
 - **Protocol Features**: Task Protocol (SEP-1686), Sampling (SEP-1577), Elicitation (SEP-1036), MCP Apps (SEP-1865), Enterprise Auth (SEP-990), Client Metadata (SEP-991)
+- **Zero Protocol**: Self-referential MCP architecture (`zero://` URI scheme, dual-role nodes)
 - **Package Integrations**: @terminals-tech/embeddings, @terminals-tech/graph, @terminals-tech/core
 
 ### MCP Compliance Notes

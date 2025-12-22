@@ -523,7 +523,7 @@ class ConsensusCalculator {
 
     return {
       consensus: sorted[0].payload,
-      confidence: weightedConfidence / totalWeight,
+      confidence: totalWeight > 0 ? weightedConfidence / totalWeight : 0,
       method: 'weighted',
       topSource: sorted[0].source,
       signalCount: signals.length

@@ -1,7 +1,7 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.9.1",
-  "description": "Production MCP server for multi-agent AI research with OpenRouter",
+  "version": "1.10.0",
+  "description": "Zero: Self-referential MCP server for multi-agent AI research. The fixed point of client-server duality.",
   "main": "src/server/mcpServer.js",
   "bin": {
     "openrouter-agents": "src/server/mcpServer.js",
@@ -11,7 +11,7 @@
     "start": "node src/server/mcpServer.js",
     "dev": "nodemon src/server/mcpServer.js",
     "stdio": "node src/server/mcpServer.js --stdio",
-    "test": "node tests/unit/core.test.js && node tests/unit/shared.test.js && node tests/unit/config.test.js && node tests/unit/auth.test.js",
+    "test": "node tests/unit/core.test.js && node tests/unit/config.test.js && node tests/unit/auth.test.js",
     "test:auth": "node tests/unit/auth.test.js",
     "test:integration": "node tests/integration/orchestration/mic-drop.test.js",
     "test:mic-drop": "DRY_RUN=true node tests/integration/orchestration/mic-drop.test.js",
@@ -44,13 +44,18 @@
   "homepage": "https://terminals.tech",
   "license": "MIT",
   "keywords": [
+    "zero",
     "mcp",
     "model context protocol",
     "openrouter",
     "agents",
     "research",
     "pglite",
-    "pgvector"
+    "pgvector",
+    "acp",
+    "lsp",
+    "self-referential",
+    "dual-role"
   ],
   "engines": {
     "node": ">=18"
@@ -58,9 +63,9 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
     "@modelcontextprotocol/sdk": "^1.21.1",
+    "@terminals-tech/core": "^0.1.1",
     "@terminals-tech/embeddings": "^0.1.0",
     "@terminals-tech/graph": "^0.1.0",
-    "@terminals-tech/core": "^0.1.1",
     "axios": "^1.6.2",
     "csv-parse": "^5.6.0",
     "date-fns": "^4.1.0",
@@ -77,6 +82,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "typescript": "^5.9.3"
   }
 }

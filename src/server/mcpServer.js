@@ -117,6 +117,10 @@ const cors = require('cors');
 const { getKnowledgeGraph } = require('../utils/knowledgeGraph');
 const { getSessionManager, EventTypes } = require('../utils/sessionStore');
 
+// Zero Protocol - Self-referential MCP architecture
+const { DualRoleNode, ConnectionState, createZeroNode } = require('../core/dualRoleNode');
+const { ZeroUri, ZeroUriRouter, self: zeroSelf, parse: parseZeroUri, isZeroUri } = require('../core/zeroUri');
+
 // Consolidated handlers (feature-flagged via CORE_HANDLERS_ENABLED)
 const handlers = config.core?.handlers?.enabled ? require('./handlers') : null;
 
@@ -130,8 +134,9 @@ const LEGACY_ONLY_TOOLS = new Set([
 // Initialize singleton instances
 let knowledgeGraph = null;
 let sessionManager = null;
+let zeroNode = null;
 
-// Lazy init for knowledge graph and session manager
+// Lazy init for knowledge graph, session manager, and Zero node
 async function ensureIntegrations() {
   if (!knowledgeGraph) {
     knowledgeGraph = getKnowledgeGraph(dbClient);
@@ -140,6 +145,31 @@ async function ensureIntegrations() {
   if (!sessionManager) {
     sessionManager = getSessionManager(dbClient);
     await sessionManager.initialize().catch(e => logger.error('SessionManager init error', { error: e }));
+  }
+  if (!zeroNode) {
+    try {
+      zeroNode = new DualRoleNode({
+        identity: config.server.name || 'openrouter-agents',
+        protocol: 'mcp',
+        capabilities: {
+          tools: true,
+          prompts: true,
+          resources: true,
+          sampling: true,
+          elicitation: true,
+        },
+      });
+      // Automatically connect to self for the fixed-point demonstration
+      await zeroNode.connectToSelf();
+      logger.info('Zero node initialized', {
+        identity: zeroNode.identity,
+        state: zeroNode.state,
+        fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED
+      });
+    } catch (e) {
+      logger.error('Zero node init error', { error: e.message });
+      zeroNode = null;
+    }
   }
 }
 
@@ -1324,6 +1354,96 @@ register("graph_patterns", {
 }, wrapWithHandler('graph_patterns', graphLegacy.patterns, false));
 
 register("graph_stats", {}, wrapWithHandler('graph_stats', graphLegacy.stats, false));
+
+// ==========================================
+// Zero Protocol Tools - Self-Referential Architecture
+// ==========================================
+
+// Zero node status - returns the fixed-point state
+register("zero_status", {
+  verbose: z.boolean().optional().default(false).describe("Include detailed state information")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  const status = {
+    identity: zeroNode.identity,
+    protocol: zeroNode.protocol,
+    state: zeroNode.state,
+    fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED,
+    selfUri: zeroSelf(zeroNode.identity).toString(),
+    services: Array.from(zeroNode.services?.keys() || []),
+    peers: Array.from(zeroNode.peers?.keys() || []),
+  };
+  if (params.verbose) {
+    status.capabilities = zeroNode.capabilities;
+    status.adapter = {
+      protocol: zeroNode.adapter?.protocol,
+      role: zeroNode.adapter?.role,
+      connected: zeroNode.adapter?.connected,
+    };
+  }
+  return { content: [{ type: 'text', text: JSON.stringify(status, null, 2) }] };
+});
+
+// Zero connect - connect to a zero:// URI
+register("zero_connect", {
+  uri: z.string().describe("Zero URI to connect to (e.g., zero://self, zero://peer/id, zero://discover)")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  try {
+    if (!isZeroUri(params.uri)) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: `Invalid Zero URI: ${params.uri}`, hint: 'Valid formats: zero://self, zero://peer/<id>, zero://discover' }, null, 2) }], isError: true };
+    }
+    const parsed = parseZeroUri(params.uri);
+    let result;
+    if (parsed.type === 'self') {
+      await zeroNode.connectToSelf();
+      result = {
+        connected: true,
+        type: 'self',
+        state: zeroNode.state,
+        fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED,
+        message: 'Fixed point reached: f(Zero) = Zero'
+      };
+    } else {
+      result = {
+        connected: false,
+        type: parsed.type,
+        message: `Connection type '${parsed.type}' not yet implemented. Currently only zero://self is supported.`
+      };
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: e.message }, null, 2) }], isError: true };
+  }
+});
+
+// Zero handshake - perform identity verification
+register("zero_handshake", {
+  challenge: z.string().optional().describe("Challenge string for verification (auto-generated if not provided)")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  try {
+    const result = await zeroNode.handshake(params.challenge);
+    return { content: [{ type: 'text', text: JSON.stringify({
+      success: true,
+      identity: zeroNode.identity,
+      state: zeroNode.state,
+      handshake: result,
+      fixedPointVerified: result?.identityMatch === true
+    }, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: e.message }, null, 2) }], isError: true };
+  }
+});
 
 // ==========================================
 // MCP 2025-11-25 Protocol Tools (SEP-1686, SEP-1577, SEP-1036)

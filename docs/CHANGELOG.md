@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.10.1 — 2025-12-16
+
+### MCP Configuration Optimization
+
+**Token-efficient, high-performance configurations for production deployments**
+
+#### New Configuration Files
+- **`.mcp.optimized.json`** — Recommended full-featured config with performance tuning
+- **`.mcp.minimal.json`** — Ultra-minimal config for token-constrained environments
+- **`docs/MCP-CONFIG-GUIDE.md`** — Comprehensive guide with migration path and best practices
+
+#### Configuration Profiles
+- **Optimized Profile** — Search-before-research pattern, async-by-default, batch operations, selective resources
+- **Minimal Profile** — MANUAL mode, essential tools only, 20-30% token reduction
+
+#### Documented Workflow Patterns
+1. **Search Before Research** — Check knowledge base before creating new research (saves 50-100K tokens)
+2. **Async Research Lifecycle** — Non-blocking background research with job monitoring
+3. **Batch Parallel Research** — Single tool call for 2-10 parallel queries (saves 10-20K tokens per batch)
+4. **Session Time-Travel** — Undo/redo and alternate timelines for exploratory analysis
+
+#### Parameter Normalization Reference
+- Alias mappings: `q→query`, `cost→costPreference`, `id→reportId`
+- Type coercion: automatic string/number/boolean conversion
+- Mode detection: SQL vs index auto-detected in `retrieve` tool
+
+#### Performance Optimizations
+- Embedding cache tuning (`EMBEDDING_CACHE_SIZE=1000`)
+- Job TTL configuration (`JOB_TTL_HOURS=1`)
+- Structured logging for production (`LOG_JSON`, `LOG_LEVEL`, `LOG_OUTPUT`)
+
+#### Resource Strategy
+- **Knowledge Base Resources** — Enable search-before-research pattern
+- **UI Resources (Optional)** — MCP Apps for autonomous UI surfacing (SEP-1865)
+
+#### Best Practices Checklist
+- Token efficiency guidelines
+- Performance tuning recommendations
+- Migration guide from default config
+- Troubleshooting common issues
+
+---
+
 ## v1.10.0 — 2025-12-15
 
 ### Zero Protocol: Self-Referential MCP Architecture

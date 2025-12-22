@@ -48,7 +48,7 @@ module.exports = {
   // Validation Middleware
   isValidationEnabled: validation.isValidationEnabled,
   withValidation: validation.withValidation,
-  validateParams: validation.validateParams,
+  validateParamsMiddleware: validation.validateParams,
 
   // Signal Protocol
   Signal: signal.Signal,
