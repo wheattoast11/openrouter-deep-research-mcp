@@ -18,7 +18,10 @@ const config = {
   },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
-    baseUrl: "https://openrouter.ai/api/v1"
+    baseUrl: "https://openrouter.ai/api/v1",
+    timeout: parseInt(process.env.OPENROUTER_TIMEOUT_MS, 10) || 180000,
+    retries: parseInt(process.env.OPENROUTER_RETRIES, 10) || 3,
+    retryDelayMs: parseInt(process.env.OPENROUTER_RETRY_DELAY_MS, 10) || 1000
   },
   models: {
     // Allow overriding planning model; provide a generally-available safe default
@@ -260,9 +263,65 @@ config.core = {
     enabled: process.env.ROLESHIFT_ENABLED !== 'false',
     timeout: parseInt(process.env.ROLESHIFT_TIMEOUT_MS, 10) || 60000
   },
+  // MCP features (resources, prompts, streamable HTTP)
+  mcp: {
+    features: {
+      resources: process.env.MCP_RESOURCES_ENABLED !== 'false',
+      prompts: process.env.MCP_PROMPTS_ENABLED !== 'false'
+    }
+  },
   // Schema registry options
   schemas: {
     strictValidation: process.env.STRICT_SCHEMA_VALIDATION === 'true'
+  },
+  // Rail Protocol configuration (v1.9.2)
+  rail: {
+    enabled: process.env.RAIL_ENABLED !== 'false',
+    version: '0.1.0',
+    // Token tracking
+    tokens: {
+      countEnabled: process.env.RAIL_TOKEN_COUNT !== 'false',
+      budgetEnabled: process.env.RAIL_TOKEN_BUDGET === 'true',
+      budgetLimit: parseInt(process.env.RAIL_TOKEN_BUDGET_LIMIT, 10) || 100000
+    },
+    // Caching
+    cache: {
+      enabled: process.env.RAIL_CACHE !== 'false',
+      ttlSeconds: parseInt(process.env.RAIL_CACHE_TTL, 10) || 3600,
+      semanticThreshold: parseFloat(process.env.RAIL_CACHE_THRESHOLD) || 0.85
+    },
+    // Rate limiting
+    rateLimit: {
+      enabled: process.env.RAIL_RATE_LIMIT !== 'false',
+      requestsPerMinute: parseInt(process.env.RAIL_RATE_LIMIT_RPM, 10) || 60
+    },
+    // Circuit breaker
+    circuitBreaker: {
+      enabled: process.env.RAIL_CIRCUIT_BREAKER !== 'false',
+      failureThreshold: parseInt(process.env.RAIL_CIRCUIT_THRESHOLD, 10) || 5,
+      resetTimeoutMs: parseInt(process.env.RAIL_CIRCUIT_RESET_MS, 10) || 30000
+    },
+    // Routing strategy
+    routing: {
+      strategy: process.env.RAIL_ROUTING_STRATEGY || 'auto',
+      costPreference: process.env.RAIL_COST_PREFERENCE || 'balanced'
+    },
+    // Tunnels (agent-to-agent)
+    tunnels: {
+      enabled: process.env.RAIL_TUNNELS !== 'false',
+      defaultTtlMs: parseInt(process.env.RAIL_TUNNEL_TTL_MS, 10) || 60000,
+      requireAck: process.env.RAIL_TUNNEL_REQUIRE_ACK === 'true'
+    },
+    // Streaming consensus
+    consensus: {
+      enabled: process.env.RAIL_CONSENSUS !== 'false',
+      minAgreement: parseFloat(process.env.RAIL_CONSENSUS_MIN) || 0.6,
+      timeoutMs: parseInt(process.env.RAIL_CONSENSUS_TIMEOUT_MS, 10) || 30000,
+      updateIntervalMs: parseInt(process.env.RAIL_CONSENSUS_UPDATE_MS, 10) || 500
+    },
+    // Observability
+    debug: process.env.RAIL_DEBUG === 'true',
+    debugRails: (process.env.RAIL_DEBUG_RAILS || '').split(',').filter(Boolean)
   }
 };
 

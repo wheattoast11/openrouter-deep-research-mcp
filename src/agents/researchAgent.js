@@ -5,8 +5,9 @@ const structuredDataParser = require('../utils/structuredDataParser'); // Import
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
 const logger = require('../utils/logger').child('ResearchAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
-const RobustWebScraper = require('../utils/robustWebScraper'); // Web grounding for real-time data
+const UnifiedSearchMesh = require('../utils/robustWebScraper'); // Web grounding for real-time data
 const { Signal } = require('../core/signal'); // Signal Protocol integration
+const { tokenFromSignal } = require('../core/rail/index'); // Rail Protocol - Token wrapping for provenance
 const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
@@ -32,7 +33,7 @@ const WEB_GROUNDING_CONFIG = {
 };
 
 // Singleton web scraper instance
-const webScraper = new RobustWebScraper();
+const webScraper = new UnifiedSearchMesh();
 
 /**
  * Convert a research result to a Signal object
@@ -87,19 +88,25 @@ class ResearchAgent {
       logger.info('Performing web grounding search', { requestId, query: query.substring(0, 80) });
       const startTime = Date.now();
 
-      const results = await webScraper.searchWeb(query, WEB_GROUNDING_CONFIG.maxResults);
+      const signals = await webScraper.perception(query, WEB_GROUNDING_CONFIG.maxResults);
 
-      if (!results || results.length === 0) {
+      if (!signals || signals.length === 0) {
         logger.warn('Web grounding returned no results', { requestId, query: query.substring(0, 50) });
         return { success: false, context: '', sources: [] };
       }
+
+      const results = signals.map(s => ({
+        title: s.payload.title,
+        url: s.payload.url,
+        text: s.payload.snippet
+      }));
 
       const duration = Date.now() - startTime;
       logger.info('Web grounding completed', { requestId, resultCount: results.length, durationMs: duration });
 
       // Format results for LLM context
       const formattedResults = results.map((r, i) =>
-        `[${i + 1}] ${r.title}\nSource: ${r.url}\n${r.text || r.snippet || ''}`
+        `[${i + 1}] ${r.title}\nSource: ${r.url}\n${r.text || ''}`
       ).join('\n\n');
 
       const context = `
@@ -499,6 +506,10 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
       // Create signal from result
       resultObj.signal = resultToSignal(resultObj);
 
+      // Wrap signal in Token for provenance tracking (Rail Protocol)
+      resultObj.token = tokenFromSignal(resultObj.signal);
+      resultObj.token.trace.push(`ResearchAgent:${agentId}:${model}`);
+
       // Emit signal event for real-time consumers
       if (onEvent) {
         await onEvent('model_signal', {
@@ -526,6 +537,10 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
 
       // Create error signal
       errorObj.signal = resultToSignal(errorObj);
+
+      // Wrap error signal in Token for provenance tracking (Rail Protocol)
+      errorObj.token = tokenFromSignal(errorObj.signal);
+      errorObj.token.trace.push(`ResearchAgent:${agentId}:${model}:error`);
 
       return errorObj;
     }

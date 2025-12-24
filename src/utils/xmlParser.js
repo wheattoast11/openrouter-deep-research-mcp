@@ -1,87 +1,98 @@
 // src/utils/xmlParser.js
+// SignalParser: Isomorphic extraction of protocol-compliant signals from LLM streams.
+
 const { XMLParser } = require('fast-xml-parser');
+const { Signal } = require('../core/signal');
 
-function parseAgentXml(xmlString) {
-  const options = {
-    ignoreAttributes: false,
-    attributeNamePrefix: "",
-    textNodeName: "_text",
-    parseAttributeValue: true,
-    allowBooleanAttributes: true,
-    // Ensure array notation is used even for single elements
-    isArray: (name, jpath, isLeafNode, isAttribute) => {
-      // Treat all agent tags as arrays
-      return name.startsWith('agent_');
-    }
-  };
-
-  const parser = new XMLParser(options);
-  let agents = [];
-  let processedXmlString = xmlString;
-
-  // Check for and remove markdown code fences
-  if (processedXmlString.startsWith('```xml\n') && processedXmlString.endsWith('\n```')) {
-    processedXmlString = processedXmlString.substring(7, processedXmlString.length - 4).trim();
-    console.warn(`[${new Date().toISOString()}] xmlParser: Removed markdown code fences from XML input.`);
-  } else if (processedXmlString.startsWith('```') && processedXmlString.endsWith('```')) {
-     // Handle case without explicit 'xml' language tag
-     processedXmlString = processedXmlString.substring(3, processedXmlString.length - 3).trim();
-     console.warn(`[${new Date().toISOString()}] xmlParser: Removed generic markdown code fences from XML input.`);
+/**
+ * SignalParser - Transforms LLM XML fragments into Signal objects.
+ * Aligned with Agent Zero's multi-agent orchestration pattern.
+ */
+class SignalParser {
+  constructor() {
+    this.parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: "",
+      textNodeName: "_text",
+      parseAttributeValue: true,
+      allowBooleanAttributes: true,
+      isArray: (name) => name.startsWith('agent_') || name === 'signal'
+    });
   }
 
+  /**
+   * Parse LLM output into an array of Signals.
+   * Handles markdown fences and fragmented XML automatically.
+   */
+  parseSignals(xmlString, source = 'llm-extraction') {
+    let processed = xmlString.trim();
 
-  try {
-    // Wrap the potentially fragmented XML in a root element for safer parsing
-    const wrappedXml = `<root>${processedXmlString}</root>`;
-    const jsonObj = parser.parse(wrappedXml);
+    // Strip markdown fences
+    processed = processed.replace(/^```xml\n?/, '').replace(/\n?```$/, '');
+    processed = processed.replace(/^```\n?/, '').replace(/\n?```$/, '');
 
-    if (jsonObj && jsonObj.root) {
-      // Iterate through potential agent tags
-      for (const key in jsonObj.root) {
-        if (key.startsWith('agent_')) {
-          const agentIdMatch = key.match(/agent_(\d+)/);
-          if (agentIdMatch) {
-            const agentId = parseInt(agentIdMatch[1]);
-            const agentData = jsonObj.root[key];
-            
-            // Handle cases where there might be multiple tags with the same name
-            const items = Array.isArray(agentData) ? agentData : [agentData];
+    try {
+      // Wrap in root to handle multiple signals/fragments
+      const wrapped = `<root>${processed}</root>`;
+      const jsonObj = this.parser.parse(wrapped);
+
+      const signals = [];
+
+      if (jsonObj && jsonObj.root) {
+        for (const [key, data] of Object.entries(jsonObj.root)) {
+          // Handle legacy agent_N tags
+          if (key.startsWith('agent_')) {
+            const agentId = key.split('_')[1];
+            const items = Array.isArray(data) ? data : [data];
             
             items.forEach(item => {
-              if (item && typeof item === 'object' && item._text) {
-                agents.push({
-                  id: agentId, // Use the ID from the tag name
-                  query: item._text.trim()
-                });
-              } else if (typeof item === 'string') { // Handle case where content is just text
-                 agents.push({
-                  id: agentId,
-                  query: item.trim()
-                });
+              const content = typeof item === 'object' ? item._text : item;
+              if (content) {
+                signals.push(Signal.query(content.trim(), `agent-${agentId}`, {
+                  tags: ['agent-query', `id-${agentId}`]
+                }));
               }
+            });
+          }
+
+          // Handle new unified <signal> tags
+          if (key === 'signal') {
+            const items = Array.isArray(data) ? data : [data];
+            items.forEach(item => {
+              signals.push(new Signal(
+                item.type || 'response',
+                item._text || item.payload || item,
+                {
+                  source: item.source || source,
+                  confidence: item.confidence ?? 1.0,
+                  tags: item.tags ? item.tags.split(',') : []
+                }
+              ));
             });
           }
         }
       }
-      // Sort by ID just in case the order wasn't guaranteed
-      agents.sort((a, b) => a.id - b.id);
-    } else {
-       console.error(`[${new Date().toISOString()}] xmlParser: Failed to parse XML structure. Input:`, xmlString);
+
+      return signals;
+    } catch (error) {
+      process.stderr.write(`[${new Date().toISOString()}] SignalParser: Parse error: ${error.message}\n`);
+      return [];
     }
-
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] xmlParser: Error parsing XML string. Input:`, xmlString, 'Error:', error);
-    // Return empty array or rethrow, depending on desired error handling
-    // Returning empty array to avoid breaking the flow, but logging the error
   }
 
-  if (agents.length === 0) {
-     console.warn(`[${new Date().toISOString()}] xmlParser: No agent queries extracted from XML. Input:`, xmlString);
+  /**
+   * Static helper for legacy compatibility
+   */
+  static parseAgentXml(xmlString) {
+    const parser = new SignalParser();
+    return parser.parseSignals(xmlString).map(s => ({
+      id: parseInt(s.tags.find(t => t.startsWith('id-'))?.split('-')[1] || 0),
+      query: typeof s.payload === 'string' ? s.payload : JSON.stringify(s.payload)
+    }));
   }
-
-  return agents;
 }
 
 module.exports = {
-  parseAgentXml
+  SignalParser,
+  parseAgentXml: SignalParser.parseAgentXml
 };

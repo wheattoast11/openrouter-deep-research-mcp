@@ -105,7 +105,9 @@ function ensureTmuxServer() {
     } catch (fixErr) {
       return {
         ok: false,
-        error: `Cannot fix socket directory: ${fixErr.message}`
+        error: `tmux socket directory has permission issues.\n` +
+          `Try running: tmux kill-server 2>/dev/null; rm -rf ${socketDir}; mkdir -m 700 ${socketDir}\n` +
+          `Then retry your command.`
       };
     }
   }

@@ -4,6 +4,24 @@ const fetch = require('node-fetch'); // Use node-fetch v2 for CommonJS
 const { createParser } = require('eventsource-parser');
 const config = require('../../config');
 
+// Retry wrapper for retryable errors
+async function withRetry(fn, maxRetries = config.openrouter?.retries || 3, delayMs = config.openrouter?.retryDelayMs || 1000) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const isRetryable = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ENETUNREACH', 'ECONNREFUSED', 'ABORT_ERR'].includes(err.code) ||
+        err.name === 'AbortError' || err.type === 'aborted';
+      if (attempt === maxRetries || !isRetryable) throw err;
+      console.error(`[${new Date().toISOString()}] OpenRouterClient: Retry ${attempt}/${maxRetries} after ${delayMs * attempt}ms - ${err.message}`);
+      await new Promise(r => setTimeout(r, delayMs * attempt));
+    }
+  }
+  throw lastError;
+}
+
 class OpenRouterClient {
   constructor() {
     this.apiKey = config.openrouter.apiKey;
@@ -11,6 +29,7 @@ class OpenRouterClient {
     
     this.client = axios.create({
       baseURL: this.baseUrl,
+      timeout: config.openrouter?.timeout || 180000,
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'HTTP-Referer': 'http://localhost:3002',
@@ -31,23 +50,25 @@ class OpenRouterClient {
       throw new ConfigurationError('OpenRouter API key not configured', 'OPENROUTER_API_KEY');
     }
 
-    try {
-      const minMax = Number(config.models?.minMaxTokens || 0);
-      const merged = { ...options };
-      if (minMax > 0) {
-        merged.max_tokens = Math.max(Number(merged.max_tokens || 0), minMax);
-      }
-      const response = await this.client.post('/chat/completions', {
-        model,
-        messages,
-        ...merged
-      });
-      
-      return response.data;
-    } catch (error) {
-      console.error('Error calling OpenRouter API:', error.response?.data || error.message);
-      throw error;
+    const minMax = Number(config.models?.minMaxTokens || 0);
+    const merged = { ...options };
+    if (minMax > 0) {
+      merged.max_tokens = Math.max(Number(merged.max_tokens || 0), minMax);
     }
+
+    return withRetry(async () => {
+      try {
+        const response = await this.client.post('/chat/completions', {
+          model,
+          messages,
+          ...merged
+        });
+        return response.data;
+      } catch (error) {
+        console.error('Error calling OpenRouter API:', error.response?.data || error.message);
+        throw error;
+      }
+    });
   }
 
   // New method for streaming chat completions (robust SSE parsing)
@@ -72,17 +93,30 @@ class OpenRouterClient {
     });
 
     console.error(`[${new Date().toISOString()}] OpenRouterClient: Starting stream request to ${model}`);
+    const timeoutMs = config.openrouter?.timeout || 180000;
 
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'HTTP-Referer': 'http://localhost:3002',
-          'X-Title': 'OpenRouter Research Agents',
-          'Content-Type': 'application/json'
-        },
-        body: body
+      const response = await withRetry(async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${this.apiKey}`,
+              'HTTP-Referer': 'http://localhost:3002',
+              'X-Title': 'OpenRouter Research Agents',
+              'Content-Type': 'application/json'
+            },
+            body: body,
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          return res;
+        } catch (err) {
+          clearTimeout(timeoutId);
+          throw err;
+        }
       });
 
       if (!response.ok) {

@@ -41,6 +41,47 @@ async function calculateAdaptiveMaxTokens(model, researchResults, options = {}) 
 }
 
 /**
+ * Wrap an async iterable with per-chunk timeout
+ * Resets timeout after each successful chunk, throws if no data received within timeoutMs
+ * @param {AsyncIterable} stream - The stream to wrap
+ * @param {number} timeoutMs - Timeout in milliseconds between chunks
+ * @returns {AsyncGenerator} Wrapped stream with timeout
+ */
+async function* streamWithTimeout(stream, timeoutMs) {
+  let timeoutId = null;
+  let rejectFn = null;
+
+  const resetTimeout = () => {
+    if (timeoutId) clearTimeout(timeoutId);
+    return new Promise((_, reject) => {
+      rejectFn = reject;
+      timeoutId = setTimeout(() => {
+        reject(new Error(`Stream timeout: no data received for ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+  };
+
+  try {
+    const iterator = stream[Symbol.asyncIterator]();
+    let timeoutPromise = resetTimeout();
+
+    while (true) {
+      const nextPromise = iterator.next();
+      const result = await Promise.race([nextPromise, timeoutPromise]);
+
+      if (result.done) {
+        break;
+      }
+
+      yield result.value;
+      timeoutPromise = resetTimeout(); // Reset for next chunk
+    }
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+/**
  * Detect if content appears to be truncated mid-sentence
  * Common patterns: ends with incomplete number (d ≈ 0.), trailing comma, no sentence terminator
  * @param {string} content - Content to check
@@ -306,10 +347,14 @@ Please perform a critical synthesis of these findings, considering the original 
       );
 
       // Use the new streaming method with adaptive token limit
-      const stream = openRouterClient.streamChatCompletion(this.model, messages, {
+      const rawStream = openRouterClient.streamChatCompletion(this.model, messages, {
         temperature: 0.3, // Low temperature for synthesis consistency
         max_tokens: adaptiveMaxTokens // Model-aware adaptive limit
       });
+
+      // Wrap with per-chunk timeout to prevent indefinite hangs
+      const streamTimeoutMs = config.openrouter?.timeout || 180000;
+      const stream = streamWithTimeout(rawStream, streamTimeoutMs);
 
       for await (const chunk of stream) {
         if (chunk.done) {

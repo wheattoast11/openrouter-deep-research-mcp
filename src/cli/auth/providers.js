@@ -15,64 +15,51 @@
 
 'use strict';
 
-// Get Supabase URL from environment
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+/**
+ * Get OAuth provider configurations
+ * Evaluated dynamically to pick up environment variables
+ */
+function getProviders() {
+  const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const TERMINALS_BASE_URL = process.env.TERMINALS_BASE_URL || 'https://terminals.tech';
 
-// Terminals.tech base URL
-const TERMINALS_BASE_URL = process.env.TERMINALS_BASE_URL || 'https://terminals.tech';
-
-const PROVIDERS = {
-  // terminals.tech CLI auth with ECDH key exchange
-  // Uses secure device flow: init -> browser auth -> poll status -> decrypt token
-  terminals: {
-    name: 'Terminals.tech',
-    type: 'cli-auth', // Custom CLI auth flow with ECDH
-    baseUrl: TERMINALS_BASE_URL,
-
-    // CLI Auth endpoints (see terminals-landing-new/pages/api/auth/cli/)
-    cliAuthEndpoints: {
-      init: `${TERMINALS_BASE_URL}/api/auth/cli/init`,
-      status: `${TERMINALS_BASE_URL}/api/auth/cli/status`, // + /<session_id>
-      authPage: `${TERMINALS_BASE_URL}/auth/cli`, // + ?session=<uuid>
+  return {
+    // terminals.tech standard OAuth 2.1 PKCE
+    terminals: {
+      name: 'Terminals.tech',
+      type: 'supabase',
+      baseUrl: TERMINALS_BASE_URL,
+      authorizationEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/authorize` : null,
+      tokenEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/token` : null,
+      revokeEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/logout` : null,
+      userinfoEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/user` : null,
+      clientId: process.env.ZERO_OAUTH_CLIENT_ID || 'zero-cli',
+      anonKey: process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      scopes: ['openid', 'profile', 'email', 'models', 'training', 'chat'],
+      codeChallengeMethod: 'S256',
+      redirectUri: 'http://localhost:{PORT}/oauth/callback',
+      oauthProviders: ['google', 'github']
     },
 
-    // Fallback OAuth settings (for browser-based flow)
-    authorizationEndpoint: `${TERMINALS_BASE_URL}/auth/login`,
-    tokenEndpoint: null, // Handled by CLI auth flow
-    deviceAuthEndpoint: null, // Uses custom CLI auth instead
-
-    // Settings
-    sessionTimeout: 10 * 60 * 1000, // 10 minutes
-    pollInterval: 2000, // 2 seconds
-    maxPollAttempts: 300, // 10 minutes / 2 seconds
-  },
-
-  // Direct Supabase Auth (for self-hosted/custom deployments)
-  supabase: {
-    name: 'Supabase',
-    type: 'supabase',
-    authorizationEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/authorize` : null,
-    tokenEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/token` : null,
-    revokeEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/logout` : null,
-    userinfoEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/user` : null,
-    clientId: process.env.ZERO_OAUTH_CLIENT_ID || 'zero-cli',
-    anonKey: process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    scopes: ['openid', 'profile', 'email'],
-
-    // PKCE settings
-    codeChallengeMethod: 'S256',
-
-    // Timeouts (Supabase doesn't support device flow natively)
-    deviceCodePollInterval: null,
-    deviceCodeTimeout: null,
-
-    // Redirect URI for localhost callback
-    redirectUri: 'http://localhost:{PORT}/callback',
-
-    // Supabase-specific: supported OAuth providers
-    oauthProviders: ['google', 'github', 'azure', 'gitlab', 'bitbucket']
-  }
-};
+    // Direct Supabase Auth (for self-hosted/custom deployments)
+    supabase: {
+      name: 'Supabase',
+      type: 'supabase',
+      authorizationEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/authorize` : null,
+      tokenEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/token` : null,
+      revokeEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/logout` : null,
+      userinfoEndpoint: SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/user` : null,
+      clientId: process.env.ZERO_OAUTH_CLIENT_ID || 'zero-cli',
+      anonKey: process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      scopes: ['openid', 'profile', 'email'],
+      codeChallengeMethod: 'S256',
+      deviceCodePollInterval: null,
+      deviceCodeTimeout: null,
+      redirectUri: 'http://localhost:{PORT}/callback',
+      oauthProviders: ['google', 'github', 'azure', 'gitlab', 'bitbucket']
+    }
+  };
+}
 
 /**
  * Get default provider name from environment
@@ -87,7 +74,8 @@ function getDefaultProvider() {
  */
 function getProvider(name) {
   const providerName = name || getDefaultProvider();
-  const provider = PROVIDERS[providerName];
+  const providers = getProviders();
+  const provider = providers[providerName];
   if (!provider) {
     throw new Error(`Unknown OAuth provider: ${providerName}`);
   }
@@ -123,7 +111,7 @@ function supportsDeviceFlow(name) {
  * Get list of available providers
  */
 function getAvailableProviders() {
-  return Object.entries(PROVIDERS)
+  return Object.entries(getProviders())
     .filter(([name, config]) => {
       if (name === 'supabase') {
         return !!config.authorizationEndpoint;
@@ -139,7 +127,7 @@ function getAvailableProviders() {
 }
 
 module.exports = {
-  PROVIDERS,
+  getProviders,
   getProvider,
   getProviderWithPort,
   getDefaultProvider,

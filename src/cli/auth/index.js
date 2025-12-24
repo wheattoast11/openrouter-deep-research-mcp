@@ -13,7 +13,6 @@
 
 const { startOAuthFlow, refreshToken, revokeToken } = require('./oauth');
 const { startDeviceFlow } = require('./deviceFlow');
-const { startCliAuth } = require('./cliAuth');
 const { getApiKey, saveApiKey, clearApiKey } = require('./apiKey');
 const {
   loadCredentials,
@@ -182,17 +181,7 @@ async function loginWithOAuth(providerName, onProgress, options = {}) {
   try {
     const providerConfig = getProvider(providerName);
 
-    // Use CLI auth flow for terminals.tech (ECDH-based)
-    if (providerConfig.type === 'cli-auth') {
-      const credentials = await startCliAuth(providerName, { onProgress });
-      return {
-        success: true,
-        method: 'cli-auth',
-        credentials
-      };
-    }
-
-    // Use standard OAuth PKCE flow for other providers
+    // Use standard OAuth PKCE flow
     const credentials = await startOAuthFlow(providerName, {
       onProgress,
       oauthProvider: options.oauthProvider || 'google'

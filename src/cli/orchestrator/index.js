@@ -581,11 +581,10 @@ async function run(args) {
   // Check for tmux and ensure server is running
   const tmuxCheck = SessionManager.checkTmux();
   if (!tmuxCheck.available) {
-    error('tmux is required but not available.');
     if (tmuxCheck.error) {
       error(tmuxCheck.error);
     } else {
-      error('Install with: brew install tmux (macOS) or apt install tmux (Linux)');
+      error('tmux is required. Install with: brew install tmux (macOS) or apt install tmux (Linux)');
     }
     process.exit(1);
   }

@@ -13,6 +13,7 @@ const context = require('./context');
 const validation = require('./middleware/validation');
 const responseEnvelope = require('./responseEnvelope');
 const router = require('./router');
+const rail = require('./rail');
 
 // Transport and Bridge (loaded lazily to avoid circular deps)
 let transport = null;
@@ -103,5 +104,16 @@ module.exports = {
   getTransport,
 
   // Bridge Layer (lazy-loaded)
-  getBridge
+  getBridge,
+
+  // Rail Protocol
+  Rail: rail.Rail,
+  Token: rail.Token,
+  Switch: rail.Switch,
+  Ok: rail.Ok,
+  Err: rail.Err,
+  BackpressureError: rail.BackpressureError,
+  RailClosedError: rail.RailClosedError,
+  tokenFromSignal: rail.tokenFromSignal,
+  signalFromToken: rail.signalFromToken
 };

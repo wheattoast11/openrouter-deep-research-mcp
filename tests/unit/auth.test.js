@@ -130,23 +130,30 @@ function testStateGeneration() {
 /**
  * Test provider configuration
  */
-function testProviderConfiguration() {
-  const provider = getProvider('terminals');
-
-  assert(provider.name === 'Terminals.tech', 'Provider name should match');
-  assert(provider.authorizationEndpoint, 'Should have authorization endpoint');
-  assert(provider.tokenEndpoint, 'Should have token endpoint');
-  assert(provider.deviceAuthEndpoint, 'Should have device auth endpoint');
-  assert(provider.clientId, 'Should have client ID');
-  assert(Array.isArray(provider.scopes), 'Scopes should be array');
-  assert(provider.codeChallengeMethod === 'S256', 'Should use S256');
-
-  // Unknown provider should throw
+async function testProviderConfiguration() {
+  // Set dummy Supabase URL for testing
+  const originalUrl = process.env.SUPABASE_URL;
+  process.env.SUPABASE_URL = 'https://test.supabase.co';
+  
   try {
-    getProvider('unknown');
-    throw new Error('Should throw for unknown provider');
-  } catch (err) {
-    assert(err.message.includes('Unknown OAuth provider'), 'Should throw for unknown provider');
+    const provider = getProvider('terminals');
+
+    assert(provider.name === 'Terminals.tech', 'Provider name should match');
+    assert(provider.authorizationEndpoint, 'Should have authorization endpoint');
+    assert(provider.tokenEndpoint, 'Should have token endpoint');
+    assert(provider.clientId, 'Should have client ID');
+    assert(Array.isArray(provider.scopes), 'Scopes should be array');
+    assert(provider.codeChallengeMethod === 'S256', 'Should use S256');
+
+    // Unknown provider should throw
+    try {
+      getProvider('unknown');
+      throw new Error('Should throw for unknown provider');
+    } catch (err) {
+      assert(err.message.includes('Unknown OAuth provider'), 'Should throw for unknown provider');
+    }
+  } finally {
+    process.env.SUPABASE_URL = originalUrl;
   }
 }
 
@@ -154,12 +161,20 @@ function testProviderConfiguration() {
  * Test provider with port substitution
  */
 function testProviderWithPort() {
-  const provider = getProviderWithPort('terminals', 8080);
+  // Set dummy Supabase URL for testing
+  const originalUrl = process.env.SUPABASE_URL;
+  process.env.SUPABASE_URL = 'https://test.supabase.co';
 
-  assert(provider.redirectUri === 'http://localhost:8080/callback', 'Port should be substituted');
+  try {
+    const provider = getProviderWithPort('terminals', 8080);
 
-  const provider2 = getProviderWithPort('terminals', 9000);
-  assert(provider2.redirectUri === 'http://localhost:9000/callback', 'Different port should be substituted');
+    assert(provider.redirectUri === 'http://localhost:8080/oauth/callback', 'Port should be substituted');
+
+    const provider2 = getProviderWithPort('terminals', 9000);
+    assert(provider2.redirectUri === 'http://localhost:9000/oauth/callback', 'Different port should be substituted');
+  } finally {
+    process.env.SUPABASE_URL = originalUrl;
+  }
 }
 
 /**

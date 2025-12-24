@@ -10,6 +10,7 @@ const job = require('./job');
 const session = require('./session');
 const graph = require('./graph');
 const kb = require('./kb');
+const rail = require('./rail');
 
 /**
  * Master router for consolidated tools
@@ -44,6 +45,12 @@ async function routeToHandler(toolName, params, context = {}) {
   if (['search', 'query', 'retrieve', 'get_report', 'history', 'list_research_history'].includes(toolName)) {
     const op = getKBOp(toolName);
     return kb.handleKB(op, params, context);
+  }
+
+  // Rail Protocol tools
+  if (rail.isRailTool(toolName)) {
+    const op = rail.getRailOp(toolName);
+    return rail.handleRail(op, params, context);
   }
 
   throw new Error(`Unknown tool: ${toolName}. Use list_tools to see available tools.`);
@@ -139,5 +146,16 @@ module.exports = {
   executeQuery: kb.executeQuery,
   retrieve: kb.retrieve,
   getReport: kb.getReport,
-  listHistory: kb.listHistory
+  listHistory: kb.listHistory,
+
+  // Rail Protocol exports
+  handleRail: rail.handleRail,
+  isRailTool: rail.isRailTool,
+  getRailOp: rail.getRailOp,
+  listRails: rail.listRails,
+  explainRail: rail.explainRail,
+  listRoutes: rail.listRoutes,
+  getRoute: rail.getRoute,
+  listTunnels: rail.listTunnels,
+  listConsensus: rail.listConsensus
 };

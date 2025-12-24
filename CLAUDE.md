@@ -58,6 +58,23 @@ This document provides Claude and other LLMs with everything needed to effective
 | `graph_patterns` | Find event patterns | `{"n":3}` |
 | `graph_stats` | Get graph statistics | `{}` |
 
+### Rail Protocol Tools (NEW in v1.9.2)
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `list_rails` | List all rails, tunnels, routes, consensus | `{"includeStats":true, "filter":"active\|idle\|all"}` |
+| `explain_rail` | Show detailed rail/tunnel configuration | `{"railId":"uuid", "verbose":false}` |
+| `list_routes` | List all defined routes | `{"includePredicates":false}` |
+| `list_tunnels` | List active agent-to-agent tunnels | `{}` |
+| `list_consensus` | List streaming consensus sessions | `{"includeSignals":false}` |
+
+### Rail Protocol Resources
+| URI | Purpose | Format |
+|-----|---------|--------|
+| `rail://routes` | Route registry with predicates | JSON array |
+| `rail://tunnels` | Active tunnel connections | JSON array |
+| `rail://consensus` | Consensus sessions state | JSON array |
+| `rail://config` | Rail configuration settings | JSON object |
+
 ---
 
 ## Parameter Normalization: How to Call Tools
@@ -418,6 +435,41 @@ dbClient.saveResearchReport({ensembleSignals}) → DB
 CLI: getReportSignals(reportId) → verification.verify({signals})
 ```
 
+### Rail Protocol (`src/core/rail/`) (NEW in v1.9.2)
+Seamless inter-agent communication with backpressure, provenance tracking, and consensus.
+
+```javascript
+const { Rail, Token, tokenFromSignal, signalFromToken } = require('./src/core/rail');
+
+// Wrap signals with provenance tracking
+const token = tokenFromSignal(signal);
+console.log(token.trace); // ['ResearchAgent:agent-1', 'ConsensusCalculator']
+
+// Create connected rail pairs for bidirectional communication
+const [sender, receiver] = Rail.pair();
+await sender.send(token);
+
+for await (const msg of receiver.receive()) {
+  console.log(msg.value, msg.origin, msg.trace);
+}
+```
+
+**Core Components:**
+- **Token**: Unit of data with provenance (id, value, origin, trace)
+- **Rail**: Lazy bidirectional channel with backpressure (`send`, `receive`, `pause`, `resume`)
+- **Switch**: Dynamic routing based on predicates
+- **Ok/Err**: Railway-oriented error handling (no exceptions)
+
+**Advanced Features:**
+- **Tunnel** (`TunnelRegistry`): Agent-to-agent message passing with TTL and acknowledgments
+- **StreamingConsensus** (`ConsensusManager`): Real-time multi-model agreement calculation
+- **Routes** (`RouteRegistry`): User-definable routing predicates for model selection
+- **Pipeline** (`PipelineBuilder`): DAG-based stage execution with automatic parallelism
+
+**Events emitted:**
+- `notifications/rail.tunnel` - Agent-to-agent message flow
+- `notifications/rail.consensus` - Streaming consensus updates
+
 ### Parameter Normalization (`src/core/normalize.js`)
 Declarative alias system for flexible tool parameter handling.
 
@@ -434,6 +486,9 @@ Bidirectional communication enabling server → client requests via sampling/eli
 | `SIGNAL_PROTOCOL_ENABLED` | `false` | Enable Signal protocol |
 | `ROLESHIFT_ENABLED` | `false` | Enable bidirectional protocol |
 | `STRICT_SCHEMA_VALIDATION` | `false` | Enforce strict schema validation |
+| `RAIL_ENABLED` | `true` | Enable Rail Protocol (default on) |
+| `RAIL_DEBUG` | `false` | Enable Rail debug logging |
+| `RAIL_DEBUG_RAILS` | `""` | Comma-separated rail IDs to debug |
 
 ---
 

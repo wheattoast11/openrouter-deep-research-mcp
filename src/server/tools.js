@@ -525,6 +525,7 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   let allAgentQueries = [];
   let allResearchResults = [];
   let allSignals = []; // Collect signals from ensemble for verification
+  let allTokens = []; // Rail Protocol: Collect tokens for provenance tracking
   let savedReportId = null;
 
   logger.info('Starting iterative research', { requestId, query: safeSubstring(query, 0, 50), maxIterations: MAX_ITERATIONS });
@@ -799,12 +800,24 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         .map(r => r.signal);
       allSignals.push(...currentSignals);
 
+      // Rail Protocol: Extract and collect tokens for provenance tracking
+      const currentTokens = currentResearchResults
+        .filter(r => r.token)
+        .map(r => r.token);
+      allTokens.push(...currentTokens);
+
       // Emit ensemble signals event for real-time consumers
       if (onEvent && currentSignals.length > 0) {
         await onEvent('ensemble_signals', {
           iteration: currentIteration,
           signals: currentSignals.map(s => s.toJSON()),
-          signalCount: currentSignals.length
+          signalCount: currentSignals.length,
+          // Rail Protocol: Include token traces for provenance
+          tokenTraces: currentTokens.map(t => ({
+            id: t.id,
+            origin: t.origin,
+            trace: t.trace
+          }))
         });
       }
 
@@ -1705,7 +1718,13 @@ async function reindexVectorsTool(params, mcpExchange = null, requestId = 'unkno
 async function searchWeb(params, mcpExchange = null, requestId = 'unknown-req') {
   const { query, maxResults } = params;
   try {
-    const results = await robustScraperInstance.searchWeb(query, maxResults);
+    const signals = await robustScraperInstance.perception(query, maxResults);
+    const results = signals.map(s => ({
+      title: s.payload.title,
+      text: s.payload.snippet,
+      url: s.payload.url,
+      source: s.source
+    }));
     return JSON.stringify({ query, results }, null, 2);
   } catch (e) {
     // Fallback to simple DDG API
@@ -1753,7 +1772,14 @@ function stripHtml(html) {
 async function fetchUrl(params, mcpExchange = null, requestId = 'unknown-req') {
   const { url, maxBytes } = params;
   try {
-    const resObj = await robustScraperInstance.fetchUrl(url, { maxBytes });
+    const signal = await robustScraperInstance.fetchSignal(url);
+    const resObj = {
+      success: signal.type !== 'error',
+      content: signal.payload.content,
+      title: signal.payload.title,
+      url: signal.payload.url,
+      error: signal.type === 'error' ? signal.payload.message : null
+    };
     // Auto-index fetched text when enabled
     try {
       const cfg = require('../../config');
@@ -2351,6 +2377,165 @@ async function pingTool(params) {
   }
 }
 
+// ===== SESSION & GRAPH TOOL WRAPPERS =====
+// These provide CLI-compatible interfaces to the session and graph handlers
+
+const { getSessionManager } = require('../utils/sessionStore');
+const { getKnowledgeGraph } = require('../utils/knowledgeGraph');
+
+// Lazy-initialized managers
+let _sessionManager = null;
+let _knowledgeGraph = null;
+
+async function ensureSessionManager() {
+  if (!_sessionManager) {
+    _sessionManager = getSessionManager(dbClient);
+    await _sessionManager.initialize().catch(e => logger.warn('SessionManager init warning', { error: e.message }));
+  }
+  return _sessionManager;
+}
+
+async function ensureKnowledgeGraph() {
+  if (!_knowledgeGraph) {
+    _knowledgeGraph = getKnowledgeGraph(dbClient);
+    await _knowledgeGraph.initialize().catch(e => logger.warn('KnowledgeGraph init warning', { error: e.message }));
+  }
+  return _knowledgeGraph;
+}
+
+// Session tools
+async function sessionState(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.getState(sessionId), null, 2);
+}
+
+async function sessionUndo(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.undo(sessionId), null, 2);
+}
+
+async function sessionRedo(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.redo(sessionId), null, 2);
+}
+
+async function sessionCheckpoint(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  const name = params.name || `checkpoint-${Date.now()}`;
+  await mgr.createCheckpoint(sessionId, name);
+  return JSON.stringify({ success: true, sessionId, checkpointName: name }, null, 2);
+}
+
+async function sessionFork(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  const newId = params.newSessionId || `fork_${Date.now()}`;
+  return JSON.stringify(await mgr.forkSession(sessionId, newId), null, 2);
+}
+
+async function sessionTimeTravel(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.timeTravel(sessionId, params.timestamp), null, 2);
+}
+
+// Graph tools
+async function graphTraverse(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+  const { startNode, node, depth = 3, strategy = 'semantic' } = params;
+  const start = startNode || node || 'report:1';
+
+  if (typeof graph.traverseGraph === 'function') {
+    const [nodeType, nodeId] = start.includes(':') ? start.split(':') : ['report', start];
+    const result = await graph.traverseGraph(nodeType, nodeId, depth, strategy);
+    return JSON.stringify({ startNode: start, strategy, nodes: result || [] }, null, 2);
+  }
+
+  return JSON.stringify({ startNode: start, strategy, nodes: [], message: 'Graph traversal not available' }, null, 2);
+}
+
+async function graphPath(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+  const { from, to } = params;
+
+  if (!from || !to) {
+    return JSON.stringify({ error: 'Both from and to parameters are required' }, null, 2);
+  }
+
+  if (typeof graph.findPath === 'function') {
+    const path = await graph.findPath(from, to);
+    return JSON.stringify({ from, to, pathFound: path?.length > 0, path: path || [] }, null, 2);
+  }
+
+  return JSON.stringify({ from, to, pathFound: false, message: 'Path finding not available' }, null, 2);
+}
+
+async function graphClusters(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+
+  if (typeof graph.findClusters === 'function') {
+    const clusters = await graph.findClusters();
+    return JSON.stringify({ clusterCount: clusters?.length || 0, clusters: clusters || [] }, null, 2);
+  }
+
+  return JSON.stringify({ clusterCount: 0, clusters: [], message: 'Clustering not available' }, null, 2);
+}
+
+async function graphPageRank(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+  const topK = params.topK || 20;
+
+  if (typeof graph.getPageRank === 'function') {
+    const rankings = await graph.getPageRank(topK);
+    return JSON.stringify({ topK, rankings: rankings || [] }, null, 2);
+  }
+
+  // Fallback: use report order
+  try {
+    const rows = await dbClient.executeQuery(
+      `SELECT id, original_query FROM research_reports ORDER BY created_at DESC LIMIT $1`,
+      [topK]
+    );
+    return JSON.stringify({
+      topK,
+      rankings: (rows || []).map((r, i) => ({
+        rank: i + 1,
+        nodeId: `report:${r.id}`,
+        label: r.original_query?.substring(0, 50)
+      })),
+      message: 'Rankings based on recency'
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ topK, rankings: [], error: e.message }, null, 2);
+  }
+}
+
+async function graphStats(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+
+  if (typeof graph.getGraphStats === 'function') {
+    const stats = await graph.getGraphStats();
+    return JSON.stringify({ available: true, ...stats }, null, 2);
+  }
+
+  // Fallback: count from database
+  try {
+    const reportCount = await dbClient.executeQuery('SELECT COUNT(*) as count FROM research_reports', []);
+    const docCount = await dbClient.executeQuery('SELECT COUNT(*) as count FROM doc_index', []);
+    return JSON.stringify({
+      available: true,
+      reportCount: parseInt(reportCount?.[0]?.count) || 0,
+      docCount: parseInt(docCount?.[0]?.count) || 0
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ available: false, error: e.message }, null, 2);
+  }
+}
+
 module.exports = {
   // Schemas
   conductResearchSchema,
@@ -2429,5 +2614,18 @@ module.exports = {
   routeToTool,
   getToolDepth,
   withDepthTracking,
-  MAX_TOOL_DEPTH
+  MAX_TOOL_DEPTH,
+  // Session tools (CLI-compatible)
+  sessionState,
+  sessionUndo,
+  sessionRedo,
+  sessionCheckpoint,
+  sessionFork,
+  sessionTimeTravel,
+  // Graph tools (CLI-compatible)
+  graphTraverse,
+  graphPath,
+  graphClusters,
+  graphPageRank,
+  graphStats
 };
