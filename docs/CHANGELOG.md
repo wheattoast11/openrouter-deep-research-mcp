@@ -1,104 +1,34 @@
 # Changelog
 
-## v1.10.1 — 2025-12-16
+## v1.11.0 — 2025-12-25
 
-### MCP Configuration Optimization
+### PGlite 0.3.14 Major Upgrade
+- **16 extensions enabled** - Full PostgreSQL extension ecosystem:
+  - Core: `vector`, `pgtap`, `pg_uuidv7`, `pg_ivm`
+  - Contrib: `bloom`, `cube`, `seg`, `tcn`, `tsm_system_time`, `ltree`, `lo`, `tablefunc`, `uuid_ossp`, `fuzzystrmatch`, `citext`, `hstore`
+- **Extension documentation** - New `docs/EXTENSIONS.md` with use cases and examples
 
-**Token-efficient, high-performance configurations for production deployments**
+### Model Updates
+- **gpt-5-nano** - Updated default very-low-cost model from deprecated gpt-4o-mini
+- **gemini-3-flash-preview** - Primary low-cost model
+- **gemini-3-pro-preview** - Added to vision and coding models
+- **claude-sonnet-4.5** - Added to vision, coding, and complex reasoning
+- **gpt-5.2-chat** - Added to coding and reasoning model pools
 
-#### New Configuration Files
-- **`.mcp.optimized.json`** — Recommended full-featured config with performance tuning
-- **`.mcp.minimal.json`** — Ultra-minimal config for token-constrained environments
-- **`docs/MCP-CONFIG-GUIDE.md`** — Comprehensive guide with migration path and best practices
+### New Features
+- **ZeroReplay** - Temporal agent analysis for debugging orchestration flows
+- **StickyCluster** - Agent grouping based on communication patterns using `cube` extension
+- **MultimodalStorage** - Binary data handling with `lo` extension for vision models
+- **HierarchicalRoute** - `ltree`-based routing for Rail protocol
 
-#### Configuration Profiles
-- **Optimized Profile** — Search-before-research pattern, async-by-default, batch operations, selective resources
-- **Minimal Profile** — MANUAL mode, essential tools only, 20-30% token reduction
+### Bug Fixes & Stability
+- **TCN trigger setup** - Split multi-command prepared statements (PGlite limitation)
+- **Payload truncation** - Intelligent content truncation prevents 413 errors in synthesis
+- **Graceful shutdown** - Proper `db.close()` prevents mutex lock errors on exit
+- **ParallelismTracker** - Geometric parallelism alignment using `seg` extension
 
-#### Documented Workflow Patterns
-1. **Search Before Research** — Check knowledge base before creating new research (saves 50-100K tokens)
-2. **Async Research Lifecycle** — Non-blocking background research with job monitoring
-3. **Batch Parallel Research** — Single tool call for 2-10 parallel queries (saves 10-20K tokens per batch)
-4. **Session Time-Travel** — Undo/redo and alternate timelines for exploratory analysis
-
-#### Parameter Normalization Reference
-- Alias mappings: `q→query`, `cost→costPreference`, `id→reportId`
-- Type coercion: automatic string/number/boolean conversion
-- Mode detection: SQL vs index auto-detected in `retrieve` tool
-
-#### Performance Optimizations
-- Embedding cache tuning (`EMBEDDING_CACHE_SIZE=1000`)
-- Job TTL configuration (`JOB_TTL_HOURS=1`)
-- Structured logging for production (`LOG_JSON`, `LOG_LEVEL`, `LOG_OUTPUT`)
-
-#### Resource Strategy
-- **Knowledge Base Resources** — Enable search-before-research pattern
-- **UI Resources (Optional)** — MCP Apps for autonomous UI surfacing (SEP-1865)
-
-#### Best Practices Checklist
-- Token efficiency guidelines
-- Performance tuning recommendations
-- Migration guide from default config
-- Troubleshooting common issues
-
----
-
-## v1.10.0 — 2025-12-15
-
-### Zero Protocol: Self-Referential MCP Architecture
-
-The foundational release establishing Zero as the fixed point of client-server duality.
-
-#### Core Specification
-- **ZERO.md** — The realizability specification documenting Zero's identity, capabilities, and proofs
-- **ZERO.json** — Machine-readable schema with self-referential handshake protocol
-- **`zero://` URI scheme** — Self-connection (`zero://self`), peer discovery, session forking
-
-#### Self-Referential Handshake
-- **Zero-knowledge proof** — The lock IS the key at the fixed point
-- **Generatively autonomous** — The interaction creates the verification
-- **Immutable gate condition** — `hash(self.challenge) === hash(peer.response)`
-- **Fixed point condition** — When `self === peer`, proof(proof) = proof
-
-#### Protocol Unification
-- **Dual-Role Node** — Server can act as client via RoleShift protocol
-- **Protocol Adapters** — Unified abstraction for MCP/ACP/LSP/A2A/ANP
-- **JSON-RPC 2.0 foundation** — All protocols share the same wire format
-
-#### PGlite Extensions
-- **pg_trgm** — Trigram-based fuzzy search with GIN index support
-- **fuzzystrmatch** — Soundex, Levenshtein, Metaphone for typo tolerance
-- **unaccent** — Accent-insensitive search (café → cafe)
-
-#### Multi-Surface Foundation
-- Browser extension scaffold (postMessage transport)
-- Web app structure (WebSocket + PGlite IndexedDB)
-- Desktop integration patterns (stdio + HTTP dual transport)
-
-#### Platform Integration
-- `terminals.tech/compose` — Zero as composer for self-writing apps
-- `replay.terminals.tech` — Zero's time-travel integration
-- `terminals.tech/perceptions` — Coherence metrics
-
-#### Forward Compatibility
-- WebSocket transport preparation (SEP-1288 draft)
-- Live queries foundation via PGlite `live` extension
-
-#### User Journey Improvements (Stage 3)
-- **CLI Wizard** — Interactive setup with step-by-step configuration
-- **Post-wizard guidance** — Success message shows research command templates
-- **CLI next steps** — Research output shows follow-up commands (show, verify, search)
-- **Extension onboarding** — Welcome flow on first install with persona selection
-- **Plain English UI** — Extension buttons renamed (Test Connection, Show Interface, etc.)
-- **Status indicator fix** — Extension popup status now updates correctly
-
-#### Documentation
-- **GETTING-STARTED.md** — First 5 minutes guide
-- **CONCEPTS.md** — Plain English terminology (Fixed Point, Dual-Role, Signal)
-- **ARCHITECTURE.md** — Codebase structure with status markers (STABLE/BETA/VISION)
-- **COMMAND-COOKBOOK.md** — "I want to..." quick reference
-- **TROUBLESHOOTING.md** — Common errors with fixes
-- **src/core/README.md** — Module status and integration roadmap
+### Documentation
+- **EXTENSIONS.md** - Comprehensive guide to all 16 PGlite extensions with use cases
 
 ---
 

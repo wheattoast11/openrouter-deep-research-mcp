@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.11.0] - 2025-12-25
+
+### Features
+* **pglite:** Upgrade to PGlite 0.3.14 with 16 extensions
+  - Core: `vector`, `pgtap`, `pg_uuidv7`, `pg_ivm`
+  - Contrib: `bloom`, `cube`, `seg`, `tcn`, `tsm_system_time`, `ltree`, `lo`, `tablefunc`, `uuid_ossp`, `fuzzystrmatch`, `citext`, `hstore`
+* **models:** Update to latest model IDs (gpt-5-nano, gemini-3-flash-preview, claude-haiku-4.5)
+* **agents:** Add ZeroReplay temporal analysis for debugging orchestration flows
+* **agents:** Add StickyCluster for agent grouping based on communication patterns
+* **storage:** Add MultimodalStorage for binary data handling with `lo` extension
+* **routing:** Add HierarchicalRoute for ltree-based Rail protocol routing
+* **orchestrator:** Add ParallelismTracker for geometric parallelism alignment
+
+### Bug Fixes
+* **dbClient:** Fix TCN trigger setup by splitting multi-command prepared statements
+* **contextAgent:** Add intelligent payload truncation to prevent 413 errors
+* **bin/zero:** Add graceful shutdown with proper db.close() to prevent mutex lock errors
+* **config:** Replace deprecated gpt-4o-mini with gpt-5-nano
+
+### Documentation
+* **docs:** Add EXTENSIONS.md with comprehensive guide to all 16 PGlite extensions
+
+---
+
 ## [1.9.2] - 2025-12-14
 
 ### Features

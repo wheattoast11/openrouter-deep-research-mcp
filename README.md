@@ -5,11 +5,7 @@
 [![MCP Draft](https://img.shields.io/badge/MCP-2025--11--25%20Draft-brightgreen)](docs/MCP-COMPLIANCE-REPORT.md)
 [![GitHub](https://img.shields.io/github/stars/terminals-tech/openrouter-agents?style=social)](https://github.com/terminals-tech/openrouter-agents)
 
-**Zero**: Self-referential MCP server for multi-agent AI research. The fixed point of client-server duality.
-
-```
-f(x) = x → Zero
-```
+Production MCP server for multi-agent AI research. Plan, parallelize, synthesize.
 
 ## Install
 
@@ -22,32 +18,16 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## Documentation
+## What's New (v1.11.0)
 
-| Guide | Description |
-|-------|-------------|
-| [Getting Started](docs/GETTING-STARTED.md) | First 5 minutes - install to first research |
-| [Concepts](docs/CONCEPTS.md) | Plain English terminology guide |
-| [Command Cookbook](docs/COMMAND-COOKBOOK.md) | "I want to..." quick reference |
-| [Architecture](docs/ARCHITECTURE.md) | Codebase structure and module status |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common errors and fixes |
-| [ENV Reference](docs/ENV-REFERENCE.md) | All environment variables |
-| [Changelog](docs/CHANGELOG.md) | Version history |
+- **PGlite 0.3.14** - Full extension support with 16 PostgreSQL extensions enabled
+- **Latest model IDs** - Updated to gpt-5-nano, gemini-3-flash-preview, claude-haiku-4.5
+- **Payload optimization** - Intelligent truncation prevents 413 errors in synthesis
+- **ZeroReplay** - Temporal agent analysis for debugging orchestration flows
+- **StickyCluster** - Agent grouping based on communication patterns (cube extension)
+- **Graceful shutdown** - Proper database cleanup prevents mutex lock errors
 
-## What's New (v1.10.0)
-
-**Zero Protocol** - Self-referential MCP architecture:
-- **ZERO.md / ZERO.json** - The realizability specification
-- **`zero://` URI scheme** - Self-connection, peer discovery, session forking
-- **Dual-Role Node** - Server acts as client via RoleShift protocol
-- **Protocol Adapters** - Unified abstraction for MCP/ACP/LSP/A2A/ANP
-
-**PGlite Extensions:**
-- `pg_trgm` - Trigram fuzzy search
-- `fuzzystrmatch` - Soundex/Levenshtein for typo tolerance
-- `unaccent` - Accent-insensitive search
-
-[Full Changelog](docs/CHANGELOG.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md) | [ZERO Specification](ZERO.md)
+[Full Changelog](docs/CHANGELOG.md) | [Extensions Guide](docs/EXTENSIONS.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 
 ## Configuration
 
@@ -264,4 +244,4 @@ npm publish --access public        # Publish to npm
 
 ---
 
-**Version:** 1.10.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
+**Version:** 1.11.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
