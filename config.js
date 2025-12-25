@@ -14,7 +14,7 @@ const config = {
     publicUrl: process.env.PUBLIC_URL || `${process.env.REQUIRE_HTTPS === 'true' ? 'https' : 'http'}://localhost:${process.env.SERVER_PORT || process.env.PORT || 3002}`,
     // Server startup behavior
     allowStartWithoutDb: process.env.ALLOW_START_WITHOUT_DB === 'true',
-    startupTimeoutMs: parseInt(process.env.STARTUP_TIMEOUT_MS, 10) || 30000
+    startupTimeoutMs: parseInt(process.env.STARTUP_TIMEOUT_MS, 10) || 60000
   },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -25,8 +25,8 @@ const config = {
   },
   models: {
     // Allow overriding planning model; provide a generally-available safe default
-    planning: process.env.PLANNING_MODEL || "google/gemini-2.5-pro", // Default planning/synthesis model
-    planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4")
+    planning: process.env.PLANNING_MODEL || "google/gemini-3-flash-preview", // Default planning/synthesis model
+    planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5.2-chat,google/gemini-3-pro-preview,anthropic/claude-opus-4.5,google/gemini-3-flash-preview")
       .split(',').map(s=>s.trim()).filter(Boolean),
     useDynamicCatalog: process.env.USE_DYNAMIC_CATALOG === 'true',
     // Define models with domain strengths
@@ -40,12 +40,11 @@ const config = {
         // CSV fallback -> wrap ids as objects without explicit domains
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.HIGH_COST_MODELS) : [
-        { name: "x-ai/grok-4", domains: ["reasoning", "technical", "general", "creative"] },
-        { name: "openai/gpt-5-chat", domains: ["reasoning", "technical", "general"] },
-        { name: "google/gemini-2.5-pro", domains: ["reasoning", "technical", "general"] },
-        { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] },
-        { name: "qwen/qwen3-coder", domains: ["coding", "editing", "technical"] },
-        { name: "qwen/qwen3-235b-a22b-2507", domains: ["general", "reasoning", "technical", "coding"] }
+        { name: "google/gemini-3-pro-preview", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "openai/gpt-5.2-chat", domains: ["reasoning", "technical", "general"] },
+        { name: "anthropic/claude-opus-4.5", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "perplexity/sonar-pro-search", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "google/gemini-3-flash-preview", domains: ["reasoning", "technical", "general", "creative"] }
       ],
     lowCost: process.env.LOW_COST_MODELS ? 
       (function parseLowCost(val){
@@ -55,13 +54,13 @@ const config = {
         } catch(_) {}
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.LOW_COST_MODELS) : [
-        { name: "deepseek/deepseek-chat-v3.1", domains: ["general", "reasoning", "technical", "coding"] },
-        { name: "z-ai/glm-4.5v", domains: ["general", "multimodal", "vision", "reasoning"] },
-        { name: "z-ai/glm-4.5-air", domains: ["coding", "technical", "reasoning"] },
+        { name: "google/gemini-3-flash-preview", domains: ["general", "reasoning", "technical", "coding"] },
+        { name: "z-ai/glm-4.7", domains: ["general", "multimodal", "vision", "reasoning"] },
+        { name: "deepcogito/cogito-v2.1-671b", domains: ["coding", "technical", "reasoning"] },
         { name: "openai/gpt-oss-120b", domains: ["general", "reasoning", "search"] },
-        { name: "inception/mercury", domains: ["general", "creative", "technical"] },
+        { name: "moonshotai/kimi-k2-thinking", domains: ["general", "creative", "technical"] },
         { name: "baidu/ernie-4.5-vl-424b-a47b", domains: ["general", "creative"] },
-        { name: "google/gemini-2.5-flash", domains: ["coding", "editing", "technical"] }
+        { name: "openai/o4-mini-deep-research", domains: ["coding", "editing", "technical"] }
       ],
     // Define a tier for potentially simpler tasks (adjust models as needed)
     veryLowCost: process.env.VERY_LOW_COST_MODELS ?
@@ -75,7 +74,7 @@ const config = {
          { name: "openai/gpt-5-nano", domains: ["general", "reasoning", "creative"] }
        ],
      // Add a model specifically for classification tasks if needed, or reuse planning model
-     classification: process.env.CLASSIFICATION_MODEL || "openai/gpt-5-mini",
+     classification: process.env.CLASSIFICATION_MODEL || "openai/gpt-5-nano",
      // Default ensemble size for research agent model ensembles
      ensembleSize: parseInt(process.env.ENSEMBLE_SIZE, 10) || 2,
      // Max research iterations (initial + refinements)
@@ -129,9 +128,33 @@ const config = {
     maxRetryAttempts: parseInt(process.env.PGLITE_MAX_RETRY_ATTEMPTS, 10) || 3,
     retryDelayBaseMs: parseInt(process.env.PGLITE_RETRY_DELAY_BASE_MS, 10) || 200,
     // Initialization behavior
-    initTimeoutMs: parseInt(process.env.PGLITE_INIT_TIMEOUT_MS, 10) || 30000,
+    initTimeoutMs: parseInt(process.env.PGLITE_INIT_TIMEOUT_MS, 10) || 60000,
     retryOnFailure: process.env.PGLITE_RETRY_ON_FAILURE === 'true',
-    allowInMemoryFallback: process.env.PGLITE_ALLOW_IN_MEMORY_FALLBACK !== 'false' // Default true for backwards compat
+    allowInMemoryFallback: process.env.PGLITE_ALLOW_IN_MEMORY_FALLBACK !== 'false', // Default true for backwards compat
+    // Database extensions configuration
+    extensions: {
+      bloom: {
+        enabled: process.env.DB_BLOOM_ENABLED !== 'false',
+        indexFalsePositiveRate: parseFloat(process.env.BLOOM_FALSE_POSITIVE_RATE) || 0.01
+      },
+      cube: {
+        enabled: process.env.DB_CUBE_ENABLED !== 'false',
+        maxDimensions: parseInt(process.env.CUBE_MAX_DIMENSIONS, 10) || 10
+      },
+      seg: {
+        enabled: process.env.DB_SEG_ENABLED !== 'false'
+      },
+      tcn: {
+        enabled: process.env.DB_TCN_ENABLED !== 'false',
+        channels: ['research_reports_changed', 'jobs_changed']
+      },
+      tsm_system_time: {
+        enabled: process.env.DB_TEMPORAL_ENABLED !== 'false'
+      },
+      pgtap: {
+        enabled: process.env.NODE_ENV === 'test'
+      }
+    }
   },
   // Local indexing/search configuration (opt-in by default)
   indexer: {
@@ -233,16 +256,24 @@ config.caching = {
   },
   // Cost optimization strategies
   optimization: {
-    preferredLowCostModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder', 'z-ai/glm-4.5v'],
-    visionModels: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash', 'openai/gpt-5-nano'],
-    codingModels: ['qwen/qwen3-coder', 'z-ai/glm-4.5-air', 'deepseek/deepseek-chat-v3.1'],
-    complexReasoningModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-235b-a22b-2507', 'nousresearch/deephermes-3-mistral-24b-preview'],
+    preferredLowCostModels: ['google/gemini-3-flash-preview', 'anthropic/claude-haiku-4.5', 'deepcogito/cogito-v2.1-671b'],
+    visionModels: ['anthropic/claude-opus-4.5', 'google/gemini-3-flash-preview', 'openai/gpt-5.2'],
+    codingModels: ['google/gemini-3-flash-preview', 'anthropic/claude-haiku-4.5', 'deepcogito/cogito-v2.1-671b'],
+    complexReasoningModels: ['perplexity/sonar-pro-search', 'google/gemini-3-flash-preview', 'deepcogito/cogito-v2.1-671b'],
     costThresholds: {
       simple: 0.0000005, // Max cost per token for simple queries
       moderate: 0.000002, // Max cost per token for moderate queries  
       complex: 0.000015   // Max cost per token for complex queries
     }
   }
+};
+
+// Payload optimization
+config.payload = {
+  compressionEnabled: process.env.PAYLOAD_COMPRESSION !== 'false',
+  compressionFormat: process.env.PAYLOAD_COMPRESSION_FORMAT || 'gzip', // gzip | brotli | none
+  compressionThreshold: parseInt(process.env.PAYLOAD_COMPRESSION_THRESHOLD, 10) || 50000, // bytes
+  referenceThreshold: parseInt(process.env.PAYLOAD_REFERENCE_THRESHOLD, 10) || 100000 // bytes
 };
 
 // Core abstractions (Convergence Plan v2.0)

@@ -300,9 +300,9 @@ test('Phase B.1: Create signals from reports', async () => {
   const { Signal, SignalType } = require('../../../src/core/signal');
 
   const modelSources = [
-    'anthropic/claude-sonnet-4',
+    'anthropic/claude-sonnet-4.5',
     'openai/gpt-5-chat',
-    'google/gemini-2.5-pro'
+    'google/gemini-3-pro-preview'
   ];
 
   phaseState.signals = phaseState.reportContents.map((report, idx) => {

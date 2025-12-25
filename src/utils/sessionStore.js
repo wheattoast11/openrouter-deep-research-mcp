@@ -222,6 +222,19 @@ class SessionManager {
         );
       `, []);
 
+      await this.dbClient.executeDDL(`
+        CREATE TABLE IF NOT EXISTS session_snapshots (
+          id SERIAL PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          state JSONB NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+      `, []);
+
+      await this.dbClient.executeDDL(`
+        CREATE INDEX IF NOT EXISTS idx_session_snapshots_session ON session_snapshots(session_id);
+      `, []);
+
       process.stderr.write(`[${new Date().toISOString()}] Session store schema created/verified.\n`);
     } catch (err) {
       console.error('[SessionStore] Schema creation error:', err);
@@ -317,6 +330,33 @@ class SessionManager {
     `, [sessionId]);
 
     return store.project();
+  }
+
+  /**
+   * Query session state at a specific point in time using temporal sampling
+   * @param {string} sessionId
+   * @param {Date} timestamp
+   * @returns {Promise<Object>}
+   */
+  async getSessionStateAtTime(sessionId, timestamp) {
+    if (!this.dbClient?.executeQuery) return null;
+    
+    // Use tsm_system_time for efficient temporal queries if enabled
+    const useTemporal = config.database?.extensions?.tsm_system_time?.enabled !== false;
+    
+    try {
+      const sql = useTemporal 
+        ? `SELECT state FROM session_snapshots TABLESAMPLE tsm_system_time($1) WHERE session_id = $2 ORDER BY created_at DESC LIMIT 1`
+        : `SELECT state FROM session_snapshots WHERE session_id = $1 AND created_at <= $2 ORDER BY created_at DESC LIMIT 1`;
+      
+      const params = useTemporal ? [timestamp.getTime(), sessionId] : [sessionId, timestamp.toISOString()];
+      const result = await this.dbClient.executeQuery(sql, params);
+      
+      return result.rows?.[0]?.state || null;
+    } catch (err) {
+      console.error('[SessionStore] Error in getSessionStateAtTime:', err);
+      return null;
+    }
   }
 
   /**

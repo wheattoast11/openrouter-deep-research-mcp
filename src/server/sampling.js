@@ -9,7 +9,7 @@ class SamplingHandler {
   constructor() {
     this.enabled = config.mcp?.features?.sampling?.enabled !== false;
     this.toolsEnabled = config.mcp?.features?.sampling?.withTools !== false;
-    this.defaultModel = config.models?.planning || 'google/gemini-2.5-pro';
+    this.defaultModel = config.models?.planning || 'google/gemini-3-pro-preview';
     this.maxIterations = 10; // Safety limit for agentic loops
   }
 

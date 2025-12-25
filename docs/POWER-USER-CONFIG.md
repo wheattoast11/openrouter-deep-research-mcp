@@ -63,17 +63,17 @@ STARTUP_TIMEOUT_MS=30000
 
 ```bash
 # Planning/synthesis model
-PLANNING_MODEL=google/gemini-2.5-pro
+PLANNING_MODEL=google/gemini-3-pro-preview
 
 # Fallback candidates (comma-separated)
-PLANNING_CANDIDATES=openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4
+PLANNING_CANDIDATES=openai/gpt-5-chat,google/gemini-3-pro-preview,anthropic/claude-sonnet-4.5
 ```
 
 ### Cost Tiers
 
 ```bash
 # High-quality, higher cost models
-HIGH_COST_MODELS=x-ai/grok-4,openai/gpt-5-chat,google/gemini-2.5-pro
+HIGH_COST_MODELS=x-ai/grok-4,openai/gpt-5-chat,google/gemini-3-pro-preview
 
 # Cost-effective models (default for costPreference: "low")
 LOW_COST_MODELS=deepseek/deepseek-chat-v3.1,z-ai/glm-4.5v,qwen/qwen3-coder
@@ -375,7 +375,7 @@ SERVER_PORT=3002
 PUBLIC_URL=https://your-domain.com
 
 # Models
-PLANNING_MODEL=google/gemini-2.5-pro
+PLANNING_MODEL=google/gemini-3-pro-preview
 ENSEMBLE_SIZE=2
 PARALLELISM=4
 

@@ -56,7 +56,7 @@ Complete reference for all environment variables supported by OpenRouter Agents 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PLANNING_MODEL` | `google/gemini-2.5-pro` | Model for planning/orchestration |
+| `PLANNING_MODEL` | `google/gemini-3-pro-preview` | Model for planning/orchestration |
 | `PLANNING_CANDIDATES` | see defaults | Comma-separated list of planning candidates |
 | `USE_DYNAMIC_CATALOG` | `false` | Fetch model list from OpenRouter API |
 | `HIGH_COST_MODELS` | see defaults | JSON array or CSV of high-cost models |

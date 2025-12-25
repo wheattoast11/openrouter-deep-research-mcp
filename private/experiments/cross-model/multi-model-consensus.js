@@ -43,7 +43,7 @@ const ModelWeights = {
 class MultiModelConsensus {
   constructor(options = {}) {
     this.strategy = options.strategy || ConsensusStrategy.WEIGHTED;
-    this.arbiterModel = options.arbiterModel || 'anthropic/claude-sonnet-4';
+    this.arbiterModel = options.arbiterModel || 'anthropic/claude-sonnet-4.5';
     this.minAgreement = options.minAgreement || 0.6;
     this.phaseId = `phase_${Date.now()}`;
   }

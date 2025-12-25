@@ -550,8 +550,49 @@ class OrchestratorBus extends EventEmitter {
   }
 }
 
+/**
+ * Track parallelism geometry using seg types
+ * Measures agent execution overlap and identifies divergence
+ */
+class ParallelismTracker {
+  constructor(dbClient) {
+    this.dbClient = dbClient;
+  }
+
+  async recordAgentExecution(agentId, startTime, endTime, taskId) {
+    await this.dbClient.executeQuery(`
+      INSERT INTO agent_execution_segments (
+        agent_id, 
+        task_id, 
+        time_segment
+      ) VALUES ($1, $2, seg($3, $4))
+    `, [agentId, taskId, startTime, endTime]);
+  }
+
+  async detectParallelismAnomalies(threshold = 0.8) {
+    // Find agents with low overlap (divergence)
+    const result = await this.dbClient.executeQuery(`
+      WITH segment_pairs AS (
+        SELECT 
+          a1.agent_id as agent1,
+          a2.agent_id as agent2,
+          seg_overlap(a1.time_segment, a2.time_segment) as overlap
+        FROM agent_execution_segments a1
+        CROSS JOIN agent_execution_segments a2
+        WHERE a1.task_id = a2.task_id 
+          AND a1.agent_id < a2.agent_id
+      )
+      SELECT * FROM segment_pairs
+      WHERE overlap < $1
+    `, [threshold]);
+    
+    return result.rows || [];
+  }
+}
+
 module.exports = {
   OrchestratorBus,
   QueryTracker,
-  QueryState
+  QueryState,
+  ParallelismTracker
 };

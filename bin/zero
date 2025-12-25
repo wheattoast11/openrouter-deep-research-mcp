@@ -64,11 +64,25 @@ async function main() {
   await cli.run(args);
 }
 
+// Graceful shutdown helper
+async function gracefulShutdown(exitCode = 0) {
+  try {
+    // Close database gracefully to prevent mutex lock errors
+    const dbClient = require('../src/utils/dbClient');
+    if (dbClient && dbClient.close) {
+      await dbClient.close();
+    }
+  } catch (err) {
+    // Ignore errors during cleanup
+  }
+  process.exit(exitCode);
+}
+
 // Run
-main().then(() => {
-  // Explicit exit needed because PGLite/embeddings keep handles open
-  process.exit(0);
-}).catch((err) => {
+main().then(async () => {
+  // Close database gracefully before exit
+  await gracefulShutdown(0);
+}).catch(async (err) => {
   process.stderr.write(`\x1b[31mError: ${err.message}\x1b[0m\n`);
-  process.exit(1);
+  await gracefulShutdown(1);
 });

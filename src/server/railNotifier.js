@@ -147,6 +147,60 @@ class RailNotifier {
   }
 
   /**
+   * Subscribe to database change notifications and emit via Rail
+   * @param {Object} tunnelRegistry - Rail tunnel registry
+   * @returns {Promise<Object>} Unsubscribe functions
+   */
+  async subscribeToTableChanges(tunnelRegistry) {
+    const dbClient = require('../utils/dbClient');
+    
+    // Research reports channel
+    const unsubReports = await dbClient.subscribeToChanges('research_reports_changed', (payload) => {
+      try {
+        const data = JSON.parse(payload);
+        
+        // Broadcast to all active tunnels
+        for (const tunnel of tunnelRegistry.list()) {
+          tunnel.send({
+            type: 'db_change',
+            table: 'research_reports',
+            operation: data.operation,
+            id: data.id,
+            timestamp: data.timestamp
+          });
+        }
+      } catch (err) {
+        logger.warn('Failed to parse research_report_changed notification', { error: err.message });
+      }
+    });
+
+    // Jobs channel
+    const unsubJobs = await dbClient.subscribeToChanges('jobs_changed', (payload) => {
+      try {
+        const data = JSON.parse(payload);
+        
+        // Broadcast job status changes
+        for (const tunnel of tunnelRegistry.list()) {
+          if (tunnel.metadata?.subscriptions?.includes('jobs')) {
+            tunnel.send({
+              type: 'db_change',
+              table: 'jobs',
+              operation: data.operation,
+              id: data.id,
+              status: data.status,
+              timestamp: data.timestamp
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to parse jobs_changed notification', { error: err.message });
+      }
+    });
+
+    return { unsubReports, unsubJobs };
+  }
+
+  /**
    * Send notification through available channel
    * @private
    */

@@ -273,12 +273,12 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     if (mode === 'hyper') {
       try {
         const preferred = [
-          'inception/mercury',
-          'google/gemini-2.5-flash',
-          'z-ai/glm-4.5-air',
-          'z-ai/glm-4.5v',
-          'deepseek/deepseek-chat-v3.1',
-          'openai/gpt-oss-120b'
+          'google/gemini-3-flash-preview',
+          'anthropic/claude-sonnet-4.5',
+          'google/gemini-3-pro-preview',
+          'perplexity/sonar-pro-search',
+          'moonshotai/kimi-k2-thinking',
+          'openai/gpt-5.2-chat'
         ];
         // From dynamic catalog if available; else fall back to configured lists
         let catalog = [];
@@ -314,9 +314,13 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
 
     if (mode === 'hyper') {
       const hyperAlts = [
-        'qwen/qwen3-235b-a22b-2507',
-        'google/gemini-2.5-flash',
-        'z-ai/glm-4.5-air'
+        'google/gemini-3-pro-preview',
+        'anthropic/claude-haiku-4.5',
+        'deepcogito/cogito-v2.1-671b',
+        'perplexity/sonar-pro-search',
+        'moonshotai/kimi-k2-thinking',
+        'openai/gpt-5.2-chat',
+        'openai/o4-mini-deep-research'
       ];
       for (const id of hyperAlts) addAlt(id);
     }
@@ -366,10 +370,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
      // Fallback known list
      if (!modelSupportsVision) {
              const KNOWN_VISION_MODELS = [
-        "openai/gpt-4o", "openai/gpt-4o-mini",
-        "google/gemini-2.5-pro", "google/gemini-2.5-flash",
-        "z-ai/glm-4.5v",
-        "anthropic/claude-3.7-sonnet"
+        "anthropic/claude-opus-4.5", "google/gemini-3-flash-preview", "openai/gpt-5.2"
       ];
        modelSupportsVision = KNOWN_VISION_MODELS.includes(model);
      }

@@ -18,8 +18,8 @@ let semanticRouter = null;
  */
 function initializeZero(config = {}) {
   zeroAgent = createZeroAgent({
-    planningModel: config.planningModel || process.env.PLANNING_MODEL || 'anthropic/claude-sonnet-4',
-    synthesisModel: config.synthesisModel || process.env.SYNTHESIS_MODEL || 'anthropic/claude-sonnet-4',
+    planningModel: config.planningModel || process.env.PLANNING_MODEL || 'anthropic/claude-sonnet-4.5',
+    synthesisModel: config.synthesisModel || process.env.SYNTHESIS_MODEL || 'anthropic/claude-sonnet-4.5',
     maxThreads: config.maxThreads || 4,
     ...config
   });

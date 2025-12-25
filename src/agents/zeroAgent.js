@@ -87,8 +87,8 @@ class EmergenceState {
 class ZeroAgent {
   constructor(config = {}) {
     this.config = {
-      planningModel: config.planningModel || 'anthropic/claude-sonnet-4',
-      synthesisModel: config.synthesisModel || 'anthropic/claude-sonnet-4',
+      planningModel: config.planningModel || 'anthropic/claude-sonnet-4.5',
+      synthesisModel: config.synthesisModel || 'anthropic/claude-sonnet-4.5',
       maxThreads: config.maxThreads || 4,
       crystallizationThreshold: config.crystallizationThreshold || 0.5,
       ...config

@@ -1,23 +1,25 @@
 // src/utils/dbClient.js
 const { PGlite } = require('@electric-sql/pglite');
+// First-class extensions
 const { vector } = require('@electric-sql/pglite/vector');
-
-// Zero Protocol: Enable full-text search extensions for fuzzy matching
-// - pg_trgm: Trigram-based fuzzy search with GIN index support
-// - fuzzystrmatch: Soundex, Levenshtein, Metaphone for typo tolerance
-// - unaccent: Accent-insensitive search (café → cafe)
-let pg_trgm, fuzzystrmatch, unaccent;
-try {
-  // These extensions are optional - gracefully degrade if not available
-  const contrib = require('@electric-sql/pglite/contrib');
-  pg_trgm = contrib.pg_trgm;
-  fuzzystrmatch = contrib.fuzzystrmatch;
-  unaccent = contrib.unaccent;
-} catch (e) {
-  // Contrib extensions not available - will use vector-only mode
-  console.warn('[dbClient] PGlite contrib extensions not available, using vector-only mode');
-}
-
+const { live } = require('@electric-sql/pglite/live');
+const { pgtap } = require('@electric-sql/pglite/pgtap');
+const { pg_uuidv7 } = require('@electric-sql/pglite/pg_uuidv7');
+const { pg_ivm } = require('@electric-sql/pglite/pg_ivm');
+// Contrib extensions
+const { bloom } = require('@electric-sql/pglite/contrib/bloom');
+const { cube } = require('@electric-sql/pglite/contrib/cube');
+const { seg } = require('@electric-sql/pglite/contrib/seg');
+const { tcn } = require('@electric-sql/pglite/contrib/tcn');
+const { tsm_system_time } = require('@electric-sql/pglite/contrib/tsm_system_time');
+const { ltree } = require('@electric-sql/pglite/contrib/ltree');
+const { lo } = require('@electric-sql/pglite/contrib/lo');
+const { tablefunc } = require('@electric-sql/pglite/contrib/tablefunc');
+const { uuid_ossp } = require('@electric-sql/pglite/contrib/uuid_ossp');
+// Additional useful extensions
+const { fuzzystrmatch } = require('@electric-sql/pglite/contrib/fuzzystrmatch');
+const { citext } = require('@electric-sql/pglite/contrib/citext');
+const { hstore } = require('@electric-sql/pglite/contrib/hstore');
 const config = require('../../config');
 const openRouterClient = require('./openRouterClient');
 const path = require('path');
@@ -380,63 +382,110 @@ async function _doInitDB() {
     // Get database URL based on environment
     const dbUrl = getDatabaseUrl();
 
-    // Initialize PGLite with extensions
-    // Build extensions object dynamically based on available extensions
-    const extensions = { vector };
-    if (pg_trgm) extensions.pg_trgm = pg_trgm;
-    if (fuzzystrmatch) extensions.fuzzystrmatch = fuzzystrmatch;
-    if (unaccent) extensions.unaccent = unaccent;
-
-    const availableExtensions = Object.keys(extensions);
-    logger.info('PGLite extensions available', { extensions: availableExtensions });
-
-    if (dbUrl) {
-      logger.info('Initializing PGLite', { storage: dbPathInfo });
-
-      // Use modern async creation pattern
-      db = await PGlite.create({
-        url: dbUrl,
-        extensions,
-        relaxedDurability: config.database.relaxedDurability
-      });
-    } else {
-      // In-memory is only used if explicitly configured or no URL available
-      logger.info('Initializing PGLite', { storage: dbPathInfo });
-      db = await PGlite.create({
-        extensions
-      });
-      usingInMemoryFallback = true;
+    // Initialize PGLite with the vector extension
+    const maxCreateRetries = config.database?.maxRetryAttempts || 3;
+    const retryDelay = config.database?.retryDelayBaseMs || 200;
+    
+    let lastCreateError = null;
+    for (let attempt = 1; attempt <= maxCreateRetries; attempt++) {
+      try {
+        if (dbUrl) {
+          logger.info(`Initializing PGLite (attempt ${attempt}/${maxCreateRetries})`, { storage: dbPathInfo });
+          db = await PGlite.create({
+            url: dbUrl,
+            extensions: { 
+              // First-class extensions
+              vector, 
+              live,
+              pgtap,
+              pg_uuidv7,
+              pg_ivm,
+              // Contrib extensions
+              bloom,
+              cube,
+              seg,
+              tcn,
+              tsm_system_time,
+              ltree,
+              lo,
+              tablefunc,
+              uuid_ossp,
+              // Additional utilities
+              fuzzystrmatch,
+              citext,
+              hstore
+            },
+            relaxedDurability: config.database.relaxedDurability
+          });
+        } else {
+          logger.info(`Initializing PGLite (in-memory, attempt ${attempt}/${maxCreateRetries})`, { storage: dbPathInfo });
+          db = await PGlite.create({
+            extensions: { 
+              // First-class extensions
+              vector, 
+              live,
+              pgtap,
+              pg_uuidv7,
+              pg_ivm,
+              // Contrib extensions
+              bloom,
+              cube,
+              seg,
+              tcn,
+              tsm_system_time,
+              ltree,
+              lo,
+              tablefunc,
+              uuid_ossp,
+              // Additional utilities
+              fuzzystrmatch,
+              citext,
+              hstore
+            }
+          });
+          usingInMemoryFallback = true;
+        }
+        lastCreateError = null;
+        break; // Success
+      } catch (err) {
+        lastCreateError = err;
+        logger.warn(`PGlite creation attempt ${attempt} failed: ${err.message}`, { 
+          code: err.code,
+          stack: err.stack 
+        });
+        if (attempt < maxCreateRetries) {
+          // Exponential backoff with jitter could be added here if needed
+          await new Promise(r => setTimeout(r, retryDelay * attempt));
+        }
+      }
     }
 
-    // Enable extensions
+    if (lastCreateError) {
+      logger.error('All PGLite creation attempts failed', { error: lastCreateError.message });
+      throw lastCreateError;
+    }
+
+    // Enable all extensions
+    // First-class extensions
     await db.query("CREATE EXTENSION IF NOT EXISTS vector;");
-    logger.info('PGLite vector extension enabled');
-
-    // Enable Zero Protocol fuzzy search extensions (if available)
-    if (pg_trgm) {
-      try {
-        await db.query("CREATE EXTENSION IF NOT EXISTS pg_trgm;");
-        logger.info('PGLite pg_trgm extension enabled (trigram fuzzy search)');
-      } catch (e) {
-        logger.warn('Failed to enable pg_trgm extension', { error: e.message });
-      }
-    }
-    if (fuzzystrmatch) {
-      try {
-        await db.query("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;");
-        logger.info('PGLite fuzzystrmatch extension enabled (Soundex/Levenshtein)');
-      } catch (e) {
-        logger.warn('Failed to enable fuzzystrmatch extension', { error: e.message });
-      }
-    }
-    if (unaccent) {
-      try {
-        await db.query("CREATE EXTENSION IF NOT EXISTS unaccent;");
-        logger.info('PGLite unaccent extension enabled (accent-insensitive)');
-      } catch (e) {
-        logger.warn('Failed to enable unaccent extension', { error: e.message });
-      }
-    }
+    await db.query("CREATE EXTENSION IF NOT EXISTS pgtap;");
+    await db.query('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7";');
+    await db.query("CREATE EXTENSION IF NOT EXISTS pg_ivm;");
+    // Contrib extensions
+    await db.query("CREATE EXTENSION IF NOT EXISTS ltree;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS bloom;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS cube;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS seg;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS tcn;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS tsm_system_time;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS lo;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS tablefunc;");
+    await db.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
+    // Additional utility extensions
+    await db.query("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS citext;");
+    await db.query("CREATE EXTENSION IF NOT EXISTS hstore;");
+    logger.info('PGLite extensions enabled: vector, pgtap, pg_uuidv7, pg_ivm, ltree, bloom, cube, seg, tcn, tsm_system_time, lo, tablefunc, uuid-ossp, fuzzystrmatch, citext, hstore');
 
     // Create the reports table
     await db.query(`
@@ -573,6 +622,68 @@ async function _doInitDB() {
     await db.query(`CREATE INDEX IF NOT EXISTS idx_research_reports_query_embedding ON research_reports USING hnsw (query_embedding vector_cosine_ops);`);
     logger.info('PGLite indexes created or verified');
 
+    // --- Change Notifications (TCN) ---
+    async function setupChangeNotifications() {
+      // Research reports change notifications
+      await db.query(`
+        CREATE OR REPLACE FUNCTION notify_research_report_changes()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          PERFORM pg_notify('research_reports_changed', 
+            json_build_object(
+              'operation', TG_OP,
+              'id', COALESCE(NEW.id, OLD.id),
+              'timestamp', NOW()
+            )::text
+          );
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+
+      // Split into separate statements - PGlite doesn't support multiple commands in one query
+      await db.query(`DROP TRIGGER IF EXISTS research_reports_notify ON research_reports;`);
+      await db.query(`
+        CREATE TRIGGER research_reports_notify
+        AFTER INSERT OR UPDATE OR DELETE ON research_reports
+        FOR EACH ROW EXECUTE FUNCTION notify_research_report_changes();
+      `);
+
+      // Jobs change notifications
+      await db.query(`
+        CREATE OR REPLACE FUNCTION notify_job_changes()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          PERFORM pg_notify('jobs_changed',
+            json_build_object(
+              'operation', TG_OP,
+              'id', COALESCE(NEW.id, OLD.id),
+              'status', COALESCE(NEW.status, OLD.status),
+              'timestamp', NOW()
+            )::text
+          );
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+
+      // Split into separate statements - PGlite doesn't support multiple commands in one query
+      await db.query(`DROP TRIGGER IF EXISTS jobs_notify ON jobs;`);
+      await db.query(`
+        CREATE TRIGGER jobs_notify
+        AFTER INSERT OR UPDATE OR DELETE ON jobs
+        FOR EACH ROW EXECUTE FUNCTION notify_job_changes();
+      `);
+      
+      logger.info('TCN change notifications setup complete');
+    }
+
+    if (config.database.extensions?.tcn?.enabled !== false) {
+      await setupChangeNotifications().catch(err => {
+        logger.warn('Failed to setup TCN notifications', { error: err.message });
+      });
+    }
+
     // Success!
     initState = InitState.INITIALIZED;
     dbInitialized = true;
@@ -590,18 +701,8 @@ async function _doInitDB() {
       logger.warn('FALLBACK: Attempting in-memory database (DATA WILL NOT PERSIST)');
       try {
         dbPathInfo = 'In-Memory (Error Fallback)';
-        // Build fallback extensions object
-        const fallbackExtensions = { vector };
-        if (pg_trgm) fallbackExtensions.pg_trgm = pg_trgm;
-        if (fuzzystrmatch) fallbackExtensions.fuzzystrmatch = fuzzystrmatch;
-        if (unaccent) fallbackExtensions.unaccent = unaccent;
-
-        db = await PGlite.create({ extensions: fallbackExtensions });
+        db = await PGlite.create({ extensions: { vector } });
         await db.query("CREATE EXTENSION IF NOT EXISTS vector;");
-        // Enable optional extensions in fallback mode too
-        if (pg_trgm) try { await db.query("CREATE EXTENSION IF NOT EXISTS pg_trgm;"); } catch (_) {}
-        if (fuzzystrmatch) try { await db.query("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;"); } catch (_) {}
-        if (unaccent) try { await db.query("CREATE EXTENSION IF NOT EXISTS unaccent;"); } catch (_) {}
 
         // Create minimal table structure
         await db.query(`
@@ -681,7 +782,7 @@ async function _doInitDB() {
  * @returns {Promise<boolean>} True if initialized successfully
  * @throws {InitializationError} If initialization fails or times out
  */
-async function waitForInit(timeoutMs = 30000) {
+async function waitForInit(timeoutMs = config.database?.initTimeoutMs || 60000) {
   const { InitializationError } = require('./errors');
 
   // If not started, trigger initialization
@@ -964,6 +1065,57 @@ async function executeWithRetry(operation, operationName) {
       });
       await new Promise(resolve => setTimeout(resolve, delay));
     }
+  }
+}
+
+// --- Change Notification Helper ---
+/**
+ * Subscribe to table change notifications
+ * @param {string} channel - Notification channel (table name + '_changed')
+ * @param {Function} callback - Callback function(payload)
+ * @returns {Function} Unsubscribe function
+ */
+async function subscribeToChanges(channel, callback) {
+  await waitForInit();
+  
+  if (db && db.listen && typeof db.listen === 'function') {
+    logger.debug('Subscribing to change notifications', { channel });
+    const { unlisten } = await db.listen(channel, callback);
+    return unlisten;
+  } else {
+    logger.warn('Change notification subscription not available');
+    return () => {};
+  }
+}
+
+// --- Live Query Helper ---
+/**
+ * Setup a live query subscription if the 'live' extension is active.
+ * 
+ * @param {string} sql - SQL query
+ * @param {Array} params - Query parameters
+ * @param {Function} callback - Callback function(results)
+ * @returns {Promise<Function>} Unsubscribe function
+ */
+async function liveQuery(sql, params, callback) {
+  await waitForInit();
+  
+  // Check if live extension is available on the db instance
+  if (db && db.live && typeof db.live.query === 'function') {
+    logger.debug('Starting live query subscription', { sql: sql.substring(0, 50) });
+    const { unsubscribe } = await db.live.query(sql, params, callback);
+    return unsubscribe;
+  } else {
+    logger.warn('Live query extension not available, falling back to single execution');
+    // Fallback: execute once
+    try {
+      const res = await db.query(sql, params);
+      callback(res);
+    } catch (err) {
+      logger.error('Live query fallback execution failed', { error: err.message });
+    }
+    // Return no-op unsubscribe
+    return () => {};
   }
 }
 
@@ -1479,6 +1631,8 @@ module.exports = {
   // Database initialization - REQUIRED before operations
   initDB,
   waitForInit,
+  subscribeToChanges, // Change notifications
+  liveQuery, // Reactive query support
   getInitState: () => initState,
   getInitError: () => initError,
   isInitializing: () => initState === InitState.INITIALIZING,
@@ -1525,7 +1679,21 @@ module.exports = {
   hashInput,
 
   // Internal DDL execution (for schema management, not user-facing)
-  executeDDL
+  executeDDL,
+  
+  // Cleanup
+  close: async () => {
+    if (db) {
+      try {
+        await db.close();
+        db = null;
+        dbInitialized = false;
+        logger.info('Database connection closed gracefully');
+      } catch (err) {
+        logger.warn('Error closing database', { error: err.message });
+      }
+    }
+  }
 };
 
 // Function to retrieve a single report by its ID

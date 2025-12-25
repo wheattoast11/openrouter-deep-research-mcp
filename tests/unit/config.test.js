@@ -65,7 +65,7 @@ test('constants exports CORE defaults', () => {
 test('constants exports MODEL_WEIGHTS', () => {
   const { MODEL_WEIGHTS } = require('../../src/config/constants');
 
-  assert.ok(MODEL_WEIGHTS['anthropic/claude-sonnet-4']);
+  assert.ok(MODEL_WEIGHTS['anthropic/claude-sonnet-4.5']);
   assert.ok(MODEL_WEIGHTS.default);
   assert.strictEqual(typeof MODEL_WEIGHTS.default, 'number');
 });

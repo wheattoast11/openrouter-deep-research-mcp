@@ -54,7 +54,12 @@ function isHeadless() {
 
   // macOS: Check if we can access the window server
   if (process.platform === 'darwin') {
-    // On macOS, DISPLAY is not used (no X11 by default)
+    // If DISPLAY is explicitly set, honor it (mostly for tests)
+    if (process.env.DISPLAY) {
+      return false;
+    }
+
+    // On macOS, DISPLAY is not usually used (no X11 by default)
     // Check if we're in a login session with window server access
     try {
       const { execSync } = require('child_process');

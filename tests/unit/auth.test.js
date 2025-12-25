@@ -293,6 +293,11 @@ function testHeadlessDetection() {
   process.env.DISPLAY = ':0';
   delete process.env.SSH_CONNECTION;
   delete process.env.SSH_CLIENT;
+  delete process.env.SSH_TTY;
+  delete process.env.CI;
+  delete process.env.GITHUB_ACTIONS;
+  delete process.env.GITLAB_CI;
+  delete process.env.ZERO_HEADLESS;
   assert(!auth.isHeadless(), 'Should not be headless with DISPLAY');
 
   // SSH environment

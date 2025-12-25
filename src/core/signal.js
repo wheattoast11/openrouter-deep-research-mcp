@@ -14,10 +14,10 @@ const crypto = require('crypto');
  * Model capability weights for consensus
  */
 const ModelWeights = {
-  'anthropic/claude-sonnet-4': 1.0,
+  'anthropic/claude-sonnet-4.5': 1.0,
   'anthropic/claude-opus-4': 1.0,
   'openai/gpt-5-chat': 0.95,
-  'google/gemini-2.5-pro': 0.90,
+  'google/gemini-3-pro-preview': 0.90,
   'x-ai/grok-4': 0.85,
   'deepseek/deepseek-chat-v3.1': 0.75,
   'default': 0.5

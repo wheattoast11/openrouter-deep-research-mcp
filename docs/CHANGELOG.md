@@ -368,7 +368,7 @@ The foundational release establishing Zero as the fixed point of client-server d
 - PGlite tarball backups (`backup_db`) and DB QoL tools (`export_reports`, `import_reports`, `db_health`, `reindex_vectors`)
 - Lightweight web tools: `search_web`, `fetch_url`
 - Orchestration: bounded parallelism (`PARALLELISM`), dynamic vision detection from catalog
-- Model defaults: `anthropic/claude-sonnet-4`, `openai/gpt-5` family
+- Model defaults: `anthropic/claude-sonnet-4.5`, `openai/gpt-5` family
 - Repo cleanup: moved docs/ and tests/
 
 For older changes, see repository history or Releases.

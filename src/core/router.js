@@ -28,7 +28,7 @@ const RouteType = {
  * Model capability profiles
  */
 const ModelProfiles = {
-  'anthropic/claude-sonnet-4': {
+  'anthropic/claude-sonnet-4.5': {
     capabilities: ['research', 'analytical', 'creative', 'technical', 'conversational'],
     strength: 0.95,
     costTier: 'high',
@@ -49,7 +49,7 @@ const ModelProfiles = {
     contextWindow: 128000,
     specialties: ['general knowledge', 'coding', 'structured output']
   },
-  'google/gemini-2.5-pro': {
+  'google/gemini-3-pro-preview': {
     capabilities: ['research', 'analytical', 'creative', 'technical'],
     strength: 0.90,
     costTier: 'high',

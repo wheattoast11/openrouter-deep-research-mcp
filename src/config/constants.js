@@ -45,7 +45,7 @@ const JOBS = {
  * Model configuration defaults
  */
 const MODELS = {
-  DEFAULT_PLANNING: 'google/gemini-2.5-pro',
+  DEFAULT_PLANNING: 'google/gemini-3-pro-preview',
   DEFAULT_CLASSIFICATION: 'openai/gpt-5-mini',
   DEFAULT_ENSEMBLE_SIZE: 2,
   MAX_RESEARCH_ITERATIONS: 2,
@@ -148,8 +148,8 @@ const DEFAULT_MODELS = {
   HIGH_COST: [
     { name: 'x-ai/grok-4', domains: ['reasoning', 'technical', 'general', 'creative'] },
     { name: 'openai/gpt-5-chat', domains: ['reasoning', 'technical', 'general'] },
-    { name: 'google/gemini-2.5-pro', domains: ['reasoning', 'technical', 'general'] },
-    { name: 'anthropic/claude-sonnet-4', domains: ['reasoning', 'technical', 'general'] },
+    { name: 'google/gemini-3-pro-preview', domains: ['reasoning', 'technical', 'general'] },
+    { name: 'anthropic/claude-sonnet-4.5', domains: ['reasoning', 'technical', 'general'] },
     { name: 'qwen/qwen3-coder', domains: ['coding', 'editing', 'technical'] },
     { name: 'qwen/qwen3-235b-a22b-2507', domains: ['general', 'reasoning', 'technical', 'coding'] }
   ],
@@ -160,7 +160,7 @@ const DEFAULT_MODELS = {
     { name: 'openai/gpt-oss-120b', domains: ['general', 'reasoning', 'search'] },
     { name: 'inception/mercury', domains: ['general', 'creative', 'technical'] },
     { name: 'baidu/ernie-4.5-vl-424b-a47b', domains: ['general', 'creative'] },
-    { name: 'google/gemini-2.5-flash', domains: ['coding', 'editing', 'technical'] }
+    { name: 'google/gemini-3-flash-preview', domains: ['coding', 'editing', 'technical'] }
   ],
   VERY_LOW_COST: [
     { name: 'openai/gpt-5-nano', domains: ['general', 'reasoning', 'creative'] }
@@ -171,10 +171,10 @@ const DEFAULT_MODELS = {
  * Model weights for consensus calculation
  */
 const MODEL_WEIGHTS = {
-  'anthropic/claude-sonnet-4': 1.0,
+  'anthropic/claude-sonnet-4.5': 1.0,
   'anthropic/claude-opus-4': 1.0,
   'openai/gpt-5-chat': 0.95,
-  'google/gemini-2.5-pro': 0.90,
+  'google/gemini-3-pro-preview': 0.90,
   'x-ai/grok-4': 0.85,
   'deepseek/deepseek-chat-v3.1': 0.75,
   'default': 0.5
@@ -184,7 +184,7 @@ const MODEL_WEIGHTS = {
  * Preferred models by use case
  */
 const PREFERRED_MODELS = {
-  VISION: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash', 'openai/gpt-5-nano'],
+  VISION: ['z-ai/glm-4.5v', 'google/gemini-3-flash-preview', 'openai/gpt-5-nano'],
   CODING: ['qwen/qwen3-coder', 'z-ai/glm-4.5-air', 'deepseek/deepseek-chat-v3.1'],
   COMPLEX_REASONING: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-235b-a22b-2507', 'nousresearch/deephermes-3-mistral-24b-preview']
 };

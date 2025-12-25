@@ -153,7 +153,7 @@ class RouteRegistry {
       predicates: [
         { dimension: 'cost', operator: 'lt', value: 0.01, weight: 0.7 }
       ],
-      models: ['deepseek/deepseek-chat-v3.1', 'google/gemini-2.5-flash'],
+      models: ['deepseek/deepseek-chat-v3.1', 'google/gemini-3-flash-preview'],
       fallback: 'default',
       priority: 10
     }));
@@ -163,7 +163,7 @@ class RouteRegistry {
       predicates: [
         { dimension: 'quality', operator: 'gt', value: 0.8, weight: 0.8 }
       ],
-      models: ['anthropic/claude-sonnet-4', 'openai/gpt-5-chat', 'google/gemini-2.5-pro'],
+      models: ['anthropic/claude-sonnet-4.5', 'openai/gpt-5-chat', 'google/gemini-3-pro-preview'],
       fallback: 'default',
       priority: 5
     }));
@@ -266,8 +266,35 @@ class RouteRegistry {
 // Singleton registry
 const registry = new RouteRegistry();
 
+/**
+ * Hierarchical route using ltree for path-based routing
+ * Example: research.technical.ai.vision -> matches research.technical.*
+ */
+class HierarchicalRoute extends Route {
+  constructor(name, config) {
+    super(name, config);
+    this.pathPattern = config.pathPattern || null; // ltree query pattern
+  }
+
+  async matchesHierarchical(context, dbClient) {
+    if (!this.pathPattern || !context.path || !dbClient) return false;
+
+    try {
+      const result = await dbClient.executeQuery(`
+        SELECT $1::ltree ~ $2::lquery AS matches
+      `, [context.path, this.pathPattern]);
+
+      return result.rows?.[0]?.matches || false;
+    } catch (err) {
+      console.error('[HierarchicalRoute] Match error:', err);
+      return false;
+    }
+  }
+}
+
 module.exports = {
   Route,
+  HierarchicalRoute,
   RouteRegistry,
   RouteOperator,
   RouteDimension,

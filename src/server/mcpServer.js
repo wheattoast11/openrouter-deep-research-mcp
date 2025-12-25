@@ -1033,7 +1033,7 @@ if (config.mcp?.features?.resources) {
                 models: {
                   simple: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder'],
                   complex: ['x-ai/grok-4', 'morph/morph-v3-large'],
-                  vision: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash']
+                  vision: ['z-ai/glm-4.5v', 'google/gemini-3-flash-preview']
                 }
               },
               batch_processing: {

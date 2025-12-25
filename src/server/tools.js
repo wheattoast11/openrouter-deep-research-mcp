@@ -3,6 +3,7 @@ const { z } = require('zod');
 const NodeCache = require('node-cache');
 const fs = require('fs'); // Added for file system operations
 const path = require('path'); // Added for path manipulation
+const zlib = require('zlib'); // For payload compression
 const planningAgent = require('../agents/planningAgent');
 const researchAgent = require('../agents/researchAgent');
 const contextAgent = require('../agents/contextAgent');
@@ -371,6 +372,46 @@ const executeSqlSchema = z.object({
   _requestId: z.string().optional().describe("Internal request ID for logging")
 });
 
+/**
+ * Compress large report content for efficient transmission
+ * @param {string} content - Report content
+ * @param {string} format - Compression format (gzip, brotli, none)
+ * @returns {Object} Compressed payload with metadata
+ */
+function compressReportPayload(content, format = 'gzip') {
+  if (!content || content.length < 10000 || format === 'none') {
+    return { content, compressed: false, size: content?.length || 0 };
+  }
+
+  let compressed;
+  let encoding;
+  
+  try {
+    if (format === 'brotli' && zlib.brotliCompressSync) {
+      compressed = zlib.brotliCompressSync(Buffer.from(content));
+      encoding = 'br';
+    } else {
+      compressed = zlib.gzipSync(Buffer.from(content));
+      encoding = 'gzip';
+    }
+
+    const compressedB64 = compressed.toString('base64');
+    const ratio = (compressedB64.length / content.length * 100).toFixed(1);
+
+    return {
+      content: compressedB64,
+      compressed: true,
+      encoding,
+      originalSize: content.length,
+      compressedSize: compressedB64.length,
+      ratio: `${ratio}%`
+    };
+  } catch (err) {
+    logger.warn('Compression failed, returning raw content', { error: err.message });
+    return { content, compressed: false, size: content.length };
+  }
+}
+
 // Updated to accept requestId
 async function conductResearch(params, mcpExchange = null, requestId = 'unknown-req') {
   // Normalize shorthand parameters (q,cost,aud,fmt,src,imgs,docs,data)
@@ -411,6 +452,26 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       if (mcpExchange && progressToken) {
         mcpExchange.sendProgress({ token: progressToken, value: { type: 'error', message: chunk.error } });
       }
+    }
+  };
+
+  /**
+   * Helper to send large content in smaller chunks
+   * @param {string} content - Large content string
+   * @param {number} chunkSize - Max chars per chunk
+   */
+  const chunkedSendProgress = async (content, chunkSize = 4000) => {
+    if (!content) return;
+    for (let i = 0; i < content.length; i += chunkSize) {
+      const chunk = content.slice(i, i + chunkSize);
+      sendProgress({ 
+        content: chunk, 
+        isChunk: true, 
+        index: i / chunkSize, 
+        total: Math.ceil(content.length / chunkSize) 
+      });
+      // Small pause to allow event loop to breathe
+      await new Promise(r => setTimeout(r, 10));
     }
   };
 
@@ -1057,6 +1118,32 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       // --- End Save Full Report ---
 
       // If synthesis succeeded, return the completion message including the file path
+      
+      // Determine output strategy based on size and format
+      const shouldCompress = finalReportContent.length > (config.payload?.compressionThreshold || 50000);
+      const shouldReference = outputFormat === 'reference' || finalReportContent.length > (config.payload?.referenceThreshold || 100000);
+
+      if (savedReportId && shouldReference) {
+        return JSON.stringify({
+          reportId: savedReportId,
+          message: "Report generated successfully. Use get_report_content to retrieve.",
+          path: fullReportPath,
+          preview: finalReportContent.substring(0, 500) + "...",
+          size: finalReportContent.length,
+          format: 'reference',
+          requestId
+        }, null, 2);
+      } else if (shouldCompress && outputFormat !== 'raw') {
+        const compressed = compressReportPayload(finalReportContent, config.payload?.compressionFormat || 'gzip');
+        return JSON.stringify({
+          reportId: savedReportId,
+          ...compressed,
+          message: "Compressed report content. Decode using " + (compressed.encoding === 'br' ? 'brotli' : 'gzip') + ".",
+          path: fullReportPath,
+          requestId
+        }, null, 2);
+      }
+
       const completionMessage = `Research complete. Results streamed. Report ID: ${savedReportId || 'N/A'}. Full report saved to: ${fullReportPath || 'Not saved'}. [${requestId}]`; // Include requestId and file path
       return completionMessage;
     }

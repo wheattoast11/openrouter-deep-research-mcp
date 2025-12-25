@@ -82,6 +82,45 @@ async function* streamWithTimeout(stream, timeoutMs) {
 }
 
 /**
+ * Truncate content to a maximum character limit to prevent 413 Payload Too Large errors
+ * Tries to truncate at natural boundaries (paragraphs, sentences)
+ * @param {string} content - Content to truncate
+ * @param {number} maxChars - Maximum characters allowed (default 60000)
+ * @returns {string} Truncated content
+ */
+function truncateForSynthesis(content, maxChars = 60000) {
+  if (!content || content.length <= maxChars) return content;
+  
+  // Find a good break point - try paragraph, then sentence, then word
+  const truncated = content.substring(0, maxChars);
+  
+  // Try to break at last paragraph
+  const lastParagraph = truncated.lastIndexOf('\n\n');
+  if (lastParagraph > maxChars * 0.8) {
+    return truncated.substring(0, lastParagraph) + '\n\n[... content truncated for synthesis ...]';
+  }
+  
+  // Try to break at last sentence
+  const lastSentence = Math.max(
+    truncated.lastIndexOf('. '),
+    truncated.lastIndexOf('.\n'),
+    truncated.lastIndexOf('? '),
+    truncated.lastIndexOf('! ')
+  );
+  if (lastSentence > maxChars * 0.7) {
+    return truncated.substring(0, lastSentence + 1) + '\n\n[... content truncated for synthesis ...]';
+  }
+  
+  // Fall back to word boundary
+  const lastSpace = truncated.lastIndexOf(' ');
+  if (lastSpace > maxChars * 0.5) {
+    return truncated.substring(0, lastSpace) + '\n\n[... content truncated for synthesis ...]';
+  }
+  
+  return truncated + '\n\n[... content truncated for synthesis ...]';
+}
+
+/**
  * Detect if content appears to be truncated mid-sentence
  * Common patterns: ends with incomplete number (d ≈ 0.), trailing comma, no sentence terminator
  * @param {string} content - Content to check
@@ -182,9 +221,11 @@ class ContextAgent {
 
       let resultsText = '';
       if (data.results.length > 0) {
-         resultsText = data.results.map(r =>
-           `--- Model: ${r.model} (${r.error ? 'FAILED' : 'Success'}) ---\n${r.result}\n${r.error ? `ERROR DETAILS: ${r.errorMessage || 'Unknown error'}\n` : ''}`
-         ).join('\n');
+         // Truncate individual model results to prevent payload too large (8K per result)
+         resultsText = data.results.map(r => {
+           const truncatedResult = truncateForSynthesis(r.result || '', 8000);
+           return `--- Model: ${r.model} (${r.error ? 'FAILED' : 'Success'}) ---\n${truncatedResult}\n${r.error ? `ERROR DETAILS: ${r.errorMessage || 'Unknown error'}\n` : ''}`;
+         }).join('\n');
       } else {
          resultsText = "--- No results returned for this sub-query (likely failed before execution). ---";
       }
@@ -196,6 +237,16 @@ ${resultsText}
 === END OF SUB-QUERY ${agentId} RESULTS ===
 `;
     }).join('\n');
+
+    // Final safety truncation to prevent 413 Payload Too Large (max 80K for all results combined)
+    const truncatedFormattedResults = truncateForSynthesis(formattedResults, 80000);
+    if (truncatedFormattedResults.length < formattedResults.length) {
+      logger.warn('Research results truncated for synthesis', { 
+        requestId, 
+        originalLength: formattedResults.length, 
+        truncatedLength: truncatedFormattedResults.length 
+      });
+    }
 
     subQuerySummary += "\n"; // Add newline after summary
 
@@ -301,7 +352,7 @@ ${structuredDataContext}
 ${embeddingContext}
 ${contradictionWarning}
 ${subQuerySummary}ENSEMBLE RESEARCH RESULTS (Grouped by Sub-Query, including status and failures):
-${formattedResults}
+${truncatedFormattedResults}
 
 Please perform a critical synthesis of these findings, considering the original query, the status of each sub-query (SUCCESS/PARTIAL/FAILED), and any provided documents, structured data, or their semantic embeddings. For each sub-query, compare the ensemble results (noting failures), then integrate the synthesized findings from available sub-queries into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, failed sub-queries, and overall confidence based on the available information.${contradictionWarning ? ' Pay special attention to the detected contradictions above and mark conflicting claims as LOW CONFIDENCE.' : ''}
 `;

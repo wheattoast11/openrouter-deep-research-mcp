@@ -207,7 +207,7 @@ task_cancel {"taskId": "job_xxx"}
 ```javascript
 sample_message {
   "messages": [{"role": "user", "content": "What is 2+2?"}],
-  "model": "google/gemini-2.5-pro",
+  "model": "google/gemini-3-pro-preview",
   "maxTokens": 1000
 }
 ```
@@ -283,8 +283,8 @@ search {"q": "MCP protocol", "k": 5, "scope": "docs"}
 ### Available Model Tiers
 ```javascript
 // From environment/config
-HIGH_COST_MODELS: ["openai/gpt-5-chat", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro"]
-LOW_COST_MODELS: ["deepseek/deepseek-chat-v3.1", "openai/gpt-5-mini", "google/gemini-2.5-flash"]
+HIGH_COST_MODELS: ["openai/gpt-5-chat", "anthropic/claude-sonnet-4.5", "google/gemini-3-pro-preview"]
+LOW_COST_MODELS: ["deepseek/deepseek-chat-v3.1", "openai/gpt-5-mini", "google/gemini-3-flash-preview"]
 PLANNING_MODEL: "openai/gpt-5-chat" // For orchestration
 ```
 
