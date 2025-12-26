@@ -85,10 +85,78 @@ class SignalParser {
    */
   static parseAgentXml(xmlString) {
     const parser = new SignalParser();
-    return parser.parseSignals(xmlString).map(s => ({
-      id: parseInt(s.tags.find(t => t.startsWith('id-'))?.split('-')[1] || 0),
-      query: typeof s.payload === 'string' ? s.payload : JSON.stringify(s.payload)
-    }));
+    const signals = parser.parseSignals(xmlString);
+    
+    // If XML parsing succeeded, return mapped results
+    if (signals.length > 0) {
+      return signals.map(s => ({
+        id: parseInt(s.tags.find(t => t.startsWith('id-'))?.split('-')[1] || 0),
+        query: typeof s.payload === 'string' ? s.payload : JSON.stringify(s.payload)
+      }));
+    }
+    
+    // Fallback: Try to extract queries from non-XML responses (e.g., markdown)
+    return SignalParser.extractQueriesFromText(xmlString);
+  }
+
+  /**
+   * Fallback extraction for when LLM returns markdown/text instead of XML.
+   * Attempts to identify research questions or bullet points.
+   */
+  static extractQueriesFromText(text) {
+    const queries = [];
+    let id = 1;
+    
+    // Clean markdown artifacts
+    let cleaned = text.trim()
+      .replace(/^```[\w]*\n?/gm, '')
+      .replace(/\n?```$/gm, '');
+    
+    // Pattern 1: Numbered lists (1. Question, 2. Question)
+    const numberedPattern = /^\s*\d+\.\s*(.+?)(?:\?|$)/gm;
+    let match;
+    while ((match = numberedPattern.exec(cleaned)) !== null) {
+      const query = match[1].trim().replace(/\*\*/g, '');
+      if (query.length > 20 && query.length < 500) {
+        queries.push({ id: id++, query: query.endsWith('?') ? query : query + '?' });
+      }
+    }
+    
+    // Pattern 2: Bullet points (- Question or * Question)
+    if (queries.length === 0) {
+      const bulletPattern = /^\s*[-*•]\s*(.+?)(?:\?|$)/gm;
+      while ((match = bulletPattern.exec(cleaned)) !== null) {
+        const query = match[1].trim().replace(/\*\*/g, '');
+        if (query.length > 20 && query.length < 500) {
+          queries.push({ id: id++, query: query.endsWith('?') ? query : query + '?' });
+        }
+      }
+    }
+    
+    // Pattern 3: Sentences that look like research questions
+    if (queries.length === 0) {
+      const questionPattern = /([A-Z][^.!?]*(?:what|how|where|when|why|which|who|can|does|is|are|will)[^.!?]*\?)/gi;
+      while ((match = questionPattern.exec(cleaned)) !== null) {
+        const query = match[1].trim().replace(/\*\*/g, '');
+        if (query.length > 20 && query.length < 500 && !queries.some(q => q.query === query)) {
+          queries.push({ id: id++, query });
+        }
+      }
+    }
+    
+    // Pattern 4: Last resort - split by sentences and take first 5 meaningful ones
+    if (queries.length === 0) {
+      const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 30);
+      for (const sentence of sentences.slice(0, 5)) {
+        const query = sentence.trim().replace(/\*\*/g, '').replace(/^\s*[-*•\d.]+\s*/, '');
+        if (query.length > 20) {
+          queries.push({ id: id++, query: query + '?' });
+        }
+      }
+    }
+    
+    // Limit to 5 queries max to prevent explosion
+    return queries.slice(0, 5);
   }
 }
 

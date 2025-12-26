@@ -64,19 +64,39 @@ async function main() {
   await cli.run(args);
 }
 
-// Graceful shutdown helper
+// Graceful shutdown state
+let isShuttingDown = false;
+
+// Graceful shutdown helper with PGlite WASM cleanup
 async function gracefulShutdown(exitCode = 0) {
+  // Prevent multiple shutdown attempts
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
   try {
     // Close database gracefully to prevent mutex lock errors
+    // Allow WASM instance time to finish pending operations
     const dbClient = require('../src/utils/dbClient');
     if (dbClient && dbClient.close) {
-      await dbClient.close();
+      // Set a timeout to prevent hanging on stuck WASM
+      const closePromise = dbClient.close();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('DB close timeout')), 3000)
+      );
+      await Promise.race([closePromise, timeoutPromise]).catch(() => {});
     }
   } catch (err) {
     // Ignore errors during cleanup
   }
+  
+  // Small delay to allow WASM cleanup to complete
+  await new Promise(resolve => setTimeout(resolve, 100));
   process.exit(exitCode);
 }
+
+// Handle termination signals
+process.on('SIGINT', () => gracefulShutdown(0));
+process.on('SIGTERM', () => gracefulShutdown(0));
 
 // Run
 main().then(async () => {
