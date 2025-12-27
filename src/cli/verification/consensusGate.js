@@ -16,24 +16,30 @@ const { Signal, ConsensusCalculator, ModelWeights } = require('../../core/signal
 /**
  * Patterns for extracting factual claims from text
  */
+/**
+ * Patterns for extracting factual claims from text
+ */
 const CLAIM_PATTERNS = {
   // Existence claims: "X exists", "X is a real thing", "X does not exist"
-  existence: /\b(does(?:n't|not)?|doesn't|isn't|is(?:n't)?)\s+(?:a\s+)?(?:real|actual|existing|valid|available)\b/gi,
+  // Restricted to proper nouns/technical terms (3+ chars, uppercase start)
+  // Exclude common starting words that aren't technical subjects
+  existence: /\b(?!(?:The|This|That|These|Those|It|Later|Onwards)\b)([A-Z][A-Za-z0-9-]{3,})\s+(?:does(?:n't|not)?|doesn't|isn't|is(?:n't)?)\s+(?:a\s+)?(?:real|actual|existing|valid|available)\b/gi,
 
   // Definition claims: "X is Y", "X means Y"
-  definition: /\b([A-Z][A-Za-z0-9-]+)\s+(?:is|are|was|were)\s+(?:a|an|the)?\s*([^.!?]{10,100})/g,
+  // Require technical-sounding subject and substantial definition
+  definition: /\b(?!(?:The|This|That|These|Those|It|Later|Onwards)\b)([A-Z][A-Za-z0-9-]{3,})\s+(?:is|are|was|were)\s+(?:a|an|the)?\s*([A-Z][^.!?]{15,80})/g,
 
   // Temporal claims: "X was released in Y", "X launched on Y"
-  temporal: /\b(released|launched|announced|introduced|created|founded)\s+(?:in|on)\s+(\d{4})/gi,
+  temporal: /\b(?!(?:The|This|That|These|Those|It|Later|Onwards)\b)([A-Z][A-Za-z0-9-]{3,})\s+(?:released|launched|announced|introduced|created|founded)\s+(?:in|on|during)\s+(\d{4})/gi,
 
   // Quantitative claims: "X has Y users", "X supports Y"
-  quantitative: /\b(has|have|supports?|contains?|includes?)\s+(\d[\d,]*)\s+/gi,
+  quantitative: /\b(?!(?:The|This|That|These|Those|It|Later|Onwards)\b)([A-Z][A-Za-z0-9-]{3,})\s+(?:has|have|supports?|contains?|includes?)\s+(\d[\d,]*\+?)\s+(?:users|nodes|parameters|tokens|layers)/gi,
 
   // Capability claims: "X can do Y", "X supports Y"
-  capability: /\b(can(?:not)?|cannot|supports?|doesn't support)\s+([^.!?]{5,80})/gi,
+  capability: /\b(?!(?:The|This|That|These|Those|It|Later|Onwards)\b)([A-Z][A-Za-z0-9-]{3,})\s+(?:can(?:not)?|cannot|supports?|doesn't support|enables?|allows?)\s+([^.!?]{10,60})/gi,
 
   // Negation claims: "X is not Y", "X doesn't have Y"
-  negation: /\b(not|no|never|doesn't|don't|isn't|aren't|won't|can't)\s+([^.!?]{5,60})/gi
+  negation: /\b(?!(?:The|This|That|These|Those|It|Later|Onwards)\b)([A-Z][A-Za-z0-9-]{3,})\s+(?:is not|isn't|aren't|won't|can't|does not support)\s+([^.!?]{10,60})/gi
 };
 
 /**
@@ -116,16 +122,32 @@ class ConsensusGate {
 
   /**
    * Calculate semantic similarity between two claims
-   * Simple word overlap for now - can be enhanced with embeddings
+   * Enhanced with technical term weighting
    */
   claimSimilarity(claim1, claim2) {
-    const words1 = new Set(claim1.normalized.split(/\s+/));
-    const words2 = new Set(claim2.normalized.split(/\s+/));
+    const words1 = claim1.normalized.split(/\s+/);
+    const words2 = claim2.normalized.split(/\s+/);
+    
+    const set1 = new Set(words1);
+    const set2 = new Set(words2);
 
-    const intersection = new Set([...words1].filter(w => words2.has(w)));
-    const union = new Set([...words1, ...words2]);
+    const intersection = [...set1].filter(w => set2.has(w));
+    const union = new Set([...set1, ...set2]);
 
-    return intersection.size / union.size;
+    // Base Jaccard similarity
+    let baseScore = intersection.size / union.size;
+
+    // Boost score if shared technical terms (camelCase or PascalCase or hyphenated)
+    const techPattern = /([a-z]+[A-Z]|[A-Z][a-z]+[A-Z]|[a-zA-Z0-9]+-[a-zA-Z0-9]+)/;
+    const techTerms1 = words1.filter(w => techPattern.test(w));
+    const techTerms2 = words2.filter(w => techPattern.test(w));
+    
+    const sharedTech = techTerms1.filter(w => techTerms2.includes(w));
+    if (sharedTech.length > 0) {
+      baseScore += 0.2; // Significant boost for matching technical identifiers
+    }
+
+    return Math.min(1.0, baseScore);
   }
 
   /**
@@ -285,8 +307,9 @@ class ConsensusGate {
     }
 
     // Calculate overall confidence
-    const verifiedWeight = verified.reduce((sum, c) => sum + c.confidence * c.severity, 0);
-    const disputedWeight = disputed.reduce((sum, c) => sum + (1 - c.confidence) * c.severity, 0);
+    // Give more weight to verified claims, and penalize high-severity disputes more than low-severity ones
+    const verifiedWeight = verified.reduce((sum, c) => sum + (c.confidence * c.severity * 1.5), 0);
+    const disputedWeight = disputed.reduce((sum, c) => sum + ((1 - c.confidence) * c.severity), 0);
     const totalWeight = verifiedWeight + disputedWeight || 1;
     const overallConfidence = verifiedWeight / totalWeight;
 

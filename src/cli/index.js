@@ -411,11 +411,22 @@ class ZeroCLI {
         // Show warnings prominently
         if (verification.flags.length > 0) {
           writeln('');
-          writeln(yellow(bold('ATTENTION: Disputed claims detected')));
-          for (const flag of verification.flags) {
+          const flagCount = verification.flags.length;
+          writeln(yellow(bold(`ATTENTION: ${flagCount} disputed claim${flagCount === 1 ? '' : 's'} detected`)));
+          
+          // Truncate if too many flags to keep output elegant
+          const maxFlagsToShow = 8;
+          const displayFlags = verification.flags.slice(0, maxFlagsToShow);
+          
+          for (const flag of displayFlags) {
             writeln(yellow(`  ! ${flag.claim || flag.reason}`));
           }
-          writeln(dim('Use "zero verify ' + (reportId || '<id>') + '" to review claims.'));
+          
+          if (flagCount > maxFlagsToShow) {
+            writeln(yellow(`  ... and ${flagCount - maxFlagsToShow} more. Use "zero verify ${reportId}" to see all.`));
+          } else {
+            writeln(dim('Use "zero verify ' + (reportId || '<id>') + '" to review claims.'));
+          }
         }
       } else {
         spin.succeed(`Research complete`);
@@ -426,7 +437,7 @@ class ZeroCLI {
       if (args.json) {
         writeln(JSON.stringify(result, null, 2));
       } else {
-        writeln(result?.content?.[0]?.text || 'No result');
+        writeln(resultText || 'No result');
       }
 
       // Show next steps
@@ -467,7 +478,8 @@ class ZeroCLI {
 
       spin.succeed(`Found results for: ${query}`);
       writeln('');
-      writeln(result?.content?.[0]?.text || 'No results');
+      const searchResultText = typeof result === 'string' ? result : result?.content?.[0]?.text;
+      writeln(searchResultText || 'No results');
     } catch (err) {
       spin.fail(`Search failed: ${err.message}`);
     }

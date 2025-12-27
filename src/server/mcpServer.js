@@ -2308,54 +2308,63 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
  let lastHealthIssues = '';
  const HEALTH_WARNING_DEBOUNCE_MS = 60000; // Only log once per minute per unique issue set
 
- function startJobWorker() {
-   const initState = dbClient.getInitState ? dbClient.getInitState() : null;
-   if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
-     logger.warn('Job worker not started: database not initialized', { initState });
-     return;
-   }
+let workerStopped = false;
+let activeHeartbeats = new Set();
 
-   logger.info('Starting job worker', { concurrency: require('../../config').jobs.concurrency });
+function startJobWorker() {
+  const initState = dbClient.getInitState ? dbClient.getInitState() : null;
+  if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
+    logger.warn('Job worker not started: database not initialized', { initState });
+    return;
+  }
 
-   const { concurrency, heartbeatMs } = require('../../config').jobs;
-   const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
-     while (true) {
-       try {
-         // Pre-flight check before claiming work
-         const { quickCheck } = require('../utils/preflight');
-         const health = quickCheck(dbClient);
-         if (!health.ready) {
-           // Debounce health warnings - only log once per minute per unique issue set
-           const issueKey = JSON.stringify(health.issues);
-           const now = Date.now();
-           if (issueKey !== lastHealthIssues || now - lastHealthWarningTime > HEALTH_WARNING_DEBOUNCE_MS) {
-             logger.warn('JobWorker unhealthy', { issues: health.issues, nextLogIn: '60s' });
-             lastHealthWarningTime = now;
-             lastHealthIssues = issueKey;
-           }
-           await new Promise(r => setTimeout(r, 5000));
-           continue;
-         }
+  workerStopped = false;
+  logger.info('Starting job worker', { concurrency: require('../../config').jobs.concurrency });
 
-         const job = await dbClient.claimNextJob();
-         if (!job) { await new Promise(r=>setTimeout(r, 750)); continue; }
-         const jobId = job.id;
-         await dbClient.appendJobEvent(jobId, 'started', {});
-         const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
-         try {
-           if (job.type === 'research') {
-             // Reuse conductResearch flow but stream events via job events
-             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
-             // Validate query parameter before execution - fail fast with clear error
-             if (!params?.query || typeof params.query !== 'string' || params.query.trim() === '') {
-               logger.error('Job missing query parameter', { jobId, params: JSON.stringify(params).substring(0, 200) });
-               throw new Error(`Job ${jobId} missing required query parameter`);
-             }
-             // Minimal bridge: send progress chunks into job events
-             const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
-             const resultText = await require('./tools').conductResearch(params, exchange, jobId);
-             await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
-             await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
+  const { concurrency, heartbeatMs } = require('../../config').jobs;
+  const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
+    while (!workerStopped) {
+      try {
+        // Pre-flight check before claiming work
+        const { quickCheck } = require('../utils/preflight');
+        const health = quickCheck(dbClient);
+        if (!health.ready) {
+          // Debounce health warnings - only log once per minute per unique issue set
+          const issueKey = JSON.stringify(health.issues);
+          const now = Date.now();
+          if (issueKey !== lastHealthIssues || now - lastHealthWarningTime > HEALTH_WARNING_DEBOUNCE_MS) {
+            logger.warn('JobWorker unhealthy', { issues: health.issues, nextLogIn: '60s' });
+            lastHealthWarningTime = now;
+            lastHealthIssues = issueKey;
+          }
+          await new Promise(r => setTimeout(r, 5000));
+          continue;
+        }
+
+        const job = await dbClient.claimNextJob();
+        if (!job) { 
+          if (workerStopped) break;
+          await new Promise(r=>setTimeout(r, 750)); 
+          continue; 
+        }
+        const jobId = job.id;
+        await dbClient.appendJobEvent(jobId, 'started', {});
+        const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
+        activeHeartbeats.add(hb);
+        try {
+          if (job.type === 'research') {
+            // Reuse conductResearch flow but stream events via job events
+            const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+            // Validate query parameter before execution - fail fast with clear error
+            if (!params?.query || typeof params.query !== 'string' || params.query.trim() === '') {
+              logger.error('Job missing query parameter', { jobId, params: JSON.stringify(params).substring(0, 200) });
+              throw new Error(`Job ${jobId} missing required query parameter`);
+            }
+            // Minimal bridge: send progress chunks into job events
+            const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
+            const resultText = await require('./tools').conductResearch(params, exchange, jobId);
+            await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
+            await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
             // Optional webhook notification
             try {
               if (params?.notify) {
@@ -2366,9 +2375,9 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
                 }).catch(()=>{});
               }
             } catch (_) {}
-           } else {
-             await dbClient.setJobStatus(jobId, 'failed', { result: { error: 'Unknown job type' }, finished: true });
-             await dbClient.appendJobEvent(jobId, 'error', { message: 'Unknown job type' });
+          } else {
+            await dbClient.setJobStatus(jobId, 'failed', { result: { error: 'Unknown job type' }, finished: true });
+            await dbClient.appendJobEvent(jobId, 'error', { message: 'Unknown job type' });
             // Notify if requested
             try {
               const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
@@ -2380,62 +2389,74 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
                 }).catch(()=>{});
               }
             } catch (_) {}
-           }
-         } catch (e) {
-           // Wrap error with full context for detailed diagnosis
-           const { wrapError, formatErrorForLog } = require('../utils/errors');
-           const wrapped = wrapError(e, `Job ${jobId} failed`, { requestId: jobId });
+          }
+        } catch (e) {
+          // Wrap error with full context for detailed diagnosis
+          const { wrapError, formatErrorForLog } = require('../utils/errors');
+          const wrapped = wrapError(e, `Job ${jobId} failed`, { requestId: jobId });
 
-           logger.error('Job failed', formatErrorForLog(wrapped, jobId));
+          logger.error('Job failed', formatErrorForLog(wrapped, jobId));
 
-           await dbClient.setJobStatus(jobId, 'failed', {
-             result: {
-               error: wrapped.message,
-               category: wrapped.category,
-               code: wrapped.code,
-               isRetryable: wrapped.isRetryable,
-               originalError: e.message,
-               stack: e.stack?.split('\n').slice(0, 5).join('\n')
-             },
-             finished: true
-           });
-           await dbClient.appendJobEvent(jobId, 'error', {
-             message: wrapped.message,
-             category: wrapped.category,
-             code: wrapped.code,
-             isRetryable: wrapped.isRetryable,
-             originalError: e.message
-           });
+          await dbClient.setJobStatus(jobId, 'failed', {
+            result: {
+              error: wrapped.message,
+              category: wrapped.category,
+              code: wrapped.code,
+              isRetryable: wrapped.isRetryable,
+              originalError: e.message,
+              stack: e.stack?.split('\n').slice(0, 5).join('\n')
+            },
+            finished: true
+          });
+          await dbClient.appendJobEvent(jobId, 'error', {
+            message: wrapped.message,
+            category: wrapped.category,
+            code: wrapped.code,
+            isRetryable: wrapped.isRetryable,
+            originalError: e.message
+          });
           try {
             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
             if (params?.notify) {
               await nodeFetch(params.notify, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_id: jobId, status: 'failed', error: e.message })
+                body: JSON.stringify({ job_id: jobId, status: 'failed', error: wrapped.message })
               }).catch(()=>{});
             }
           } catch (_) {}
-         } finally {
-           clearInterval(hb);
-         }
-       } catch (loopError) {
-         // Log worker loop errors with full context instead of swallowing
-         const { formatErrorForLog } = require('../utils/errors');
-         logger.error('JobWorker loop error', formatErrorForLog(loopError));
+        } finally {
+          clearInterval(hb);
+          activeHeartbeats.delete(hb);
+        }
+      } catch (loopError) {
+        // Log worker loop errors with full context instead of swallowing
+        const { formatErrorForLog } = require('../utils/errors');
+        logger.error('JobWorker loop error', formatErrorForLog(loopError));
 
-         // Distinguish transient vs fatal errors for backoff
-         const isFatal = loopError.message?.includes('database') ||
-                        loopError.message?.includes('connection') ||
-                        loopError.message?.includes('ECONNREFUSED');
-         await new Promise(r => setTimeout(r, isFatal ? 5000 : 1000));
-       }
-     }
-   })());
-   Promise.allSettled(runners).catch(err => {
-     logger.error('Job worker runners failed', { error: err.message });
-   });
- }
+        // Distinguish transient vs fatal errors for backoff
+        const isFatal = loopError.message?.includes('database') ||
+                       loopError.message?.includes('connection') ||
+                       loopError.message?.includes('ECONNREFUSED');
+        if (!workerStopped) await new Promise(r => setTimeout(r, isFatal ? 5000 : 1000));
+      }
+    }
+  })());
+  Promise.allSettled(runners).catch(err => {
+    logger.error('Job worker runners failed', { error: err.message });
+  });
+}
+
+function stopJobWorker() {
+  workerStopped = true;
+  for (const hb of activeHeartbeats) {
+    clearInterval(hb);
+  }
+  activeHeartbeats.clear();
+  logger.info('Job worker stop signal sent');
+}
+
+module.exports.stopJobWorker = stopJobWorker;
 
  /**
   * Main server startup sequence

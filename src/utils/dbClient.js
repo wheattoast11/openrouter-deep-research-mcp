@@ -38,6 +38,7 @@ if (isNodeEnv) {
 let db = null;
 let isEmbedderReady = false;
 let embeddingProvider = null; // @terminals-tech/embeddings provider
+let transformerPipeline = null; // Store reference for cleanup
 let dbInitialized = false;
 let dbInitAttempted = false;
 let usingInMemoryFallback = false;
@@ -115,10 +116,12 @@ async function initializeEmbedder() {
         logger.info('Initializing transformers pipeline', { device: actualDevice, dtype: dtypeConfig });
 
         // Create pipeline with explicit device/dtype
-        const extractor = await pipeline('feature-extraction', modelId, {
+        transformerPipeline = await pipeline('feature-extraction', modelId, {
           device: actualDevice,
           dtype: dtypeConfig
         });
+
+        const extractor = transformerPipeline;
 
         // Wrap in provider interface compatible with @terminals-tech/embeddings
         embeddingProvider = {
@@ -842,7 +845,7 @@ async function indexDocument({ sourceType, sourceId, title, content }) {
   const docId = await executeWithRetry(async () => {
     const ins = await db.query(
       `INSERT INTO index_documents (source_type, source_id, title, content, doc_len, doc_embedding)
-       VALUES ($1,$2,$3,$4,$5, CASE WHEN $6 IS NULL THEN NULL ELSE $6::vector END)
+       VALUES ($1, $2, $3, $4, $5, $6::text::vector)
        RETURNING id;`,
       [sourceType, sourceId, title || null, truncated, docLen, embeddingVec]
     );
@@ -1683,14 +1686,35 @@ module.exports = {
   
   // Cleanup
   close: async () => {
+    // Shutdown any background embedding resources
+    if (transformerPipeline) {
+      try {
+        // Attempt to close ONNX sessions if exposed
+        if (transformerPipeline.model?.session?.close) {
+          await transformerPipeline.model.session.close();
+        }
+        transformerPipeline = null;
+      } catch (_) {}
+    }
+
     if (db) {
       try {
+        // Ensure any pending TCN subscriptions are cleared
+        // (PGlite close handles this mostly, but being explicit)
+        dbInitialized = false;
+        initState = InitState.NOT_STARTED;
+        
         await db.close();
         db = null;
-        dbInitialized = false;
         logger.info('Database connection closed gracefully');
       } catch (err) {
-        logger.warn('Error closing database', { error: err.message });
+        // Mutex errors often happen during close if WASM is busy
+        if (err.message?.includes('mutex')) {
+          logger.debug('Database mutex busy during close - forcing cleanup');
+        } else {
+          logger.warn('Error closing database', { error: err.message });
+        }
+        db = null;
       }
     }
   }

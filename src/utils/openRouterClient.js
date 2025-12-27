@@ -56,6 +56,12 @@ class OpenRouterClient {
       merged.max_tokens = Math.max(Number(merged.max_tokens || 0), minMax);
     }
 
+    // Strip temperature for models that don't support it (e.g., OpenAI o1/o3/o4)
+    if (model.includes('openai/o1') || model.includes('openai/o3') || model.includes('openai/o4')) {
+      delete merged.temperature;
+      delete merged.top_p; // Often also unsupported in reasoning models
+    }
+
     return withRetry(async () => {
       try {
         const response = await this.client.post('/chat/completions', {
@@ -85,6 +91,13 @@ class OpenRouterClient {
     if (minMax > 0) {
       merged.max_tokens = Math.max(Number(merged.max_tokens || 0), minMax);
     }
+
+    // Strip temperature for models that don't support it (e.g., OpenAI o1/o3/o4)
+    if (model.includes('openai/o1') || model.includes('openai/o3') || model.includes('openai/o4')) {
+      delete merged.temperature;
+      delete merged.top_p;
+    }
+
     const body = JSON.stringify({
       model,
       messages,

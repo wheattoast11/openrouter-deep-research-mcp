@@ -73,25 +73,42 @@ async function gracefulShutdown(exitCode = 0) {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
+  // Final emergency timeout - if we haven't exited in 5s, force it
+  const emergencyTimer = setTimeout(() => {
+    process.stderr.write(`\x1b[31mEmergency shutdown triggered\x1b[0m\n`);
+    process.exit(exitCode);
+  }, 5000);
+  emergencyTimer.unref();
+
   try {
-    // Close database gracefully to prevent mutex lock errors
-    // Allow WASM instance time to finish pending operations
+    // 1. Stop background workers first to prevent new DB operations
+    try {
+      const mcpServer = require('../src/server/mcpServer');
+      if (mcpServer && mcpServer.stopJobWorker) {
+        mcpServer.stopJobWorker();
+      }
+    } catch (_) { /* ignore if not loaded */ }
+
+    // 2. Close database gracefully to prevent mutex lock errors
     const dbClient = require('../src/utils/dbClient');
     if (dbClient && dbClient.close) {
-      // Set a timeout to prevent hanging on stuck WASM
       const closePromise = dbClient.close();
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('DB close timeout')), 3000)
+        setTimeout(() => reject(new Error('DB close timeout')), 2500)
       );
-      await Promise.race([closePromise, timeoutPromise]).catch(() => {});
+      await Promise.race([closePromise, timeoutPromise]).catch((e) => {
+        if (process.env.DEBUG) process.stderr.write(`Shutdown race: ${e.message}\n`);
+      });
     }
   } catch (err) {
     // Ignore errors during cleanup
   }
   
-  // Small delay to allow WASM cleanup to complete
-  await new Promise(resolve => setTimeout(resolve, 100));
-  process.exit(exitCode);
+  // Final safeguard: allow event loop to drain
+  clearTimeout(emergencyTimer);
+  setTimeout(() => {
+    process.exit(exitCode);
+  }, 500).unref();
 }
 
 // Handle termination signals

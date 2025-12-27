@@ -1,6 +1,6 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
   "bin": {

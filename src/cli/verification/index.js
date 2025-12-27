@@ -213,15 +213,21 @@ class VerificationPipeline {
     if (result.warnings.length > 0) {
       lines.push(`\nWarnings (${result.warnings.length}):`);
       for (const w of result.warnings) {
-        lines.push(`  - ${w.type}: ${JSON.stringify(w)}`);
+        if (w.type === 'low-confidence') {
+          lines.push(`  - low-confidence: ${(w.confidence * 100).toFixed(0)}% (threshold: ${w.threshold * 100}%)`);
+        } else if (w.type === 'consensus-review-required') {
+          lines.push(`  - consensus-review-required: ${w.disputed} disputed, ${w.verified} verified`);
+        } else {
+          lines.push(`  - ${w.type}`);
+        }
       }
     }
 
-    // Flags
+    // Flags - simplified for main status output
     if (result.flags.length > 0) {
-      lines.push(`\nFlags (${result.flags.length}):`);
-      for (const f of result.flags) {
-        lines.push(`  ! ${f.type}: ${f.claim || f.reason}`);
+      const highSeverityCount = result.flags.filter(f => f.type === 'high-severity-disputed').length;
+      if (highSeverityCount > 0) {
+        lines.push(`  ! ${highSeverityCount} high-severity disputes detected`);
       }
     }
 

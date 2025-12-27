@@ -160,12 +160,56 @@ class MCPLogger {
   _writeStderr(entry) {
     const { ts, level, msg, requestId, component, ...rest } = entry;
 
-    // Build prefix parts
+    // Elegant CLI formatting when in TTY and not in stdio mode
+    const isTTY = process.stderr.isTTY && !this.isStdio;
+    const logFormat = process.env.LOG_FORMAT || (isTTY ? 'elegant' : 'structured');
+
+    if (logFormat === 'elegant') {
+      const icons = {
+        'DEBUG': '⚙',
+        'INFO': 'ℹ',
+        'NOTICE': '💡',
+        'WARN': '⚠',
+        'ERROR': '✖',
+        'CRITICAL': '🚨'
+      };
+      
+      const colors = {
+        'DEBUG': '\x1b[90m', // gray
+        'INFO': '\x1b[36m',  // cyan
+        'NOTICE': '\x1b[32m', // green
+        'WARN': '\x1b[33m',  // yellow
+        'ERROR': '\x1b[31m', // red
+        'CRITICAL': '\x1b[31;1m' // bright red
+      };
+
+      const reset = '\x1b[0m';
+      const icon = icons[level] || '•';
+      const color = colors[level] || '';
+      const compStr = component ? `\x1b[90m[${component}]\x1b[0m ` : '';
+      
+      // Don't show timestamp in elegant mode unless DEBUG is on
+      const timeStr = (this.minLevel <= LogLevel.DEBUG) ? `\x1b[90m${ts.split('T')[1].split('.')[0]}\x1b[0m ` : '';
+      
+      let line = `${timeStr}${color}${icon}${reset} ${compStr}${msg}`;
+      
+      // Only show extra context if it contains non-internal fields or if in DEBUG
+      const extra = Object.keys(rest).filter(k => !['sessionId', 'timestamp', 'phase'].includes(k));
+      if (this.minLevel <= LogLevel.DEBUG && extra.length > 0) {
+        const extraObj = {};
+        extra.forEach(k => { extraObj[k] = rest[k]; });
+        line += ` \x1b[90m${JSON.stringify(extraObj)}\x1b[0m`;
+      }
+      
+      process.stderr.write(line + '\n');
+      return;
+    }
+
+    // Default structured format: [timestamp] [LEVEL] [component] [requestId] message {extra}
     const parts = [`[${ts}]`, `[${level}]`];
     if (component) parts.push(`[${component}]`);
     if (requestId) parts.push(`[${requestId}]`);
 
-    // Format: [timestamp] [LEVEL] [component] [requestId] message {extra}
     let line = `${parts.join(' ')} ${msg}`;
 
     // Append extra context as JSON if present

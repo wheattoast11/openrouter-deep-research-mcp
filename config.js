@@ -256,10 +256,10 @@ config.caching = {
   },
   // Cost optimization strategies
   optimization: {
-    preferredLowCostModels: ['google/gemini-3-flash-preview', 'anthropic/claude-haiku-4.5', 'deepcogito/cogito-v2.1-671b'],
-    visionModels: ['anthropic/claude-opus-4.5', 'google/gemini-3-flash-preview', 'openai/gpt-5.2'],
-    codingModels: ['google/gemini-3-flash-preview', 'anthropic/claude-haiku-4.5', 'deepcogito/cogito-v2.1-671b'],
-    complexReasoningModels: ['perplexity/sonar-pro-search', 'google/gemini-3-flash-preview', 'deepcogito/cogito-v2.1-671b'],
+    preferredLowCostModels: ['google/gemini-3-flash-preview', 'anthropic/claude-haiku-4.5', 'openai/gpt-5-nano', 'deepcogito/cogito-v2.1-671b'],
+    visionModels: ['anthropic/claude-opus-4.5', 'google/gemini-3-flash-preview', 'google/gemini-3-pro-preview', 'anthropic/claude-sonnet-4.5', 'openai/gpt-5.2'],
+    codingModels: ['google/gemini-3-flash-preview', 'google/gemini-3-pro-preview', 'openai/gpt-5.2-chat', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-haiku-4.5', 'deepcogito/cogito-v2.1-671b'],
+    complexReasoningModels: ['perplexity/sonar-pro-search', 'google/gemini-3-pro-preview', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.5', 'openai/gpt-5.2-chat'],
     costThresholds: {
       simple: 0.0000005, // Max cost per token for simple queries
       moderate: 0.000002, // Max cost per token for moderate queries  
