@@ -1,5 +1,5 @@
 // src/agents/planningAgent.js
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const config = require('../../config');
 const logger = require('../utils/logger').child('PlanningAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
@@ -43,7 +43,7 @@ class PlanningAgent {
     // Ensure options exists before accessing requestId
     const requestId = (options && options.requestId) ? options.requestId : 'unknown-req'; 
     try {
-      const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
+      const response = await providerManager.chat(this.classificationModel, messages, {
         temperature: 0.1,
         max_tokens: 64 // Ensure well above OpenRouter minimum of 16
       });
@@ -150,7 +150,7 @@ Refinement Guidelines:
       const lineup = [this.model, ...this.candidates.filter(m => m !== this.model)];
       for (const m of lineup) {
         try {
-          response = await openRouterClient.chatCompletion(m, messages, {
+          response = await providerManager.chat(m, messages, {
             temperature: previousResults ? 0.5 : 0.7, // Slightly lower temp for refinement
             max_tokens: 2000
           });

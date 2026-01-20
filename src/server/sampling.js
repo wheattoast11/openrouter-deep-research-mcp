@@ -2,7 +2,7 @@
 // MCP 2025-11-25 Sampling with Tools (SEP-1577)
 // Server-side agentic loops using client sampling capabilities
 
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const config = require('../../config');
 
 class SamplingHandler {
@@ -68,7 +68,7 @@ class SamplingHandler {
     process.stderr.write(`[${new Date().toISOString()}] Sampling: Creating message with model ${orRequest.model}, tools: ${tools?.length || 0}\n`);
 
     // Make the API call
-    const response = await openRouterClient.chatCompletion(
+    const response = await providerManager.chat(
       orRequest.model,
       orRequest.messages,
       {

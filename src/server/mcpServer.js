@@ -2456,8 +2456,6 @@ function stopJobWorker() {
   logger.info('Job worker stop signal sent');
 }
 
-module.exports.stopJobWorker = stopJobWorker;
-
  /**
   * Main server startup sequence
   * Ensures proper initialization order: DB -> Embedder -> Transports -> Job Worker
@@ -2523,10 +2521,15 @@ module.exports.stopJobWorker = stopJobWorker;
    });
  }
 
- // Single entry point with proper error handling
- startServer().catch(error => {
-   logger.error('FATAL: Server startup failed', { error: error.message, stack: error.stack });
-   process.exit(1);
- });
+  // Single entry point with proper error handling
+  if (require.main === module) {
+    startServer().catch(error => {
+      logger.error('FATAL: Server startup failed', { error: error.message, stack: error.stack });
+      process.exit(1);
+    });
+  }
 
 } // Close else block for --setup-claude check
+
+module.exports.stopJobWorker = stopJobWorker;
+module.exports.startServer = startServer;

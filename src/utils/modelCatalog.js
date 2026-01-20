@@ -1,5 +1,5 @@
-const openRouterClient = require('./openRouterClient');
 const NodeCache = require('node-cache');
+const providerManager = require('../core/providers');
 
 // Cache model catalog for 30 minutes by default
 const catalogCache = new NodeCache({ stdTTL: 1800, checkperiod: 120 });
@@ -46,7 +46,7 @@ function hashCatalog(models) {
 }
 
 async function refresh() {
-  const data = await openRouterClient.getModels();
+  const data = await providerManager.getModels();
   const models = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.models) ? data.models : []);
   const normalized = models.map(normalizeModelEntry);
   const newHash = hashCatalog(normalized);

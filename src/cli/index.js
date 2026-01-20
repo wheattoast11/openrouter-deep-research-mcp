@@ -234,7 +234,7 @@ class ZeroCLI {
     if (!resolvedCommand) {
       error(`Unknown command: ${command}`);
       writeln(dim(`Run 'zero help' for available commands.`));
-      process.exit(1);
+      throw new Error(`Unknown command: ${command}`);
     }
 
     // Initialize for most commands (skip for help, version, and init)
@@ -250,7 +250,7 @@ class ZeroCLI {
       if (args.debug) {
         writeln(err.stack);
       }
-      process.exit(1);
+      throw err;
     }
   }
 
@@ -452,6 +452,16 @@ class ZeroCLI {
     } catch (err) {
       spin.fail(`Research failed: ${err.message}`);
       throw err;
+    } finally {
+      try {
+        const providerTelemetry = require('../utils/providerTelemetry');
+        const health = providerTelemetry.getSnapshot({ includeModels: false });
+        const openrouter = health.providers?.openrouter;
+        if (openrouter && openrouter.fallbackAttempts > 0) {
+          writeln('');
+          writeln(dim(`[degraded] fallback models used (${openrouter.fallbackAttempts})`));
+        }
+      } catch (_) {}
     }
   }
 
@@ -643,7 +653,7 @@ class ZeroCLI {
       writeln(green('Login successful'));
     } else {
       spin.fail(`Authentication failed: ${result.error}`);
-      process.exit(1);
+      throw new Error(result.error);
     }
   }
 
@@ -748,7 +758,12 @@ class ZeroCLI {
       const authStatus = auth.getAuthStatus();
 
       const tools = require('../server/tools');
-      const status = await tools.getServerStatus({});
+      let status = await tools.getServerStatus({});
+
+      // Parse status if string
+      if (typeof status === 'string') {
+        try { status = JSON.parse(status); } catch (_) {}
+      }
 
       spin.succeed('Status retrieved');
       writeln('');
@@ -766,10 +781,35 @@ class ZeroCLI {
       }
       writeln('');
 
-      if (typeof status === 'string') {
-        writeln(status);
-      } else {
-        writeln(JSON.stringify(status, null, 2));
+      // Provider Health
+      if (status.providers) {
+        writeln(bold('Provider Health:'));
+        for (const [name, p] of Object.entries(status.providers)) {
+          const rate = p.totals.requests ? Math.round(p.totals.successes / p.totals.requests * 100) : 0;
+          const latency = p.latency.avgMs || 0;
+          writeln(`  • ${cyan(name)}: ${rate}% success (${p.totals.requests} reqs) | ${latency}ms avg`);
+          if (p.fallbackAttempts > 0) {
+            writeln(yellow(`    Fallbacks: ${p.fallbackAttempts}`));
+          }
+          if (p.keyRotations > 0) {
+            writeln(dim(`    Key Rotations: ${p.keyRotations}`));
+          }
+        }
+        writeln('');
+      }
+
+      // System Status
+      writeln(bold('System:'));
+      writeln(`  Database: ${status.database?.initialized ? green('Connected') : red('Disconnected')}`);
+      writeln(`  Embedder: ${status.embedder?.ready ? green('Ready') : yellow('Not Loaded')}`);
+      writeln(`  Jobs:     ${status.jobs?.running || 0} running, ${status.jobs?.queued || 0} queued`);
+      
+      // Convergence
+      if (status.convergence) {
+        writeln('');
+        writeln(bold('Convergence:'));
+        writeln(`  Status: ${status.convergence.status || 'unknown'}`);
+        if (status.convergence.rate) writeln(`  Rate:   ${(status.convergence.rate * 100).toFixed(1)}%`);
       }
 
       // Verification stats

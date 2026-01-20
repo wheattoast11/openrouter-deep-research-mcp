@@ -18,14 +18,12 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## What's New (v1.11.0)
+## What's New (v1.12.0)
 
-- **PGlite 0.3.14** - Full extension support with 16 PostgreSQL extensions enabled
-- **Latest model IDs** - Updated to gpt-5-nano, gemini-3-flash-preview, claude-haiku-4.5
-- **Payload optimization** - Intelligent truncation prevents 413 errors in synthesis
-- **ZeroReplay** - Temporal agent analysis for debugging orchestration flows
-- **StickyCluster** - Agent grouping based on communication patterns (cube extension)
-- **Graceful shutdown** - Proper database cleanup prevents mutex lock errors
+- **Provider telemetry** - Model-level health, latency, error categories, fallback tracking
+- **Graceful degradation** - Key rotation cooldowns + streaming fallback on failures
+- **Provider health tool** - `get_provider_health` + provider summary in `get_server_status`
+- **CLI degrade indicator** - Inline hint when fallbacks are used
 
 [Full Changelog](docs/CHANGELOG.md) | [Extensions Guide](docs/EXTENSIONS.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 
@@ -36,6 +34,8 @@ Set `OPENROUTER_API_KEY` in your environment, then configure via `.env` or `.mcp
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENROUTER_API_KEY` | *required* | OpenRouter API key |
+| `OPENROUTER_API_KEYS` | *(optional)* | Comma-separated OpenRouter keys for rotation |
+| `OPENROUTER_KEY_COOLDOWN_MS` | `5000` | Base cooldown per key after failures |
 | `SERVER_PORT` | `3002` | HTTP server port |
 | `MODE` | `ALL` | `AGENT`, `MANUAL`, or `ALL` |
 | `PGLITE_DATA_DIR` | `./researchAgentDB` | Database location |

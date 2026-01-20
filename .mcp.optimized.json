@@ -39,9 +39,9 @@
         "STRICT_SCHEMA_VALIDATION": "false",
 
         "_comment_models": "Cost tiers for research quality/cost tradeoff",
-        "HIGH_COST_MODELS": "openai/gpt-5-chat,anthropic/claude-sonnet-4,google/gemini-2.5-pro",
-        "LOW_COST_MODELS": "deepseek/deepseek-chat-v3.1,openai/gpt-5-mini,google/gemini-2.5-flash",
-        "PLANNING_MODEL": "openai/gpt-5-chat"
+        "HIGH_COST_MODELS": "openai/gpt-5.2,anthropic/claude-sonnet-4.5,anthropic/claude-opus-4.5,google/gemini-3-pro-preview",
+        "LOW_COST_MODELS": "deepseek/deepseek-chat-v3.2,anthropic/claude-haiku-4.5,google/gemini-3-flash-preview,z-ai/glm-4.7",
+        "PLANNING_MODEL": "google/gemini-3-flash-preview"
       },
 
       "_comment_resources": "Expose selective resources for agentic workflows",

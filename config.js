@@ -2,6 +2,23 @@ require('dotenv').config();
 const path = require('path');
 const pkg = require('./package.json');
 
+const normalizedOpenRouterKeys = [];
+if (process.env.OPENROUTER_API_KEY) {
+  const key = process.env.OPENROUTER_API_KEY.trim();
+  if (key) normalizedOpenRouterKeys.push(key);
+}
+if (process.env.OPENROUTER_API_KEYS) {
+  const extraKeys = String(process.env.OPENROUTER_API_KEYS)
+    .split(',')
+    .map(k => k.trim())
+    .filter(Boolean);
+  for (const key of extraKeys) {
+    if (!normalizedOpenRouterKeys.includes(key)) {
+      normalizedOpenRouterKeys.push(key);
+    }
+  }
+}
+
 const config = {
   server: {
     // Support both SERVER_PORT and PORT, prefer SERVER_PORT if present
@@ -17,7 +34,8 @@ const config = {
     startupTimeoutMs: parseInt(process.env.STARTUP_TIMEOUT_MS, 10) || 60000
   },
   openrouter: {
-    apiKey: process.env.OPENROUTER_API_KEY,
+    apiKey: normalizedOpenRouterKeys[0],
+    apiKeys: normalizedOpenRouterKeys,
     baseUrl: "https://openrouter.ai/api/v1",
     timeout: parseInt(process.env.OPENROUTER_TIMEOUT_MS, 10) || 180000,
     retries: parseInt(process.env.OPENROUTER_RETRIES, 10) || 3,

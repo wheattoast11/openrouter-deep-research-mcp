@@ -1,11 +1,12 @@
 // src/agents/contextAgent.js
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import parser
 const modelCatalog = require('../utils/modelCatalog'); // Model-aware token limits
 const logger = require('../utils/logger').child('ContextAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
 const citationValidator = require('../utils/citationValidator'); // Citation validation
+const providerTelemetry = require('../utils/providerTelemetry');
 
 /**
  * Calculate adaptive max_tokens based on model capabilities and content size
@@ -385,70 +386,104 @@ Please perform a critical synthesis of these findings, considering the original 
 
 
     const startTime = Date.now();
-    logger.debug('Sending synthesis stream request', { requestId, model: this.model });
+    const baseModel = this.model;
+    const degradedLevel = providerManager.health().degradedLevel || 'none';
+    const fallbackModels = [];
+    if (degradedLevel === 'severe') {
+      const tier = Array.isArray(config.models?.veryLowCost) && config.models.veryLowCost.length > 0
+        ? config.models.veryLowCost
+        : config.models.lowCost;
+      for (const m of tier || []) {
+        if (m?.name && m.name !== baseModel) fallbackModels.push(m.name);
+      }
+    } else if (degradedLevel === 'degraded') {
+      const tier = config.models.lowCost || [];
+      for (const m of tier) {
+        if (m?.name && m.name !== baseModel) fallbackModels.push(m.name);
+      }
+    }
+    if (fallbackModels.length === 0 && Array.isArray(config.models.planningCandidates)) {
+      for (const m of config.models.planningCandidates) {
+        if (m && m !== baseModel) fallbackModels.push(m);
+      }
+    }
+    const uniqueFallbacks = fallbackModels.filter((m, idx) => fallbackModels.indexOf(m) === idx);
+    const synthesisLineup = [baseModel, ...uniqueFallbacks].slice(0, 4);
+    logger.debug('Sending synthesis stream request', { requestId, model: baseModel, degradedLevel, fallbackCount: synthesisLineup.length - 1 });
     let fullContent = '';
     let streamError = null;
 
-    try {
-      // Calculate adaptive max_tokens based on model capabilities and content size
-      const adaptiveMaxTokens = await calculateAdaptiveMaxTokens(
-        this.model,
-        researchResults,
-        { documents, structuredData }
-      );
+    let activeModel = baseModel;
+    let lastError = null;
+    for (let attempt = 0; attempt < synthesisLineup.length; attempt++) {
+      activeModel = synthesisLineup[attempt];
+      try {
+        const adaptiveMaxTokens = await calculateAdaptiveMaxTokens(
+          activeModel,
+          researchResults,
+          { documents, structuredData }
+        );
 
-      // Use the new streaming method with adaptive token limit
-      const rawStream = openRouterClient.streamChatCompletion(this.model, messages, {
-        temperature: 0.3, // Low temperature for synthesis consistency
-        max_tokens: adaptiveMaxTokens // Model-aware adaptive limit
-      });
+        const rawStream = providerManager.stream(activeModel, messages, {
+          temperature: 0.3,
+          max_tokens: adaptiveMaxTokens
+        });
 
-      // Wrap with per-chunk timeout to prevent indefinite hangs
-      const streamTimeoutMs = config.openrouter?.timeout || 180000;
-      const stream = streamWithTimeout(rawStream, streamTimeoutMs);
+        const streamTimeoutMs = config.openrouter?.timeout || 180000;
+        const stream = streamWithTimeout(rawStream, streamTimeoutMs);
 
-      for await (const chunk of stream) {
-        if (chunk.done) {
-          break; // Stream finished
+        for await (const chunk of stream) {
+          if (chunk.done) {
+            break;
+          }
+          if (chunk.usage) {
+            logger.debug('Stream usage', { requestId, usage: chunk.usage, model: activeModel });
+            yield { usage: chunk.usage };
+          }
+          if (chunk.error) {
+            streamError = chunk.error;
+            logger.error('Error received in stream', { requestId, error: streamError, model: activeModel });
+            lastError = streamError;
+            break;
+          }
+          if (chunk.content) {
+            fullContent += chunk.content;
+            yield { content: chunk.content };
+          }
         }
-        if (chunk.usage) {
-          logger.debug('Stream usage', { requestId, usage: chunk.usage });
-          yield { usage: chunk.usage };
-        }
-        if (chunk.error) {
-          streamError = chunk.error;
-          logger.error('Error received in stream', { requestId, error: streamError });
-          yield { error: `Stream error during synthesis: ${streamError.message || 'Unknown stream error'}` };
-          break; // Stop processing on stream error
-        }
-        if (chunk.content) {
-          fullContent += chunk.content;
-          yield { content: chunk.content }; // Yield the content chunk
-        }
-      }
 
-      const duration = Date.now() - startTime;
-      if (!streamError) {
-        logger.info('Synthesis stream completed', { requestId, durationMs: duration });
+        if (streamError) {
+          streamError = null;
+          fullContent = '';
+          if (activeModel !== baseModel) {
+            providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: baseModel, toModel: activeModel });
+          }
+          continue;
+        }
 
-        // Check for truncation and warn if detected
+        const duration = Date.now() - startTime;
+        logger.info('Synthesis stream completed', { requestId, durationMs: duration, model: activeModel });
+
         if (detectTruncation(fullContent)) {
-          logger.warn('Possible truncation detected in synthesis output', { requestId });
+          logger.warn('Possible truncation detected in synthesis output', { requestId, model: activeModel });
           yield {
             warning: 'Response may have been truncated by token limit. Consider increasing SYNTHESIS_MAX_TOKENS or using a model with larger output capacity.',
             truncationDetected: true
           };
         }
-      } else {
-         logger.error('Synthesis stream finished with error', { requestId, durationMs: duration });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn('Synthesis stream attempt failed', { requestId, durationMs: Date.now() - startTime, model: activeModel, error: error.message });
+        if (activeModel !== baseModel) {
+          providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: baseModel, toModel: activeModel });
+        }
       }
-
-    } catch (error) {
-      // Catch errors from initiating the stream or other unexpected issues
-      const duration = Date.now() - startTime;
-      logger.error('Unhandled error during synthesis stream', { requestId, durationMs: duration, query: originalQuery.substring(0, 50), model: this.model, error });
-      yield { error: `[${requestId}] ContextAgent failed to synthesize results stream for query "${originalQuery.substring(0, 50)}...": ${error.message}` };
     }
+
+    const duration = Date.now() - startTime;
+    logger.error('Unhandled error during synthesis stream', { requestId, durationMs: duration, query: originalQuery.substring(0, 50), model: activeModel, error: lastError });
+    yield { error: `[${requestId}] ContextAgent failed to synthesize results stream for query "${originalQuery.substring(0, 50)}...": ${lastError?.message || 'Unknown error'}` };
   }
 }
 

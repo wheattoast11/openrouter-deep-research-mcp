@@ -74,6 +74,7 @@ const ServerSchema = z.object({
  */
 const OpenRouterSchema = z.object({
   apiKey: z.string().optional(),
+  apiKeys: z.array(z.string()).optional(),
   baseUrl: z.string().url().default('https://openrouter.ai/api/v1')
 });
 
@@ -238,10 +239,10 @@ function validateEnv(env = process.env) {
   const warnings = [];
 
   // Check for required API key
-  if (!env.OPENROUTER_API_KEY && !env.ALLOW_NO_API_KEY) {
+  if (!env.OPENROUTER_API_KEY && !env.OPENROUTER_API_KEYS && !env.ALLOW_NO_API_KEY) {
     warnings.push({
       key: 'OPENROUTER_API_KEY',
-      message: 'No API key configured. Set OPENROUTER_API_KEY or ALLOW_NO_API_KEY=true'
+      message: 'No API key configured. Set OPENROUTER_API_KEY or OPENROUTER_API_KEYS (or ALLOW_NO_API_KEY=true)'
     });
   }
 

@@ -180,6 +180,16 @@ class AdvancedCache {
     }
     console.error(`[${new Date().toISOString()}] AdvancedCache: Cleared ${type} cache`);
   }
+
+  // Shutdown cache timers and prevent background work
+  close() {
+    try {
+      this.resultCache.close();
+    } catch (_) {}
+    try {
+      this.modelCache.close();
+    } catch (_) {}
+  }
 }
 
 module.exports = new AdvancedCache();

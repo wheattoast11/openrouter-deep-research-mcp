@@ -14,7 +14,7 @@ const config = require('../../config');
 const modelCatalog = require('../utils/modelCatalog'); // New: dynamic model catalog
 const tar = require('tar');
 const fetch = require('node-fetch');
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const structuredDataParser = require('../utils/structuredDataParser');
 const advancedCache = require('../utils/advancedCache');
 const robustWebScraper = require('../utils/robustWebScraper');
@@ -103,6 +103,8 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
         return await pingTool(params);
       case 'get_server_status':
         return await getServerStatus(params);
+      case 'get_provider_health':
+        return await getProviderHealth(params);
       case 'job_status':
       case 'get_job_status':
         return await getJobStatusTool(params);
@@ -363,6 +365,12 @@ const getReportContentSchema = z.object({
 // Schema for the new get_server_status tool
 const getServerStatusSchema = z.object({
   _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
+});
+
+const getProviderHealthSchema = z.object({
+  includeModels: z.boolean().optional().default(true).describe('Include per-model metrics'),
+  maxModels: z.number().int().positive().optional().default(8).describe('Maximum models to include'),
+  _requestId: z.string().optional().describe("Internal request ID for logging")
 });
 
 // Schema for the new execute_sql tool
@@ -1252,7 +1260,7 @@ async function queryTool(params, mcpExchange = null, requestId = 'unknown-req') 
       { role: 'system', content: 'Explain these SQL SELECT results concisely in plain English for a technical reader.' },
       { role: 'user', content: `Results (first 30 rows max):\n${rowsStr.slice(0, 2000)}` }
     ];
-    const resp = await openRouterClient.chatCompletion(model, messages, { temperature: 0.2, max_tokens: 400 });
+    const resp = await providerManager.chat(model, messages, { temperature: 0.2, max_tokens: 400 });
     const explanation = resp.choices?.[0]?.message?.content || '';
     return JSON.stringify({ rows: JSON.parse(rowsStr), explanation }, null, 2);
   } catch (_) {
@@ -1547,6 +1555,12 @@ const exportReportsSchema = z.object({
   _requestId: z.string().optional()
 });
 
+const providerHealthSchema = z.object({
+  includeModels: z.boolean().optional(),
+  maxModels: z.number().int().positive().optional(),
+  _requestId: z.string().optional()
+});
+
 const importReportsSchema = z.object({
   format: z.enum(['json', 'ndjson']).default('json'),
   content: z.string().min(1),
@@ -1666,34 +1680,11 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
       logger.warn('Could not fetch convergence metrics', { error: convErr.message });
     }
 
+    const providerTelemetry = require('../utils/providerTelemetry');
+    const providerHealth = providerTelemetry.getSnapshot({ includeModels: false, maxModels: 5 });
+
     const status = {
-      serverName: config.server.name,
-      serverVersion: config.server.version,
-      timestamp: new Date().toISOString(),
-      database: {
-        initialized: dbInitialized,
-        initState,
-        storageType: dbPathInfo,
-        vectorDimension: config.database.vectorDimension,
-        maxRetries: config.database.maxRetryAttempts,
-        retryDelayBaseMs: config.database.retryDelayBaseMs,
-        relaxedDurability: config.database.relaxedDurability
-      },
-      jobs,
-      embedder: {
-        ready: embedderReady,
-        model: embedderReady ? 'Xenova/all-MiniLM-L6-v2' : 'Not Loaded'
-      },
-      cache: {
-        ttlSeconds: CACHE_TTL_SECONDS,
-        maxKeys: cache.options.maxKeys,
-        currentKeys: cache.keys().length,
-        stats: cache.getStats()
-      },
-      config: {
-        serverPort: config.server.port,
-        maxResearchIterations: config.models.maxResearchIterations
-      },
+      providers: providerHealth.providers,
       // Agent Zero Observation Loop - Convergence tracking
       convergence: convergence ? {
         windowHours: convergence.windowHours,
@@ -1714,6 +1705,21 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
   } catch (error) {
     logger.error('Error retrieving server status', { requestId, error });
     throw new Error(`[${requestId}] Error retrieving server status: ${error.message}`);
+  }
+}
+
+async function getProviderHealth(params = {}, mcpExchange = null, requestId = 'unknown-req') {
+  logger.debug('Retrieving provider health', { requestId });
+  try {
+    const providerTelemetry = require('../utils/providerTelemetry');
+    const snapshot = providerTelemetry.getSnapshot({
+      includeModels: params.includeModels !== false,
+      maxModels: params.maxModels || 8
+    });
+    return JSON.stringify(snapshot, null, 2);
+  } catch (error) {
+    logger.error('Error retrieving provider health', { requestId, error });
+    throw new Error(`[${requestId}] Error retrieving provider health: ${error.message}`);
   }
 }
 
@@ -1945,6 +1951,7 @@ const TOOL_CATALOG = [
   { name: 'get_report_content', description: 'Alias for get_report.' },
   { name: 'history', description: 'List recent research reports. Optional limit and queryFilter.' },
   { name: 'get_server_status', description: 'Server health check - database, embedder, job queue status.' },
+  { name: 'get_provider_health', description: 'Provider health metrics with model-level stats.' },
   { name: 'date_time', description: "Current date/time. format: 'iso'|'rfc'|'epoch' (aka 'unix'); accepts freeform iso/rfc/epoch too." },
   { name: 'calc', description: 'Evaluate math: +,-,*,/,^,(), decimals. Accepts freeform expression or {expr}.' },
   { name: 'list_tools', description: 'Show all available tools with parameters.' },
@@ -1985,6 +1992,7 @@ function summarizeParamsForTool(name) {
     case 'search_tools': return ['query', 'limit?'];
     case 'date_time': return ['format?'];
     case 'get_server_status': return [];
+    case 'get_provider_health': return ['includeModels?', 'maxModels?'];
     case 'batch_research': return ['queries[]', 'waitForCompletion?', 'timeoutMs?', 'costPreference?'];
     default: return [];
   }
@@ -2007,7 +2015,7 @@ async function buildToolEmbedding(text) {
 
 // MODE-based tool exposure (mirrors mcpServer.js shouldExpose logic)
 const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
-const ALWAYS_ON = new Set(['ping', 'get_server_status', 'job_status', 'get_job_status', 'cancel_job']);
+const ALWAYS_ON = new Set(['ping', 'get_server_status', 'get_provider_health', 'job_status', 'get_job_status', 'cancel_job']);
 const AGENT_ONLY = new Set(['agent']);
 const MANUAL_SET = new Set([
   'research', 'conduct_research', 'submit_research', 'research_follow_up',
@@ -2637,6 +2645,7 @@ module.exports = {
   listModelsSchema: z.object({ refresh: z.boolean().optional().default(false) }),
   getReportContentSchema,
   getServerStatusSchema,
+  getProviderHealthSchema,
   exportReportsSchema,
   importReportsSchema,
   backupDbSchema,
@@ -2668,6 +2677,7 @@ module.exports = {
   listResearchHistory,
   getReportContent,
   getServerStatus,
+  getProviderHealth,
   executeSql,
   listModels,
   exportReports,

@@ -77,21 +77,25 @@ async function gracefulShutdown(exitCode = 0) {
   const emergencyTimer = setTimeout(() => {
     process.stderr.write(`\x1b[31mEmergency shutdown triggered\x1b[0m\n`);
     process.exit(exitCode);
-  }, 5000);
+  }, 30000);
   emergencyTimer.unref();
 
   try {
     // 1. Stop background workers first to prevent new DB operations
     try {
-      const mcpServer = require('../src/server/mcpServer');
-      if (mcpServer && mcpServer.stopJobWorker) {
-        mcpServer.stopJobWorker();
+      const resolved = require.resolve('../src/server/mcpServer');
+      const cached = require.cache[resolved];
+      if (cached && cached.exports && cached.exports.stopJobWorker) {
+        cached.exports.stopJobWorker();
       }
     } catch (_) { /* ignore if not loaded */ }
 
     // 2. Close database gracefully to prevent mutex lock errors
     const dbClient = require('../src/utils/dbClient');
     if (dbClient && dbClient.close) {
+      if (dbClient.waitForIdle) {
+        try { await dbClient.waitForIdle(1500); } catch (_) {}
+      }
       const closePromise = dbClient.close();
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error('DB close timeout')), 2500)
@@ -104,11 +108,16 @@ async function gracefulShutdown(exitCode = 0) {
     // Ignore errors during cleanup
   }
   
-  // Final safeguard: allow event loop to drain
-  clearTimeout(emergencyTimer);
-  setTimeout(() => {
-    process.exit(exitCode);
-  }, 500).unref();
+  // Final safeguard: allow event loop to drain naturally
+  process.exitCode = exitCode;
+  // If shutdown completed, clear emergency timer to avoid forced exit
+  try {
+    const dbClient = require('../src/utils/dbClient');
+    if (dbClient?.isShutdownComplete?.()) {
+      clearTimeout(emergencyTimer);
+    }
+  } catch (_) {}
+  // emergencyTimer remains unref'ed to force exit if we hang
 }
 
 // Handle termination signals

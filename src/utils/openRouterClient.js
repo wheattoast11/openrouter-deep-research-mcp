@@ -3,28 +3,89 @@ const axios = require('axios');
 const fetch = require('node-fetch'); // Use node-fetch v2 for CommonJS
 const { createParser } = require('eventsource-parser');
 const config = require('../../config');
+const {
+  APIError,
+  ConfigurationError,
+  RetryExhaustedError,
+  isRetryable
+} = require('./errors');
+const providerTelemetry = require('./providerTelemetry');
 
 // Retry wrapper for retryable errors
+const DEFAULT_RETRY_AFTER_MS = 1500;
+const KEY_COOLDOWN_BASE_MS = Number(process.env.OPENROUTER_KEY_COOLDOWN_MS) || 5000;
+const FAILURE_WINDOW_MS = 60000;
+const DEGRADED_THRESHOLD = 3;
+const SEVERE_THRESHOLD = 6;
+
+function normalizeRetryAfterMs(headers) {
+  const raw = headers?.get?.('retry-after') || headers?.['retry-after'];
+  if (!raw) return DEFAULT_RETRY_AFTER_MS;
+  const seconds = Number(raw);
+  if (!Number.isNaN(seconds)) {
+    return Math.max(0, seconds * 1000);
+  }
+  const parsedDate = Date.parse(raw);
+  if (!Number.isNaN(parsedDate)) {
+    const delta = parsedDate - Date.now();
+    return Math.max(delta, DEFAULT_RETRY_AFTER_MS);
+  }
+  return DEFAULT_RETRY_AFTER_MS;
+}
+
+function jitterDelay(baseMs, attempt) {
+  const expo = baseMs * Math.pow(2, Math.max(0, attempt - 1));
+  const jitter = expo * (0.85 + Math.random() * 0.3);
+  return Math.min(jitter, 30000);
+}
+
 async function withRetry(fn, maxRetries = config.openrouter?.retries || 3, delayMs = config.openrouter?.retryDelayMs || 1000) {
   let lastError;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await fn();
+      return await fn(attempt);
     } catch (err) {
       lastError = err;
-      const isRetryable = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ENETUNREACH', 'ECONNREFUSED', 'ABORT_ERR'].includes(err.code) ||
-        err.name === 'AbortError' || err.type === 'aborted';
-      if (attempt === maxRetries || !isRetryable) throw err;
-      console.error(`[${new Date().toISOString()}] OpenRouterClient: Retry ${attempt}/${maxRetries} after ${delayMs * attempt}ms - ${err.message}`);
-      await new Promise(r => setTimeout(r, delayMs * attempt));
+      const retryable = isRetryable(err);
+      if (attempt === maxRetries || !retryable) throw err;
+      const waitMs = err?.context?.retryAfter || jitterDelay(delayMs, attempt);
+      console.error(`[${new Date().toISOString()}] OpenRouterClient: Retry ${attempt}/${maxRetries} after ${Math.round(waitMs)}ms - ${err.message}`);
+      await new Promise(r => setTimeout(r, waitMs));
     }
   }
-  throw lastError;
+  throw new RetryExhaustedError('openrouter', maxRetries, lastError);
+}
+
+function parseOpenRouterError(responseData) {
+  if (!responseData) return { message: 'OpenRouter API error' };
+  if (typeof responseData === 'string') {
+    return { message: responseData };
+  }
+  if (responseData.error) {
+    if (typeof responseData.error === 'string') return { message: responseData.error };
+    if (responseData.error.message) {
+      return { message: responseData.error.message, code: responseData.error.code };
+    }
+  }
+  if (responseData.message) return { message: responseData.message };
+  try {
+    return { message: JSON.stringify(responseData).slice(0, 400) };
+  } catch (_) {
+    return { message: 'OpenRouter API error' };
+  }
 }
 
 class OpenRouterClient {
   constructor() {
-    this.apiKey = config.openrouter.apiKey;
+    this.apiKeys = Array.isArray(config.openrouter.apiKeys) ? config.openrouter.apiKeys : [];
+    this.apiKey = config.openrouter.apiKey || this.apiKeys[0];
+    if (this.apiKey && this.apiKeys.length === 0) {
+      this.apiKeys = [this.apiKey];
+    }
+    this._keyIndex = 0;
+    this._keyState = new Map();
+    this._failureWindow = [];
+    this._lastFailureStatus = null;
     this.baseUrl = config.openrouter.baseUrl;
     
     this.client = axios.create({
@@ -43,12 +104,157 @@ class OpenRouterClient {
     this._batchMaxDelayMs = Number(process.env.BATCH_MAX_DELAY_MS) || 150;
   }
 
-  async chatCompletion(model, messages, options = {}) {
-    // Validate API key before making request
+  _getKeyState(key) {
+    if (!key) return null;
+    if (!this._keyState.has(key)) {
+      this._keyState.set(key, {
+        failures: 0,
+        cooldownUntil: 0,
+        lastFailureAt: 0,
+        lastStatus: null
+      });
+    }
+    return this._keyState.get(key);
+  }
+
+  _recordFailure(statusCode) {
+    const now = Date.now();
+    this._failureWindow.push(now);
+    this._failureWindow = this._failureWindow.filter(ts => now - ts <= FAILURE_WINDOW_MS);
+    if (statusCode) {
+      this._lastFailureStatus = statusCode;
+    }
+  }
+
+  _recordSuccess() {
+    const now = Date.now();
+    this._failureWindow = this._failureWindow.filter(ts => now - ts <= FAILURE_WINDOW_MS);
+  }
+
+  getDegradedLevel() {
+    const now = Date.now();
+    this._failureWindow = this._failureWindow.filter(ts => now - ts <= FAILURE_WINDOW_MS);
+    const count = this._failureWindow.length;
+    if (count >= SEVERE_THRESHOLD) return 'severe';
+    if (count >= DEGRADED_THRESHOLD) return 'degraded';
+    return 'none';
+  }
+
+  getLastFailureStatus() {
+    return this._lastFailureStatus;
+  }
+
+  _getActiveApiKey() {
+    if (this.apiKeys.length === 0) return this.apiKey;
+    return this.apiKeys[this._keyIndex % this.apiKeys.length];
+  }
+
+  _setActiveApiKey(nextKey) {
+    if (!nextKey) return;
+    this.apiKey = nextKey;
+    this.client.defaults.headers.Authorization = `Bearer ${nextKey}`;
+  }
+
+  _rotateApiKey(reason = 'unknown') {
+    if (this.apiKeys.length <= 1) return false;
+    const now = Date.now();
+    const prevIndex = this._keyIndex;
+    for (let i = 0; i < this.apiKeys.length; i++) {
+      const nextIndex = (this._keyIndex + 1 + i) % this.apiKeys.length;
+      const candidate = this.apiKeys[nextIndex];
+      const state = this._getKeyState(candidate);
+      if (!state || state.cooldownUntil <= now) {
+        this._keyIndex = nextIndex;
+        this._setActiveApiKey(candidate);
+        providerTelemetry.recordKeyRotation({ provider: 'openrouter' });
+        console.error(`[${new Date().toISOString()}] OpenRouterClient: Rotated API key (${reason}) index ${prevIndex} -> ${this._keyIndex}`);
+        return true;
+      }
+    }
+    this._keyIndex = (this._keyIndex + 1) % this.apiKeys.length;
+    this._setActiveApiKey(this.apiKeys[this._keyIndex]);
+    providerTelemetry.recordKeyRotation({ provider: 'openrouter' });
+    console.error(`[${new Date().toISOString()}] OpenRouterClient: Rotated API key (${reason}) to cooled key index ${prevIndex} -> ${this._keyIndex}`);
+    return true;
+  }
+
+  _selectApiKey() {
+    if (this.apiKeys.length === 0) return this.apiKey;
+    const now = Date.now();
+    for (let i = 0; i < this.apiKeys.length; i++) {
+      const idx = (this._keyIndex + i) % this.apiKeys.length;
+      const candidate = this.apiKeys[idx];
+      const state = this._getKeyState(candidate);
+      if (!state || state.cooldownUntil <= now) {
+        this._keyIndex = idx;
+        this._setActiveApiKey(candidate);
+        return candidate;
+      }
+    }
+    const fallback = this.apiKeys[this._keyIndex % this.apiKeys.length];
+    this._setActiveApiKey(fallback);
+    return fallback;
+  }
+
+  _ensureApiKey() {
     if (!this.apiKey) {
-      const { ConfigurationError } = require('./errors');
       throw new ConfigurationError('OpenRouter API key not configured', 'OPENROUTER_API_KEY');
     }
+  }
+
+  _wrapAxiosError(error, context = {}) {
+    if (error instanceof APIError) return error;
+    if (error?.response) {
+      const payload = parseOpenRouterError(error.response.data);
+      return new APIError(payload.message || 'OpenRouter API error', error.response.status, error.response.data, {
+        context: {
+          ...context,
+          status: error.response.status,
+          code: payload.code
+        }
+      });
+    }
+    return new APIError(error.message || 'OpenRouter request failed', 0, null, { context });
+  }
+
+  _wrapFetchError(status, bodyText, context = {}, headers = null) {
+    const payload = parseOpenRouterError(bodyText);
+    const err = new APIError(payload.message || `OpenRouter API error (${status})`, status, bodyText, {
+      context: {
+        ...context,
+        status
+      }
+    });
+    if (status === 429) {
+      err.context.retryAfter = normalizeRetryAfterMs(headers);
+    }
+    return err;
+  }
+
+  _markKeyFailure(key, statusCode, retryAfterMs) {
+    if (!key) return;
+    const state = this._getKeyState(key);
+    if (!state) return;
+    state.failures += 1;
+    state.lastFailureAt = Date.now();
+    state.lastStatus = statusCode || state.lastStatus;
+    let cooldownMs = retryAfterMs || KEY_COOLDOWN_BASE_MS * Math.pow(2, Math.min(state.failures - 1, 4));
+    if (statusCode === 403 && !retryAfterMs) {
+      cooldownMs = Math.max(cooldownMs, 60000);
+    }
+    state.cooldownUntil = Date.now() + cooldownMs;
+  }
+
+  _markKeySuccess(key) {
+    if (!key) return;
+    const state = this._getKeyState(key);
+    if (!state) return;
+    state.failures = 0;
+    state.cooldownUntil = 0;
+  }
+
+  async chatCompletion(model, messages, options = {}) {
+    this._ensureApiKey();
 
     const minMax = Number(config.models?.minMaxTokens || 0);
     const merged = { ...options };
@@ -63,27 +269,56 @@ class OpenRouterClient {
     }
 
     return withRetry(async () => {
+      const activeKey = this._selectApiKey();
+      const startTime = Date.now();
       try {
+        this._setActiveApiKey(activeKey);
         const response = await this.client.post('/chat/completions', {
           model,
           messages,
           ...merged
         });
+        this._markKeySuccess(activeKey);
+        this._recordSuccess();
+        providerTelemetry.recordRequest({
+          provider: 'openrouter',
+          model,
+          success: true,
+          latencyMs: Date.now() - startTime
+        });
         return response.data;
       } catch (error) {
-        console.error('Error calling OpenRouter API:', error.response?.data || error.message);
-        throw error;
+        const wrapped = this._wrapAxiosError(error, { model, path: '/chat/completions' });
+        if (wrapped?.statusCode === 403 || wrapped?.statusCode === 429) {
+          if (this._rotateApiKey(`status-${wrapped.statusCode}`)) {
+            wrapped.context = { ...wrapped.context, canRotateKey: true };
+            if (wrapped.statusCode === 403) {
+              wrapped.isRetryable = true;
+            }
+          }
+        }
+        if (wrapped?.statusCode === 429) {
+          wrapped.context.retryAfter = normalizeRetryAfterMs(error?.response?.headers);
+        }
+        this._markKeyFailure(activeKey, wrapped?.statusCode, wrapped?.context?.retryAfter);
+        this._recordFailure(wrapped?.statusCode);
+        providerTelemetry.recordRequest({
+          provider: 'openrouter',
+          model,
+          success: false,
+          latencyMs: Date.now() - startTime,
+          statusCode: wrapped?.statusCode,
+          errorCategory: wrapped?.category
+        });
+        console.error('Error calling OpenRouter API:', wrapped.responseBody || wrapped.message);
+        throw wrapped;
       }
     });
   }
 
   // New method for streaming chat completions (robust SSE parsing)
   async *streamChatCompletion(model, messages, options = {}) {
-    // Validate API key before making request
-    if (!this.apiKey) {
-      const { ConfigurationError } = require('./errors');
-      throw new ConfigurationError('OpenRouter API key not configured', 'OPENROUTER_API_KEY');
-    }
+    this._ensureApiKey();
 
     const url = `${this.baseUrl}/chat/completions`;
     const minMax = Number(config.models?.minMaxTokens || 0);
@@ -110,13 +345,15 @@ class OpenRouterClient {
 
     try {
       const response = await withRetry(async () => {
+        const activeKey = this._selectApiKey();
+        const startTime = Date.now();
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const res = await fetch(url, {
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${this.apiKey}`,
+              'Authorization': `Bearer ${activeKey}`,
               'HTTP-Referer': 'http://localhost:3002',
               'X-Title': 'OpenRouter Research Agents',
               'Content-Type': 'application/json'
@@ -125,9 +362,41 @@ class OpenRouterClient {
             signal: controller.signal
           });
           clearTimeout(timeoutId);
+          if (res.ok) {
+            this._markKeySuccess(activeKey);
+            this._recordSuccess();
+            providerTelemetry.recordRequest({
+              provider: 'openrouter',
+              model,
+              success: true,
+              latencyMs: Date.now() - startTime,
+              stream: true
+            });
+          } else if (res.status === 403 || res.status === 429) {
+            this._markKeyFailure(activeKey, res.status, normalizeRetryAfterMs(res.headers));
+            this._recordFailure(res.status);
+            providerTelemetry.recordRequest({
+              provider: 'openrouter',
+              model,
+              success: false,
+              latencyMs: Date.now() - startTime,
+              statusCode: res.status,
+              errorCategory: null,
+              stream: true
+            });
+          }
           return res;
         } catch (err) {
           clearTimeout(timeoutId);
+          this._markKeyFailure(activeKey, null);
+          this._recordFailure();
+          providerTelemetry.recordRequest({
+            provider: 'openrouter',
+            model,
+            success: false,
+            latencyMs: Date.now() - startTime,
+            stream: true
+          });
           throw err;
         }
       });
@@ -135,7 +404,16 @@ class OpenRouterClient {
       if (!response.ok) {
         const errorBody = await response.text();
         console.error(`[${new Date().toISOString()}] OpenRouterClient: Stream request failed with status ${response.status}. Body: ${errorBody}`);
-        throw new Error(`OpenRouter API error: ${response.status} ${response.statusText} - ${errorBody}`);
+        let wrapped = this._wrapFetchError(response.status, errorBody, { model, path: '/chat/completions', stream: true }, response.headers);
+        if (response.status === 403 || response.status === 429) {
+          if (this._rotateApiKey(`status-${response.status}`)) {
+            wrapped.context = { ...wrapped.context, canRotateKey: true };
+            if (response.status === 403) {
+              wrapped.isRetryable = true;
+            }
+          }
+        }
+        throw wrapped;
       }
 
       const decoder = new TextDecoder();
@@ -239,9 +517,21 @@ class OpenRouterClient {
       }
 
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] OpenRouterClient: Error during streaming request:`, error);
-      yield { error: { message: `Stream failed: ${error.message}` } };
-      throw error;
+        const wrapped = error instanceof APIError
+          ? error
+          : this._wrapAxiosError(error, { model, path: '/chat/completions', stream: true });
+        this._recordFailure(wrapped?.statusCode);
+        providerTelemetry.recordRequest({
+          provider: 'openrouter',
+          model,
+          success: false,
+          statusCode: wrapped?.statusCode,
+          errorCategory: wrapped?.category,
+          stream: true
+        });
+        console.error(`[${new Date().toISOString()}] OpenRouterClient: Error during streaming request:`, wrapped.message);
+        yield { error: { message: `Stream failed: ${wrapped.message}` } };
+        throw wrapped;
     }
   }
 

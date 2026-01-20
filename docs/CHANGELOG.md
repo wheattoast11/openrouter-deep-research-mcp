@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.12.0 — 2026-01-20
+
+### Resilience + Telemetry
+- **Provider telemetry layer** - Aggregated provider/model health, latency, error categories, and fallback tracking
+- **Key rotation cooldowns** - Per-key exponential backoff with retry-after support
+- **Streaming fallback** - Synthesis streams retry across fallback models on failure
+- **Provider health tool** - New `get_provider_health` tool + provider summary included in `get_server_status`
+
+### Platform Alignment
+- **ProviderManager stub** - New abstraction layer for future terminals-sdk provider routing
+- **CLI degrade indicator** - Shows when fallback models are used during research
+
+---
+
 ## v1.11.0 — 2025-12-25
 
 ### PGlite 0.3.14 Major Upgrade

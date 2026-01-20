@@ -1,5 +1,4 @@
 // src/agents/researchAgent.js
-const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import the new parser
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
@@ -8,6 +7,8 @@ const localKnowledge = require('../utils/localKnowledge'); // Local knowledge fo
 const UnifiedSearchMesh = require('../utils/robustWebScraper'); // Web grounding for real-time data
 const { Signal } = require('../core/signal'); // Signal Protocol integration
 const { tokenFromSignal } = require('../core/rail/index'); // Rail Protocol - Token wrapping for provenance
+const providerTelemetry = require('../utils/providerTelemetry');
+const providerManager = require('../core/providers');
 const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
@@ -140,7 +141,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     // Assuming requestId is passed down or generated if needed
     const requestId = options?.requestId || 'unknown-req'; 
     try {
-      const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
+      const response = await providerManager.chat(this.classificationModel, messages, {
         temperature: 0.1, // Low temp for consistent classification
         max_tokens: 64 // Ensure well above OpenRouter minimum of 16
       });
@@ -170,7 +171,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
         const systemPrompt = `Assess the complexity of the following research query. Is it likely answerable with a concise factual statement or does it require deep analysis? Respond with ONLY one complexity level: ${COMPLEXITY_LEVELS.join(', ')}.`;
         const messages = [ { role: 'system', content: systemPrompt }, { role: 'user', content: query } ];
         try {
-           const response = await openRouterClient.chatCompletion(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
+           const response = await providerManager.chat(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
            let complexity = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
            if (COMPLEXITY_LEVELS.includes(complexity)) {
               logger.debug('Classified query complexity', { requestId, query: query.substring(0, 50), complexity });
@@ -353,13 +354,17 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     logger.debug('Ensemble models selected', { requestId, agentId, models: modelsToRun });
 
     const ensemblePromises = modelsToRun.map(model => 
-      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent)
+      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent, {
+        costPreference,
+        primaryModel: primaryModel,
+        ensemble: modelsToRun
+      })
     );
     return Promise.all(ensemblePromises);
   }
   
   // Updated to include structuredData, inputEmbeddings, requestId, and onEvent parameters
-  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null) { 
+  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null, context = {}) { 
      // Dynamic capability check via model catalog
      let modelSupportsVision = false;
      try {
@@ -481,11 +486,38 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
        // Throw an explicit error here to prevent calling the API with an invalid model
        throw new Error(`ResearchAgent ${agentId}: Attempted to call API with undefined model.`);
     }
+    
     try {
-      const response = await openRouterClient.chatCompletion(model, messages, {
-        temperature: 0.3, // Low temperature for factual research
-        max_tokens: 4000 // Allow ample space for detailed analysis
-      });
+    const fallbackCandidates = Array.isArray(context.ensemble) ? context.ensemble : [];
+    const fallbackQueue = [model, ...fallbackCandidates.filter(id => id && id !== model)];
+    let response = null;
+    let activeModel = model;
+    let lastError = null;
+
+    for (let i = 0; i < fallbackQueue.length; i++) {
+      activeModel = fallbackQueue[i];
+      try {
+        response = await providerManager.chat(activeModel, messages, {
+          temperature: 0.3, // Low temperature for factual research
+          max_tokens: 4000 // Allow ample space for detailed analysis
+        });
+        if (i > 0) {
+          logger.warn('Research fallback model succeeded', { requestId, agentId, fallbackFrom: model, fallbackTo: activeModel });
+          providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: model, toModel: activeModel });
+        }
+        break;
+      } catch (error) {
+        lastError = error;
+        logger.warn('Research model failed, trying fallback', { requestId, agentId, model: activeModel, error: error.message });
+        if (i > 0) {
+          providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: model, toModel: activeModel });
+        }
+      }
+    }
+
+    if (!response) {
+      throw lastError || new Error('Research failed with no response');
+    }
       // Capture usage if provided
       const usage = response.usage || null;
       if (onEvent && usage) {
@@ -497,7 +529,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
 
       const resultObj = {
         agentId, // Keep original agentId for grouping
-        model,   // Record the specific model used
+        model: activeModel,   // Record the specific model used
         query,
         result: response.choices[0].message.content,
         error: false, // Indicate success
@@ -509,14 +541,14 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
 
       // Wrap signal in Token for provenance tracking (Rail Protocol)
       resultObj.token = tokenFromSignal(resultObj.signal);
-      resultObj.token.trace.push(`ResearchAgent:${agentId}:${model}`);
+      resultObj.token.trace.push(`ResearchAgent:${agentId}:${activeModel}`);
 
       // Emit signal event for real-time consumers
       if (onEvent) {
         await onEvent('model_signal', {
           signal: resultObj.signal.toJSON(),
           agentId,
-          model
+          model: activeModel
         });
       }
 
@@ -528,9 +560,9 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
       // Return error information structured similarly to success response
       const errorObj = {
         agentId,
-        model,
+        model: activeModel,
         query,
-        result: `ResearchAgent ${agentId} (Model: ${model}) failed for query "${query.substring(0, 50)}...": ${error.message}`,
+        result: `ResearchAgent ${agentId} (Model: ${activeModel}) failed for query "${query.substring(0, 50)}...": ${error.message}`,
         error: true,
         errorMessage: error.message,
         errorStack: error.stack // Include stack trace for better debugging
@@ -541,7 +573,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
 
       // Wrap error signal in Token for provenance tracking (Rail Protocol)
       errorObj.token = tokenFromSignal(errorObj.signal);
-      errorObj.token.trace.push(`ResearchAgent:${agentId}:${model}:error`);
+      errorObj.token.trace.push(`ResearchAgent:${agentId}:${activeModel}:error`);
 
       return errorObj;
     }

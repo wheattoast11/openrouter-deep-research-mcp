@@ -1,5 +1,6 @@
 // src/utils/dbClient.js
 const { PGlite } = require('@electric-sql/pglite');
+const { randomUUID } = require('crypto');
 // First-class extensions
 const { vector } = require('@electric-sql/pglite/vector');
 const { live } = require('@electric-sql/pglite/live');
@@ -21,7 +22,7 @@ const { fuzzystrmatch } = require('@electric-sql/pglite/contrib/fuzzystrmatch');
 const { citext } = require('@electric-sql/pglite/contrib/citext');
 const { hstore } = require('@electric-sql/pglite/contrib/hstore');
 const config = require('../../config');
-const openRouterClient = require('./openRouterClient');
+const providerManager = require('../core/providers');
 const path = require('path');
 const logger = require('./logger').child('DBClient');
 
@@ -58,6 +59,14 @@ const InitState = {
 let initState = InitState.NOT_STARTED;
 let initError = null;
 let initPromise = null;
+let isClosing = false;
+let shutdownComplete = false;
+let closingPromise = null;
+let shutdownStartAt = null;
+const subscriptions = new Set();
+let activeOperations = 0;
+const idleWaiters = new Set();
+const connectionId = randomUUID();
 
 // Get retry configuration from config
 const MAX_RETRIES = config.database.maxRetryAttempts;
@@ -352,6 +361,14 @@ function getDatabaseUrl() {
  * Returns the same promise if already initializing
  */
 function initDB() {
+  if (shutdownComplete) {
+    const { InitializationError } = require('./errors');
+    return Promise.reject(new InitializationError('Database', 'Initialization blocked: shutdown complete'));
+  }
+  if (isClosing) {
+    const { InitializationError } = require('./errors');
+    return Promise.reject(new InitializationError('Database', 'Initialization blocked: shutdown in progress'));
+  }
   // Return existing promise if initialization is in progress or done
   if (initPromise) {
     return initPromise;
@@ -367,6 +384,14 @@ function initDB() {
  * @private
  */
 async function _doInitDB() {
+  if (shutdownComplete) {
+    const { InitializationError } = require('./errors');
+    throw new InitializationError('Database', 'Initialization aborted: shutdown complete');
+  }
+  if (isClosing) {
+    const { InitializationError } = require('./errors');
+    throw new InitializationError('Database', 'Initialization aborted: shutdown in progress');
+  }
   // Already initialized successfully
   if (initState === InitState.INITIALIZED && db) {
     return true;
@@ -786,10 +811,21 @@ async function _doInitDB() {
  * @throws {InitializationError} If initialization fails or times out
  */
 async function waitForInit(timeoutMs = config.database?.initTimeoutMs || 60000) {
+  if (shutdownComplete) {
+    const { InitializationError } = require('./errors');
+    throw new InitializationError('Database', 'Cannot initialize: shutdown complete');
+  }
+  if (isClosing) {
+    const { InitializationError } = require('./errors');
+    throw new InitializationError('Database', 'Cannot initialize: shutdown in progress');
+  }
   const { InitializationError } = require('./errors');
 
   // If not started, trigger initialization
   if (initState === InitState.NOT_STARTED) {
+    if (isClosing) {
+      throw new InitializationError('Database', 'Cannot initialize: shutdown in progress');
+    }
     initPromise = _doInitDB();
   }
 
@@ -1030,11 +1066,30 @@ async function indexExistingReports(limit = 1000) {
 async function executeWithRetry(operation, operationName) {
   const { InitializationError, RetryExhaustedError, wrapError } = require('./errors');
 
-  // WAIT for initialization to complete (not just check)
-  await waitForInit().catch(err => {
-    throw new InitializationError('Database',
-      `Cannot perform ${operationName}: ${err.message}`);
-  });
+  if (shutdownComplete) {
+    throw new InitializationError('Database', `Cannot perform ${operationName}: shutdown complete`);
+  }
+  if (isClosing) {
+    throw new InitializationError('Database', `Cannot perform ${operationName}: shutdown in progress`);
+  }
+
+  activeOperations += 1;
+  const notifyIdle = () => {
+    if (activeOperations === 0 && idleWaiters.size) {
+      const waiters = Array.from(idleWaiters);
+      idleWaiters.clear();
+      for (const resolve of waiters) {
+        try { resolve(true); } catch (_) {}
+      }
+    }
+  };
+
+  try {
+    // WAIT for initialization to complete (not just check)
+    await waitForInit().catch(err => {
+      throw new InitializationError('Database',
+        `Cannot perform ${operationName}: ${err.message}`);
+    });
 
   // Verify DB is ready
   if (initState !== InitState.INITIALIZED || !db) {
@@ -1042,33 +1097,60 @@ async function executeWithRetry(operation, operationName) {
       `Cannot perform ${operationName}: Database not initialized (state: ${initState})`);
   }
 
-  let lastError = null;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = wrapError(error, `${operationName} failed (attempt ${attempt}/${MAX_RETRIES})`, {
-        context: { attempt, maxRetries: MAX_RETRIES, operation: operationName }
-      });
-
-      if (attempt >= MAX_RETRIES) {
-        logger.error(`${operationName} failed after ${MAX_RETRIES} attempts`, {
-          error: lastError.message,
-          operation: operationName
+    let lastError = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = wrapError(error, `${operationName} failed (attempt ${attempt}/${MAX_RETRIES})`, {
+          context: { attempt, maxRetries: MAX_RETRIES, operation: operationName }
         });
-        throw new RetryExhaustedError(operationName, MAX_RETRIES, lastError);
-      }
 
-      // Exponential backoff with jitter
-      const delay = BASE_RETRY_DELAY * Math.pow(2, attempt - 1) * (0.9 + Math.random() * 0.2);
-      logger.warn(`Retrying ${operationName} after ${Math.round(delay)}ms`, {
-        attempt,
-        maxRetries: MAX_RETRIES,
-        error: error.message
-      });
-      await new Promise(resolve => setTimeout(resolve, delay));
+        if (attempt >= MAX_RETRIES) {
+          logger.error(`${operationName} failed after ${MAX_RETRIES} attempts`, {
+            error: lastError.message,
+            operation: operationName
+          });
+          throw new RetryExhaustedError(operationName, MAX_RETRIES, lastError);
+        }
+
+        // Exponential backoff with jitter
+        const delay = BASE_RETRY_DELAY * Math.pow(2, attempt - 1) * (0.9 + Math.random() * 0.2);
+        logger.warn(`Retrying ${operationName} after ${Math.round(delay)}ms`, {
+          attempt,
+          maxRetries: MAX_RETRIES,
+          error: error.message
+        });
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
+  } finally {
+    activeOperations = Math.max(0, activeOperations - 1);
+    notifyIdle();
   }
+}
+
+function waitForIdle(timeoutMs = 3000) {
+  if (activeOperations === 0) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      idleWaiters.delete(resolve);
+      resolve(false);
+    }, timeoutMs);
+    idleWaiters.add((ok) => {
+      clearTimeout(timer);
+      resolve(ok);
+    });
+  });
+}
+
+function getShutdownState() {
+  return {
+    isClosing,
+    shutdownComplete,
+    activeOperations,
+    shutdownStartAt
+  };
 }
 
 // --- Change Notification Helper ---
@@ -1079,12 +1161,20 @@ async function executeWithRetry(operation, operationName) {
  * @returns {Function} Unsubscribe function
  */
 async function subscribeToChanges(channel, callback) {
+  if (isClosing || shutdownComplete) return () => {};
   await waitForInit();
   
   if (db && db.listen && typeof db.listen === 'function') {
     logger.debug('Subscribing to change notifications', { channel });
     const { unlisten } = await db.listen(channel, callback);
-    return unlisten;
+    const safeUnlisten = async () => {
+      try { await unlisten(); } catch (_) {}
+    };
+    subscriptions.add(safeUnlisten);
+    return async () => {
+      subscriptions.delete(safeUnlisten);
+      await safeUnlisten();
+    };
   } else {
     logger.warn('Change notification subscription not available');
     return () => {};
@@ -1101,13 +1191,21 @@ async function subscribeToChanges(channel, callback) {
  * @returns {Promise<Function>} Unsubscribe function
  */
 async function liveQuery(sql, params, callback) {
+  if (isClosing || shutdownComplete) return () => {};
   await waitForInit();
   
   // Check if live extension is available on the db instance
   if (db && db.live && typeof db.live.query === 'function') {
     logger.debug('Starting live query subscription', { sql: sql.substring(0, 50) });
     const { unsubscribe } = await db.live.query(sql, params, callback);
-    return unsubscribe;
+    const safeUnsub = async () => {
+      try { await unsubscribe(); } catch (_) {}
+    };
+    subscriptions.add(safeUnsub);
+    return async () => {
+      subscriptions.delete(safeUnsub);
+      await safeUnsub();
+    };
   } else {
     logger.warn('Live query extension not available, falling back to single execution');
     // Fallback: execute once
@@ -1194,7 +1292,7 @@ async function rerankWithLLM(queryText, items) {
     { role: 'system', content: 'You are a re-ranker. Output only a JSON array of integers representing the best ranking.' },
     { role: 'user', content: prompt }
   ];
-  const res = await openRouterClient.chatCompletion(model, messages, { temperature: 0.0, max_tokens: 200 });
+  const res = await providerManager.chat(model, messages, { temperature: 0.0, max_tokens: 200 });
   const text = res.choices?.[0]?.message?.content || '[]';
   let order = [];
   try { order = JSON.parse(text); } catch(_) { order = []; }
@@ -1605,20 +1703,22 @@ function hashInput(input) {
 // Initialize DB eagerly but non-blocking
 // Consumers MUST await waitForInit() before using database operations
 if (process.env.DB_EAGER_INIT !== 'false') {
-  initPromise = _doInitDB().then(async () => {
-    // Auto-index if configured
-    if (config.indexer?.enabled && config.indexer.autoIndexReports) {
-      try {
-        const n = await indexExistingReports(500);
-        logger.info('Indexed existing reports', { count: n });
-      } catch (e) {
-        logger.warn('Auto-indexing failed', { error: e.message });
+  if (!isClosing) {
+    initPromise = _doInitDB().then(async () => {
+      // Auto-index if configured
+      if (config.indexer?.enabled && config.indexer.autoIndexReports) {
+        try {
+          const n = await indexExistingReports(500);
+          logger.info('Indexed existing reports', { count: n });
+        } catch (e) {
+          logger.warn('Auto-indexing failed', { error: e.message });
+        }
       }
-    }
-  }).catch(err => {
-    // Error captured in initState/initError, will be thrown on waitForInit()
-    logger.error('Background DB initialization failed', { error: err.message, state: initState });
-  });
+    }).catch(err => {
+      // Error captured in initState/initError, will be thrown on waitForInit()
+      logger.error('Background DB initialization failed', { error: err.message, state: initState });
+    });
+  }
 }
 
 module.exports = {
@@ -1634,12 +1734,15 @@ module.exports = {
   // Database initialization - REQUIRED before operations
   initDB,
   waitForInit,
+  waitForIdle,
   subscribeToChanges, // Change notifications
   liveQuery, // Reactive query support
   getInitState: () => initState,
   getInitError: () => initError,
   isInitializing: () => initState === InitState.INITIALIZING,
   isDbInitialized: () => dbInitialized,
+  isShutdownComplete,
+  getShutdownState,
   getDbPathInfo: () => dbPathInfo,
   isUsingInMemoryFallback: () => usingInMemoryFallback,
 
@@ -1686,39 +1789,101 @@ module.exports = {
   
   // Cleanup
   close: async () => {
-    // Shutdown any background embedding resources
-    if (transformerPipeline) {
-      try {
-        // Attempt to close ONNX sessions if exposed
-        if (transformerPipeline.model?.session?.close) {
-          await transformerPipeline.model.session.close();
-        }
-        transformerPipeline = null;
-      } catch (_) {}
-    }
-
-    if (db) {
-      try {
-        // Ensure any pending TCN subscriptions are cleared
-        // (PGlite close handles this mostly, but being explicit)
-        dbInitialized = false;
-        initState = InitState.NOT_STARTED;
-        
-        await db.close();
-        db = null;
-        logger.info('Database connection closed gracefully');
-      } catch (err) {
-        // Mutex errors often happen during close if WASM is busy
-        if (err.message?.includes('mutex')) {
-          logger.debug('Database mutex busy during close - forcing cleanup');
-        } else {
-          logger.warn('Error closing database', { error: err.message });
-        }
-        db = null;
+    if (closingPromise) return closingPromise;
+    closingPromise = (async () => {
+      if (isClosing) return;
+    isClosing = true;
+    shutdownStartAt = Date.now();
+    initPromise = null;
+    try {
+      if (db && typeof db.offNotification === 'function') {
+        try { db.offNotification(); } catch (_) {}
       }
+      if (db && typeof db.off === 'function') {
+        try { db.off(); } catch (_) {}
+      }
+      // Stop cache timers before touching db
+      try {
+        const cache = require('./advancedCache');
+        if (cache && typeof cache.close === 'function') cache.close();
+      } catch (_) {}
+
+      // Unsubscribe any live listeners before closing db
+      if (subscriptions.size) {
+        const current = Array.from(subscriptions);
+        subscriptions.clear();
+        await Promise.allSettled(current.map(fn => fn()));
+      }
+      if (db && typeof db.unlisten === 'function') {
+        try {
+          await db.unlisten('research_reports_changed');
+          await db.unlisten('jobs_changed');
+        } catch (_) {}
+      }
+
+      // Ensure PGlite mutex is owned during teardown
+      if (db && typeof db.runExclusive === 'function') {
+        try {
+          await db.runExclusive(async () => {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          });
+        } catch (_) {}
+      }
+
+      // Wait briefly for in-flight operations to finish
+      await waitForIdle(2000);
+
+      // Shutdown any background embedding resources
+      if (transformerPipeline) {
+        try {
+          // Attempt to close ONNX sessions if exposed
+          if (transformerPipeline.model?.session?.close) {
+            await transformerPipeline.model.session.close();
+          }
+          transformerPipeline = null;
+        } catch (_) {}
+      }
+      if (embeddingProvider && typeof embeddingProvider.dispose === 'function') {
+        try {
+          await embeddingProvider.dispose();
+        } catch (_) {}
+        embeddingProvider = null;
+      }
+
+      if (db) {
+        try {
+          // Ensure any pending TCN subscriptions are cleared
+          // (PGlite close handles this mostly, but being explicit)
+          dbInitialized = false;
+          initState = InitState.NOT_STARTED;
+          initPromise = null;
+          
+          await db.close();
+          db = null;
+          logger.info('Database connection closed gracefully');
+        } catch (err) {
+          // Mutex errors often happen during close if WASM is busy
+          if (err.message?.includes('mutex')) {
+            logger.debug('Database mutex busy during close - forcing cleanup');
+          } else {
+            logger.warn('Error closing database', { error: err.message });
+          }
+          db = null;
+          initPromise = null;
+        }
+      }
+    } finally {
+      isClosing = false;
+      shutdownComplete = true;
     }
+    })();
+    return closingPromise;
   }
 };
+
+function isShutdownComplete() {
+  return shutdownComplete;
+}
 
 // Function to retrieve a single report by its ID
 async function getReportById(reportId) {
@@ -1845,6 +2010,9 @@ async function reindexVectors() {
  */
 async function getReportSignals(reportId) {
   try {
+    if (shutdownComplete) return [];
+    if (isClosing) return [];
+    if (initState !== InitState.INITIALIZED || !db) return [];
     const result = await db.query(
       'SELECT ensemble_signals FROM research_reports WHERE id = $1',
       [reportId]

@@ -36,6 +36,9 @@ Complete reference for all environment variables supported by OpenRouter Agents 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENROUTER_API_KEY` | *required* | OpenRouter API key for model access |
+| `OPENROUTER_API_KEYS` | empty | Comma-separated OpenRouter keys for rotation |
+| `OPENROUTER_KEY_COOLDOWN_MS` | `5000` | Base cooldown per key after failures (exponential backoff) |
+| `PROVIDER_TELEMETRY_MODELS` | `true` | Include model-level metrics in provider health snapshots |
 | `ALLOW_NO_API_KEY` | `false` | Allow server to run without API key (limited functionality) |
 
 ## Database Configuration
