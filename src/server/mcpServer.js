@@ -24,6 +24,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
+const crypto = require('crypto'); // For timing-safe API key comparison
 const config = require('../../config');
 
 // MCP 2025-11-25 Feature Modules
@@ -40,6 +41,21 @@ const {
   validateWithDiagnostics,
   formatSemanticError
 } = require('../utils/diagnostics');
+
+/**
+ * HTML escape to prevent XSS in UI resource templates.
+ * @param {string} str - Untrusted string to escape
+ * @returns {string} HTML-safe string
+ */
+function escapeHtml(str) {
+  if (typeof str !== 'string') return String(str ?? '');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 const { 
   // Schemas
@@ -166,6 +182,38 @@ async function ensureIntegrations() {
         state: zeroNode.state,
         fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED
       });
+
+      // Wire DualRoleNode services for void simulation (Fix 1 from architecture plan)
+      if (zeroNode.state === ConnectionState.SELF_CONNECTED) {
+        const toolHandlers = {
+          'tools/ping': async () => ({ pong: true }),
+          'tools/research': async (params) => researchTool(params, null, `zero-${Date.now()}`),
+          'tools/conduct_research': async (params) => conductResearch(params, null, `zero-${Date.now()}`),
+          'tools/search': async (params) => searchTool(params, null, `zero-${Date.now()}`),
+          'tools/query': async (params) => queryTool(params, null, `zero-${Date.now()}`),
+          'tools/retrieve': async (params) => retrieveTool(params, null, `zero-${Date.now()}`),
+          'tools/get_report': async (params) => getReportContent(params, null, `zero-${Date.now()}`),
+          'tools/history': async (params) => listResearchHistory(params, null, `zero-${Date.now()}`),
+          'tools/get_server_status': async (params) => getServerStatus(params, null, `zero-${Date.now()}`),
+          'tools/batch_research': async (params) => batchResearchTool(params, null, `zero-${Date.now()}`),
+        };
+
+        for (const [name, handler] of Object.entries(toolHandlers)) {
+          zeroNode.registerService(name, async (params) => {
+            try {
+              const result = await handler(params);
+              // Handle both string results and object results
+              if (typeof result === 'string') return result;
+              if (result?.content?.[0]?.text) return result.content[0].text;
+              return JSON.stringify(result, null, 2);
+            } catch (e) {
+              logger.error('Zero service error', { service: name, error: e.message });
+              return JSON.stringify({ error: e.message }, null, 2);
+            }
+          });
+        }
+        logger.info('Zero services registered', { count: Object.keys(toolHandlers).length });
+      }
     } catch (e) {
       logger.error('Zero node init error', { error: e.message });
       zeroNode = null;
@@ -204,6 +252,14 @@ function generateUITemplate(templateType, options = {}) {
     const mcpBridge = {
       requestId: 0,
       pending: new Map(),
+
+      // HTML escape to prevent XSS
+      escapeHtml(str) {
+        if (typeof str !== 'string') return String(str ?? '');
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      },
 
       init() {
         window.addEventListener('message', (e) => {
@@ -1626,8 +1682,18 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
       }
     }
 
-    // 3. Try API key auth
-    if (serverApiKey && token === serverApiKey) return next();
+    // 3. Try API key auth with timing-safe comparison
+    if (serverApiKey && token) {
+      try {
+        const tokenBuf = Buffer.from(token);
+        const keyBuf = Buffer.from(serverApiKey);
+        if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
+          return next();
+        }
+      } catch (e) {
+        // Length mismatch or other error - fall through to reject
+      }
+    }
     if (allowNoAuth) return next();
     return res.status(403).json({ error: 'Forbidden: Auth failed' });
   };
@@ -1986,6 +2052,12 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   <h1>terminals.tech MCP Authentication</h1>
   <div id="result"></div>
   <script>
+    // HTML escape to prevent XSS from URL parameters
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
     const hash = window.location.hash.substring(1);
     const params = new URLSearchParams(hash);
     const accessToken = params.get('access_token');
@@ -1996,13 +2068,13 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
       result.innerHTML = \`
         <p class="success">Authentication successful!</p>
         <p>Your access token (copy this for MCP client):</p>
-        <div class="token" id="token">\${accessToken}</div>
+        <div class="token" id="token">\${esc(accessToken)}</div>
         <button onclick="navigator.clipboard.writeText(document.getElementById('token').textContent)">Copy Token</button>
         <p style="margin-top: 20px;">Use this in your MCP client configuration:</p>
-        <pre>Authorization: Bearer \${accessToken.substring(0, 20)}...</pre>
+        <pre>Authorization: Bearer \${esc(accessToken.substring(0, 20))}...</pre>
       \`;
     } else if (error) {
-      result.innerHTML = \`<p class="error">Error: \${error}</p>\`;
+      result.innerHTML = \`<p class="error">Error: \${esc(error)}</p>\`;
     } else {
       result.innerHTML = '<p>Waiting for authentication...</p>';
     }
@@ -2211,7 +2283,14 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         const rows=new Map();
         function addAgentRow(id,text,cls){
           let r=rows.get(id);
-          if(!r){ r=document.createElement('div'); r.className='row'; r.innerHTML='<span class="chip">agent '+id+'</span><span class="chip" id="st"></span><span id="q" class="muted"></span>'; agentsEl.appendChild(r); rows.set(id,r); }
+          if(!r){
+            r=document.createElement('div'); r.className='row';
+            const agentChip=document.createElement('span'); agentChip.className='chip'; agentChip.textContent='agent '+id;
+            const stChip=document.createElement('span'); stChip.className='chip'; stChip.id='st';
+            const qSpan=document.createElement('span'); qSpan.className='muted'; qSpan.id='q';
+            r.appendChild(agentChip); r.appendChild(stChip); r.appendChild(qSpan);
+            agentsEl.appendChild(r); rows.set(id,r);
+          }
           r.querySelector('#st').textContent=text; r.querySelector('#st').className='chip '+(cls||'');
         }
         function appendLog(s){ logEl.textContent += s; logEl.scrollTop = logEl.scrollHeight; }
@@ -2491,6 +2570,16 @@ function stopJobWorker() {
      }
    }
 
+   // Seed default providers for multi-provider integration (OpenCode + Claude Code)
+   try {
+     if (typeof dbClient.seedProviders === 'function') {
+       const seededCount = await dbClient.seedProviders();
+       logger.info('Providers seeded', { count: seededCount });
+     }
+   } catch (seedError) {
+     logger.warn('Provider seeding failed (non-fatal)', { error: seedError.message });
+   }
+
    logger.info('Phase 2/4: Initializing embedder...');
    try {
      // Initialize embedder (non-blocking - vector search is optional)
@@ -2529,7 +2618,7 @@ function stopJobWorker() {
     });
   }
 
-} // Close else block for --setup-claude check
+  module.exports.stopJobWorker = stopJobWorker;
+  module.exports.startServer = startServer;
 
-module.exports.stopJobWorker = stopJobWorker;
-module.exports.startServer = startServer;
+} // Close else block for --setup-claude check

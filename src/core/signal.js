@@ -127,7 +127,7 @@ class AgentSignal {
    * Create from stored JSON
    */
   static fromJSON(json) {
-    const signal = new Signal(json.type, json.payload, {
+    const signal = new AgentSignal(json.type, json.payload, {
       confidence: json.confidence,
       source: json.source,
       phase: json.phase,
@@ -142,21 +142,21 @@ class AgentSignal {
    * Factory: Create query signal
    */
   static query(payload, source, opts = {}) {
-    return new Signal(SignalType.QUERY, payload, { source, ...opts });
+    return new AgentSignal(SignalType.QUERY, payload, { source, ...opts });
   }
 
   /**
    * Factory: Create response signal
    */
   static response(payload, source, confidence = 1.0, opts = {}) {
-    return new Signal(SignalType.RESPONSE, payload, { source, confidence, ...opts });
+    return new AgentSignal(SignalType.RESPONSE, payload, { source, confidence, ...opts });
   }
 
   /**
    * Factory: Create error signal
    */
   static error(message, source, opts = {}) {
-    return new Signal(SignalType.ERROR, { message }, { source, confidence: 0, ...opts });
+    return new AgentSignal(SignalType.ERROR, { message }, { source, confidence: 0, ...opts });
   }
 
   // ============================================
@@ -192,7 +192,7 @@ class AgentSignal {
       };
     }
 
-    return new Signal(SignalType.COMPOSE, mergedPayload, {
+    return new AgentSignal(SignalType.COMPOSE, mergedPayload, {
       confidence: (sig1.confidence * w1 + sig2.confidence * w2) / totalWeight,
       source: `compose(${sig1.source},${sig2.source})`,
       tags: [...(sig1.tags || []), ...(sig2.tags || []), 'composed'],
@@ -210,11 +210,11 @@ class AgentSignal {
    */
   static reduce(signals, opts = {}) {
     if (!signals || signals.length === 0) {
-      return new Signal(SignalType.ERROR, { message: 'No signals to reduce' }, { confidence: 0 });
+      return new AgentSignal(SignalType.ERROR, { message: 'No signals to reduce' }, { confidence: 0 });
     }
 
     if (signals.length === 1) {
-      return new Signal(SignalType.REDUCE, signals[0].payload, {
+      return new AgentSignal(SignalType.REDUCE, signals[0].payload, {
         confidence: signals[0].confidence,
         source: `reduce(${signals[0].source})`,
         tags: ['reduced', 'single'],
@@ -238,7 +238,7 @@ class AgentSignal {
     // Extract crystallization for convergence detection
     const crystallization = extractCrystallization(accumulated.payload);
 
-    return new Signal(SignalType.REDUCE, {
+    return new AgentSignal(SignalType.REDUCE, {
       result: accumulated.payload,
       crystallization: crystallization.score,
       patterns: crystallization.patterns,
@@ -268,7 +268,7 @@ class AgentSignal {
       variables.push(match[1]);
     }
 
-    return new Signal(SignalType.TEMPLATE, {
+    return new AgentSignal(SignalType.TEMPLATE, {
       template: templateString,
       variables,
       bound: {}
@@ -291,7 +291,7 @@ class AgentSignal {
    */
   static substitute(templateSignal, bindings, opts = {}) {
     if (templateSignal.type !== SignalType.TEMPLATE) {
-      return new Signal(SignalType.ERROR, {
+      return new AgentSignal(SignalType.ERROR, {
         message: 'substitute requires a template signal'
       }, { confidence: 0 });
     }
@@ -301,7 +301,7 @@ class AgentSignal {
     // Check all variables are bound
     const unbound = variables.filter(v => !(v in bindings));
     if (unbound.length > 0) {
-      return new Signal(SignalType.ERROR, {
+      return new AgentSignal(SignalType.ERROR, {
         message: `Unbound variables: ${unbound.join(', ')}`
       }, { confidence: 0 });
     }
@@ -326,7 +326,7 @@ class AgentSignal {
 
     const avgConfidence = bindingCount > 0 ? totalConfidence / bindingCount : 1.0;
 
-    return new Signal(SignalType.SUBSTITUTION, {
+    return new AgentSignal(SignalType.SUBSTITUTION, {
       result,
       template: template,
       bindings: Object.keys(bindings),
