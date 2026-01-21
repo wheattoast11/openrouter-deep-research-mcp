@@ -299,7 +299,24 @@ function validateParams(operation, params) {
 }
 
 /**
- * Coerce types based on schema expectations
+ * Coerce types based on schema expectations.
+ * Automatically converts string values to their expected types based on schema.
+ * Useful for normalizing HTTP query params or CLI args before validation.
+ *
+ * @param {Object} params - Input parameters with potentially mismatched types
+ * @param {Object} schema - Schema mapping keys to type specs
+ * @param {string|{type:string}} schema[key] - Type spec: 'number', 'boolean', 'string' or {type: '...'}
+ * @returns {Object} New object with coerced types (original unchanged)
+ *
+ * @example
+ * // Schema can use shorthand or object notation
+ * const schema = { limit: 'number', verbose: { type: 'boolean' }, name: 'string' };
+ *
+ * coerceTypes({ limit: '10', verbose: 'true', name: 42 }, schema);
+ * // => { limit: 10, verbose: true, name: '42' }
+ *
+ * coerceTypes({ limit: 'abc', verbose: '0' }, schema);
+ * // => { limit: 'abc', verbose: false } // 'abc' not coerced (NaN), '0' becomes false
  */
 function coerceTypes(params, schema) {
   if (!schema) return params;

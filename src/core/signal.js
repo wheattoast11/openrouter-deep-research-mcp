@@ -9,6 +9,7 @@
  */
 
 const crypto = require('crypto');
+const { deterministicStringify } = require('../utils/deterministic');
 
 /**
  * Model capability weights for consensus
@@ -53,9 +54,10 @@ const SignalType = {
 };
 
 /**
- * Core Signal class
+ * AgentSignal - Core inter-agent communication primitive
+ * (Renamed from Signal for SDK alignment)
  */
-class Signal {
+class AgentSignal {
   constructor(type, payload, metadata = {}) {
     this.id = crypto.randomUUID();
     this.type = type;
@@ -65,6 +67,15 @@ class Signal {
     this.timestamp = Date.now();
     this.phase = metadata.phase ?? 0;
     this.tags = metadata.tags ?? [];
+  }
+
+  /**
+   * Layer address for AXON architecture (L3 = Mesh/Transport Layer)
+   * Format: L{layer}:{type}:{id}
+   * @returns {string} SDKAddress-compatible string
+   */
+  get address() {
+    return `L3:signal:${this.id}`;
   }
 
   /**
@@ -82,18 +93,33 @@ class Signal {
   }
 
   /**
-   * Serialize for storage/transmission
+   * Calculate deterministic ShapeHash (L1 Isomorphism)
+   * Uses SHA-256 to fingerprint the structural payload.
+   */
+  get shapeHash() {
+    const canonical = deterministicStringify({
+      type: this.type,
+      payload: this.payload,
+      confidence: this.confidence
+    });
+    
+    return crypto.createHash('sha256').update(canonical).digest('hex');
+  }
+
+  /**
+   * Serialize for storage/transmission (MeshEvent compatible)
    */
   toJSON() {
     return {
       id: this.id,
-      type: this.type,
+      type: `signal:${this.type}`,
       payload: this.payload,
       confidence: this.confidence,
       source: this.source,
       timestamp: this.timestamp,
       phase: this.phase,
-      tags: this.tags
+      tags: this.tags,
+      shapeHash: this.shapeHash
     };
   }
 
@@ -206,7 +232,7 @@ class Signal {
     // Pairwise reduction (fold left)
     let accumulated = sorted[0];
     for (let i = 1; i < sorted.length; i++) {
-      accumulated = Signal.compose(accumulated, sorted[i]);
+      accumulated = AgentSignal.compose(accumulated, sorted[i]);
     }
 
     // Extract crystallization for convergence detection
@@ -322,6 +348,56 @@ class Signal {
   isConverged() {
     const { score } = this.crystallization;
     return score > 0.5;
+  }
+
+  /**
+   * Returns introspection data for debugging and SDK tooling
+   * @returns {object} Explanation object
+   */
+  explain() {
+    return {
+      id: this.id,
+      layer: 'L3',
+      type: 'AgentSignal',
+      address: this.address,
+      capabilities: ['query', 'response', 'consensus', 'crystallization', 'compose', 'reduce', 'template', 'substitute'],
+      state: {
+        signalType: this.type,
+        source: this.source,
+        confidence: this.confidence,
+        phase: this.phase,
+        weight: this.weight,
+        crystallization: this.crystallization?.score ?? 0,
+        tagCount: this.tags?.length ?? 0,
+        shapeHash: this.shapeHash
+      }
+    };
+  }
+
+  /**
+   * Convert to SDKMessage format for SDK integration
+   * NOTE: Adapter method - when @terminals-tech/core exports createMessage,
+   * this can be replaced with: return createMessage('event', this.address, target, this.payload);
+   *
+   * @param {string} [target='*'] - Target address (default: broadcast)
+   * @returns {object} SDKMessage-compatible object
+   */
+  toSDKMessage(target = '*') {
+    return {
+      id: this.id,
+      type: 'event',
+      from: this.address,
+      to: target,
+      payload: this.payload,
+      metadata: {
+        signalType: this.type,
+        source: this.source,
+        confidence: this.confidence,
+        phase: this.phase,
+        timestamp: this.timestamp,
+        shapeHash: this.shapeHash
+      }
+    };
   }
 }
 
@@ -531,7 +607,13 @@ class ConsensusCalculator {
   }
 }
 
+// Backward compatibility alias (deprecated - use AgentSignal)
+const Signal = AgentSignal;
+
 module.exports = {
+  // SDK-aligned name (preferred)
+  AgentSignal,
+  // Backward compatibility alias (deprecated)
   Signal,
   SignalType,
   SignalBus,

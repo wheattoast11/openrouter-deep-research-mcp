@@ -17,26 +17,47 @@
 'use strict';
 
 const crypto = require('crypto');
+const { deterministicStringify } = require('../utils/deterministic');
 
 // =============================================================================
-// RESULT: Railway-Oriented Error Handling
+// RESULT: Railway-Oriented Error Handling (SDK-Compatible)
 // =============================================================================
+// NOTE: When @terminals-tech/core exports SDKResult, replace with:
+// const { ok, err, isOk, isErr } = require('@terminals-tech/core');
 
 /**
- * Success result
+ * Success result - SDK-compatible factory
  * @template T
  * @param {T} value
  * @returns {{ ok: true, value: T }}
  */
-const Ok = (value) => Object.freeze({ ok: true, value });
+const ok = (value) => Object.freeze({ ok: true, value });
 
 /**
- * Error result
+ * Error result - SDK-compatible factory
  * @template E
  * @param {E} error
  * @returns {{ ok: false, error: E }}
  */
-const Err = (error) => Object.freeze({ ok: false, error });
+const err = (error) => Object.freeze({ ok: false, error });
+
+/**
+ * Type guard for success result
+ * @param {object} result
+ * @returns {boolean}
+ */
+const isOk = (result) => result && result.ok === true;
+
+/**
+ * Type guard for error result
+ * @param {object} result
+ * @returns {boolean}
+ */
+const isErr = (result) => result && result.ok === false;
+
+// Backward compatibility aliases (deprecated - use lowercase versions)
+const Ok = ok;
+const Err = err;
 
 /**
  * Backpressure error - indicates rail buffer is saturated
@@ -85,6 +106,15 @@ class Token {
   }
 
   /**
+   * Layer address for AXON architecture (L3 = Mesh/Transport Layer)
+   * Format: L{layer}:{type}:{id}
+   * @returns {string} SDKAddress-compatible string
+   */
+  get address() {
+    return `L3:token:${this.id}`;
+  }
+
+  /**
    * Derive a new token with transformed value, preserving lineage
    * @param {*} newValue - Transformed value
    * @param {string} transformer - Who transformed it
@@ -111,16 +141,46 @@ class Token {
   }
 
   /**
-   * Serialize token for transport
+   * Calculate deterministic ShapeHash (L1 Isomorphism)
+   */
+  get shapeHash() {
+    const canonical = deterministicStringify({
+      value: this.value,
+      origin: this.origin
+    });
+    return crypto.createHash('sha256').update(canonical).digest('hex');
+  }
+
+  /**
+   * Serialize token for transport (MeshEvent compatible)
    * @returns {object}
    */
   toJSON() {
     return {
       id: this.id,
+      type: 'token',
       value: this.value,
       origin: this.origin,
       trace: this.trace,
-      timestamp: this.timestamp
+      timestamp: this.timestamp,
+      shapeHash: this.shapeHash
+    };
+  }
+
+  /**
+   * Convert to MeshEvent (L3 Isomorphism)
+   */
+  toMeshEvent() {
+    return {
+      id: this.id,
+      type: `mesh:token:${this.origin}`,
+      payload: this.value,
+      timestamp: this.timestamp,
+      metadata: {
+        trace: this.trace,
+        shapeHash: this.shapeHash,
+        protocol: 'rail/1.0'
+      }
     };
   }
 
@@ -137,6 +197,27 @@ class Token {
     token.trace = json.trace || [json.origin];
     token.timestamp = json.timestamp || Date.now();
     return Object.freeze(token);
+  }
+
+  /**
+   * Returns introspection data for debugging and SDK tooling
+   * @returns {object} Explanation object
+   */
+  explain() {
+    return {
+      id: this.id,
+      layer: 'L3',
+      type: 'Token',
+      address: this.address,
+      capabilities: ['derive', 'toJSON', 'toMeshEvent'],
+      state: {
+        origin: this.origin,
+        traceLength: this.trace?.length ?? 0,
+        valueType: typeof this.value,
+        timestamp: this.timestamp,
+        shapeHash: this.shapeHash
+      }
+    };
   }
 }
 
@@ -165,6 +246,15 @@ class Rail {
     this._activated = false;
     this._handshake = options.handshake || null;
     this._peer = null;
+  }
+
+  /**
+   * Layer address for AXON architecture (L3 = Mesh/Transport Layer)
+   * Format: L{layer}:{type}:{id}
+   * @returns {string} SDKAddress-compatible string
+   */
+  get address() {
+    return `L3:rail:${this.id}`;
   }
 
   /**
@@ -373,6 +463,32 @@ class Rail {
     return () => {
       const idx = this._observers.indexOf(observer);
       if (idx >= 0) this._observers.splice(idx, 1);
+    };
+  }
+
+  /**
+   * Returns introspection data for debugging and SDK tooling
+   * @returns {object} Explanation object
+   */
+  explain() {
+    return {
+      id: this.id,
+      layer: 'L3',
+      type: 'Rail',
+      address: this.address,
+      capabilities: ['send', 'receive', 'map', 'filter', 'merge', 'pause', 'resume', 'observe'],
+      state: {
+        activated: this._activated,
+        paused: this._paused,
+        closed: this._closed,
+        pressure: this.pressure,
+        buffered: this._buffer.length,
+        maxBuffer: this._maxBuffer,
+        observerCount: this._observers.length,
+        waiterCount: this._waiters.length,
+        hasPeer: !!this._peer,
+        stats: this.stats
+      }
     };
   }
 
@@ -610,9 +726,17 @@ function signalFromToken(token) {
 // =============================================================================
 
 module.exports = {
-  // Result types
+  // SDK-compatible Result types (preferred)
+  ok,
+  err,
+  isOk,
+  isErr,
+
+  // Backward compatibility aliases (deprecated)
   Ok,
   Err,
+
+  // Error types
   BackpressureError,
   RailClosedError,
 
