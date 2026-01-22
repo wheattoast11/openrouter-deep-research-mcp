@@ -99,6 +99,9 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
         return await listModels(params);
       case 'batch_research':
         return await batchResearchTool(params, mcpExchange, requestId);
+
+      case 'research':
+        return await researchTool(params, mcpExchange, requestId);
       case 'ping':
         return await pingTool(params);
       case 'get_server_status':
@@ -186,7 +189,9 @@ async function index_texts(params, mcpExchange = null, requestId = 'unknown-req'
     try {
       const id = await dbClient.indexDocument({ sourceType, sourceId: d.id || `doc:${Date.now()}-${indexed}`, title: d.title || null, content: d.content });
       if (id) indexed++;
-    } catch (_) {}
+    } catch (err) {
+      logger.debug('Document indexing failed', { requestId, sourceType, error: err.message });
+    }
   }
   return JSON.stringify({ indexed });
 }
@@ -310,6 +315,27 @@ function normalizeResearchInputSchema(data) {
   return coreNormalize('research', data);
 }
 
+// Async research tool (job by default | sync if async=false)
+async function researchTool(rawParams, mcpExchange, requestId) {
+  await dbClient.waitForInit();
+  const params = researchSchema.parse(rawParams); // Uses unified schema w/ async flag
+  if (!params.async) {
+    return await conductResearch(params, mcpExchange, requestId);
+  }
+  // Async: enqueue job
+  const jobId = await dbClient.createJob({type: 'research', params: JSON.stringify(params)});
+  await dbClient.appendJobEvent(jobId, 'enqueued', {query: params.query?.substring(0,100)});
+  logger.info('Research job enqueued', {jobId, requestId, query: params.query?.substring(0,50)});
+  return JSON.stringify({
+    job_id: jobId,
+    status: 'queued',
+    message: `Research job enqueued (async=true). Poll: job_status({job_id: "${jobId}", format: "compact"})`,
+    next: `get_job_status({job_id: "${jobId}"})`
+  });
+}
+
+// Batch research tool - see batchResearchTool implementation below (line ~2411)
+
 // Schema with transform for validation (used for conductResearch which is sync)
 const conductResearchSchema = conductResearchSchemaBase
   .transform(normalizeResearchInputSchema)
@@ -372,6 +398,8 @@ const getProviderHealthSchema = z.object({
   maxModels: z.number().int().positive().optional().default(8).describe('Maximum models to include'),
   _requestId: z.string().optional().describe("Internal request ID for logging")
 });
+
+// Batch research schema - see batchResearchSchema definition below (line ~2376)
 
 // Schema for the new execute_sql tool
 const executeSqlSchema = z.object({
@@ -563,10 +591,16 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       if (type === 'planning_usage' && payload?.usage) usageAgg.planning.push(payload.usage);
       if (type === 'agent_usage' && payload?.usage) usageAgg.agents.push(payload);
       if (type === 'synthesis_usage' && payload?.usage) usageAgg.synthesis.push(payload.usage);
-    } catch(_) {}
+    } catch (err) {
+      logger.debug('Usage aggregation error', { type, error: err.message });
+    }
     // Forward to job events if running as async job
     if (isJob) {
-      try { await dbClient.appendJobEvent(requestId, type, payload || {}); } catch (_) {}
+      try {
+        await dbClient.appendJobEvent(requestId, type, payload || {});
+      } catch (err) {
+        logger.debug('Job event persistence failed', { requestId, type, error: err.message });
+      }
     }
   };
   // Determine MAX_ITERATIONS dynamically based on complexity assessment
@@ -826,39 +860,14 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
           errorCount: currentResearchResults.filter(r => r.error).length
         });
       } catch (researchError) {
-        // This catch block might be less necessary now with Promise.allSettled inside conductParallelResearch,
-        // but kept for safety in case the call itself fails.
-        logger.error('Error calling conductParallelResearch', { requestId, error: researchError });
-        // Decide if this is fatal. Let's assume it is for now.
+        // Promise.allSettled in conductParallelResearch handles internal errors,
+        // but this catch handles failures in the call itself.
+        logger.error('Error calling conductParallelResearch', {
+          requestId,
+          iteration: currentIteration,
+          error: researchError.message
+        });
         throw new Error(`[${requestId}] Failed during parallel research call: ${researchError.message}`);
-        /* // Original fallback logic - less relevant if conductParallelResearch handles internal errors
-        if (costPreference === 'high') {
-          console.warn(`[${new Date().toISOString()}] [${requestId}] conductResearch: High-cost research failed (Iteration ${currentIteration}), falling back to low-cost models.`);
-          try {
-            // Pass context to fallback research as well
-            currentResearchResults = await researchAgent.conductParallelResearch(
-               currentAgentQueries, 
-               'low', 
-               images, 
-               textDocuments, 
-               structuredData,
-               inputEmbeddings, // Pass input embeddings
-               requestId
-            ); 
-          } catch (fallbackError) {
-            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Low-cost fallback research also failed (Iteration ${currentIteration}). Error:`, fallbackError);
-            currentResearchResults = currentAgentQueries.map(q => ({
-              agentId: q.id, model: 'N/A', query: q.query, result: `Research failed: ${fallbackError.message}`, error: true, errorMessage: fallbackError.message
-            }));
-            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Marking iteration ${currentIteration} queries as failed due to fallback error.`);
-          }
-        } else {
-          currentResearchResults = currentAgentQueries.map(q => ({
-            agentId: q.id, model: 'N/A', query: q.query, result: `Research failed: ${researchError.message}`, error: true, errorMessage: researchError.message
-          }));
-          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Marking iteration ${currentIteration} queries as failed due to initial low-cost error.`);
-        }
-        */
       }
 
       allResearchResults.push(...currentResearchResults);
@@ -984,7 +993,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         // Store in semantic cache first; fallback to local cache
         try {
           await advancedCache.storeResult(query, { costPreference, audienceLevel, outputFormat, includeSources }, finalReportContent, savedReportId);
-        } catch (_) {}
+        } catch (cacheErr) {
+          logger.debug('Advanced cache storage failed', { requestId, error: cacheErr.message });
+        }
         setInCache(cacheKey, finalReportContent);
 
         // Compute usage totals
@@ -1695,7 +1706,7 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
         failedCalls: convergence.overall.failedCalls,
         uniqueTools: convergence.overall.uniqueTools,
         avgLatencyMs: convergence.overall.avgLatencyMs,
-        topErrors: convergence.errorBreakdown.slice(0, 3)
+        topErrors: (convergence.errorBreakdown || []).slice(0, 3)
       } : { status: 'unavailable', reason: 'No observation data' }
     };
 
@@ -2253,7 +2264,44 @@ const agentSchema = z.object({
 async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now()}`) {
   const action = (params?.action || 'auto').toLowerCase();
 
-  // Handle tool chaining: execute multiple tools in sequence
+  // Swarm dispatch: planning → parallel research (Zero cell ensemble)
+  if (action === 'swarm' || action === 'ensemble' || params.ensemble_size || params.maxAgents) {
+    const query = params.query || params.q;
+    if (!query) throw new Error('agent swarm: query required');
+    const planningAgent = require('../agents/planningAgent');
+    const researchAgent = require('../agents/researchAgent');
+    
+    const planXml = await planningAgent.planResearch(query, {
+      maxAgents: params.ensemble_size || params.maxAgents || 3,
+      mode: params.mode || 'hyper',
+      onEvent: (type, payload) => logger.debug('Agent swarm event', { type, requestId })
+    }, null, requestId);
+    
+    const agentQueries = parseAgentXml(planXml).map((q, i) => ({ ...q, id: `agent-${i+1}` }));
+    
+    const results = await researchAgent.conductParallelResearch(
+      agentQueries,
+      params.costPreference || 'low',
+      params.images,
+      params.textDocuments,
+      params.structuredData,
+      null,
+      requestId,
+      null,
+      { clientContext: params.clientContext, mode: params.mode }
+    );
+    
+    return JSON.stringify({
+      swarm: {
+        query,
+        agentCount: agentQueries.length,
+        results: results.map(r => ({ agentId: r.agentId, model: r.model, summary: r.result?.substring(0, 200) })),
+        signals: results.filter(r => r.signal).map(r => r.signal.toJSON())
+      }
+    }, null, 2);
+  }
+
+  // Handle tool chaining (existing)
   if (action === 'chain' || (params?.chain && Array.isArray(params.chain))) {
     const chain = params.chain || [];
     if (!chain.length) {
@@ -2283,7 +2331,6 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
           success: false,
           error: err.message
         });
-        // Stop chain on error (can be made configurable)
         break;
       }
     }
@@ -2298,6 +2345,7 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
     }, null, 2);
   }
 
+  // Route to sub-tools (existing)
   if (action === 'research') return researchTool(params, mcpExchange, requestId);
   if (action === 'follow_up') return researchFollowUp(params, mcpExchange, requestId);
   if (action === 'retrieve') return retrieveTool({ mode: 'index', query: params.query, k: params.k, scope: params.scope, rerank: params.rerank }, mcpExchange, requestId);
@@ -2316,7 +2364,7 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
 }
 
 // Batch research tool for efficient parallel job dispatch
-const batchResearchSchema = z.object({
+const batchResearchSchemaBase = z.object({
   queries: z.array(z.union([
     z.string(),
     z.object({
@@ -2329,7 +2377,9 @@ const batchResearchSchema = z.object({
   timeoutMs: z.number().int().positive().optional().default(300000).describe("Max wait time in ms when waitForCompletion=true. Default 5 minutes."),
   costPreference: z.enum(['high', 'low']).optional().default('low').describe("Default cost preference for all queries"),
   _requestId: z.string().optional()
-}).describe("Batch dispatch multiple research queries in a single call. Returns job IDs or waits for completion. Example: {queries: ['topic 1', 'topic 2', {query:'topic 3', costPreference:'high'}], waitForCompletion: true}");
+});
+
+const batchResearchSchema = batchResearchSchemaBase.transform(({queries, ...rest}) => ({queries, ...rest})).describe("Batch dispatch multiple research queries in a single call. Returns job IDs or waits for completion. Example: {queries: ['topic 1', 'topic 2', {query:'topic 3', costPreference:'high'}], waitForCompletion: true}");
 
 async function batchResearchTool(params, mcpExchange = null, requestId = `batch-${Date.now()}`) {
   const queries = params.queries || [];
