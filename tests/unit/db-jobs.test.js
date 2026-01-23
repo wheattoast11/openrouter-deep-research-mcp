@@ -33,9 +33,10 @@ const { randomUUID } = require('crypto');
   await dbClient.cancelJob(jobId + '-fake'); // noop
   await dbClient.cancelJob(jobId); // already terminal
 
+  await dbClient.close();
   console.log('✅ All db-jobs tests passed');
-  process.exit(0);
+  process.exitCode = 0;
 })().catch(e => {
   console.error('❌ db-jobs test failed:', e);
-  process.exit(1);
+  process.exitCode = 1;
 });

@@ -1,4 +1,8 @@
 // src/server/tools.js
+/**
+ * @deprecated This file is serving as a legacy adapter. 
+ * Please use src/server/handlers/ and src/server/mcpServer.js for new tool implementations.
+ */
 const { z } = require('zod');
 const NodeCache = require('node-cache');
 const fs = require('fs'); // Added for file system operations
@@ -305,6 +309,9 @@ const conductResearchSchemaBase = z.object({
   })).optional().describe("Optional array of structured data inputs relevant to the query."),
   clientContext: z.any().optional().describe("Optional client-provided context about environment (app, os, user, session)."),
   mode: z.enum(['standard','hyper']).optional().default('standard'),
+  dialectic: z.boolean().optional().default(false).describe("Enable dialectic convergence mode for multi-round thesis-antithesis-synthesis research"),
+  convergenceThreshold: z.number().min(0).max(1).optional().default(0.85).describe("Coherence threshold for convergence (0-1)"),
+  maxRounds: z.number().int().min(1).max(10).optional().default(5).describe("Maximum dialectic rounds before forced synthesis"),
   _mcpExchange: z.any().optional().describe("Internal MCP exchange context for progress reporting"),
   _requestId: z.string().optional().describe("Internal request ID for logging")
 });
@@ -448,6 +455,55 @@ function compressReportPayload(content, format = 'gzip') {
   }
 }
 
+const zeroChatSchema = z.object({
+  messages: z.array(z.object({
+    role: z.enum(['user', 'assistant', 'system']),
+    content: z.string()
+  })),
+  sessionId: z.string().optional().default('default'),
+  model: z.string().optional(),
+  _requestId: z.string().optional()
+}).describe("Synchronous conversational dialogue with Zero. Maintains short-term memory within the provided messages array.");
+
+async function zeroChat(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { messages, sessionId, model } = params;
+  const activeModel = model || config.models.planning || 'openai/gpt-5-chat';
+  
+  logger.info('Zero chat started', { requestId, model: activeModel, messageCount: messages.length });
+
+  try {
+    const response = await providerManager.chat(activeModel, messages, {
+      temperature: 0.7,
+      max_tokens: 2000,
+      requestId
+    });
+    
+    const content = response.choices?.[0]?.message?.content || '';
+    
+    // Update session store if available
+    try {
+      const sm = require('../utils/sessionStore').getSessionManager(dbClient);
+      if (sm && sessionId) {
+        const lastMsg = messages[messages.length - 1];
+        await sm.addMessage(sessionId, lastMsg.role, lastMsg.content);
+        await sm.addMessage(sessionId, 'assistant', content);
+      }
+    } catch (_) {}
+    
+    return content;
+  } catch (err) {
+    logger.error('Zero chat failed', { requestId, error: err.message });
+    throw err;
+  }
+}
+
+/**
+ * Execute dialectic convergence research - DISABLED
+ */
+async function executeDialecticResearch(opts) {
+  throw new Error("Dialectic research is disabled.");
+}
+
 // Updated to accept requestId
 async function conductResearch(params, mcpExchange = null, requestId = 'unknown-req') {
   // Normalize shorthand parameters (q,cost,aud,fmt,src,imgs,docs,data)
@@ -471,6 +527,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   const structuredData = params.structuredData;
   const clientContext = params.clientContext || null;
   const mode = params.mode || 'standard';
+  const dialectic = params.dialectic || false;
+  const convergenceThreshold = params.convergenceThreshold || 0.85;
+  const maxRounds = params.maxRounds || 5;
   const progressToken = mcpExchange?.progressToken;
 
   // Helper function to safely truncate a string
@@ -623,6 +682,29 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   } catch (complexityError) {
     logger.warn('Error assessing complexity, using default', { requestId, maxIterations: MAX_ITERATIONS, error: complexityError });
   }
+
+  // Dialectic convergence mode - DISABLED
+  /*
+  if (dialectic) {
+    logger.info('Dialectic mode enabled', { requestId, convergenceThreshold, maxRounds });
+    return await executeDialecticResearch({
+      query,
+      costPreference,
+      audienceLevel,
+      outputFormat,
+      includeSources,
+      maxLength,
+      images,
+      textDocuments,
+      structuredData,
+      convergenceThreshold,
+      maxRounds,
+      requestId,
+      mcpExchange,
+      notifier
+    });
+  }
+  */
 
   let currentIteration = 1;
   let allAgentQueries = [];
@@ -1696,6 +1778,9 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
 
     const status = {
       providers: providerHealth.providers,
+      database: { initialized: dbInitialized, dbPathInfo },
+      embedder: { ready: embedderReady },
+      jobs,
       // Agent Zero Observation Loop - Convergence tracking
       convergence: convergence ? {
         windowHours: convergence.windowHours,
@@ -2516,7 +2601,7 @@ async function pingTool(params) {
     const dbPathInfo = dbClient.getDbPathInfo();
     let jobs = [];
     try { jobs = await dbClient.executeQuery(`SELECT status, COUNT(*) AS n FROM jobs GROUP BY status`, []); } catch (_) {}
-    return JSON.stringify({ ...base, database: { initialized: dbInitialized, storageType: dbPathInfo }, embedder: { ready: embedderReady }, jobs }, null, 2);
+  return JSON.stringify({ ...base, database: { initialized: dbInitialized, dbPathInfo, storageType: dbPathInfo }, embedder: { ready: embedderReady }, jobs }, null, 2);
   } catch (_) {
     return JSON.stringify(base);
   }
@@ -2715,9 +2800,11 @@ module.exports = {
   dateTimeSchema,
   calcSchema,
   retrieveSchema,
+  zeroChatSchema,
   
   // Functions
   conductResearch,
+  zeroChat,
    submitResearch,
   getJobStatusTool,
   cancelJobTool,

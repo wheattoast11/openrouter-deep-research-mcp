@@ -90,10 +90,12 @@ async function executeQuery(params, dbClient) {
     throw new Error('Only SELECT queries are allowed. Use sql parameter for SELECT queries.');
   }
 
-  // Check for dangerous patterns
+  // Check for dangerous patterns using word boundaries to avoid false positives
+  // (e.g., "created_at" should not match "create")
   const dangerous = ['drop', 'delete', 'update', 'insert', 'alter', 'truncate', 'create'];
   for (const word of dangerous) {
-    if (normalized.includes(word)) {
+    const regex = new RegExp(`\\b${word}\\b`, 'i');
+    if (regex.test(normalized)) {
       throw new Error(`Dangerous SQL keyword detected: ${word}. Only read-only SELECT allowed.`);
     }
   }

@@ -53,6 +53,50 @@ function getRouter() {
 }
 
 /**
+ * Handle Zero conversational chat
+ *
+ * MCP Tool: zero_chat
+ */
+async function handleZeroChat(params, context) {
+  const { messages, sessionId = 'default', model } = params;
+  const agent = getZeroAgent();
+  const router = getRouter();
+
+  // Determine optimal model if not provided
+  let activeModel = model;
+  if (!activeModel) {
+    const lastMsg = messages[messages.length - 1]?.content || '';
+    const route = await router.route({
+      query: lastMsg,
+      costPreference: context.costPreference || 'low',
+      maxModels: 1
+    });
+    activeModel = route.primary.model;
+  }
+
+  const executor = context.executeModel || createDefaultExecutor(context);
+  const result = await executor({
+    model: activeModel,
+    messages
+  });
+
+  // Track in emergence state
+  agent.emergence.accumulate(Signal.response(result.content, activeModel, result.confidence || 0.8));
+
+  return {
+    content: [{
+      type: 'text',
+      text: result.content
+    }],
+    metadata: {
+      model: activeModel,
+      confidence: result.confidence,
+      emergence: agent.getEmergenceState()
+    }
+  };
+}
+
+/**
  * Handle Zero research request
  *
  * MCP Tool: zero_research
@@ -237,6 +281,7 @@ async function handleZeroReduce(params, context) {
  */
 async function handleZero(toolName, params, context) {
   const handlers = {
+    'zero_chat': handleZeroChat,
     'zero_research': handleZeroResearch,
     'zero_generate': handleZeroGenerate,
     'zero_emergence': handleZeroEmergence,
@@ -383,17 +428,58 @@ function formatReduceResponse(reduced) {
 
 // ============================================
 // Default executor (fallback when no context.executeModel)
+// Uses CognitiveRouter for production model execution
 // ============================================
 
 function createDefaultExecutor(context) {
+  const providerManager = require('../../core/providers');
+  const logger = require('../../utils/logger').child('ZeroHandler');
+
   return async (params) => {
-    // This would integrate with OpenRouter API
-    // For now, return a placeholder
-    console.warn('[ZeroHandler] No executeModel provided, using placeholder');
-    return {
-      content: `[Placeholder response for model ${params.model}]`,
-      confidence: 0.5
-    };
+    const { model, messages, temperature = 0.3, max_tokens = 4000 } = params;
+
+    if (!model) {
+      throw new Error('Model is required for execution');
+    }
+
+    // Build messages array if not provided
+    const chatMessages = messages || [
+      { role: 'user', content: params.query || params.prompt || '' }
+    ];
+
+    if (chatMessages.length === 0 || !chatMessages[0].content) {
+      throw new Error('No valid messages or query provided for model execution');
+    }
+
+    try {
+      logger.debug('Executing model via CognitiveRouter', { model, messageCount: chatMessages.length });
+
+      const response = await providerManager.chat(model, chatMessages, {
+        temperature,
+        max_tokens,
+        costPreference: context?.costPreference || 'low'
+      });
+
+      // Extract content and calculate confidence from response quality
+      const content = response.choices?.[0]?.message?.content || '';
+      const usage = response.usage || {};
+
+      // Confidence based on response completeness
+      let confidence = 0.8;
+      if (content.length > 2000) confidence += 0.1;
+      if (usage.completion_tokens > 500) confidence += 0.05;
+      confidence = Math.min(confidence, 1.0);
+
+      return {
+        content,
+        confidence,
+        usage,
+        model: response.model || model
+      };
+    } catch (error) {
+      logger.error('Model execution failed', { model, error: error.message });
+      throw new Error(`Model execution failed: ${error.message}`);
+    }
   };
 }
 

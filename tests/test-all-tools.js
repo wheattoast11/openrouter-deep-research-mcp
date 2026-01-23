@@ -142,5 +142,5 @@ async function testAllTools() {
 // Run the tests
 testAllTools().catch(error => {
   console.error('Test suite failed:', error);
-  process.exit(1);
+  process.exitCode = 1;
 });

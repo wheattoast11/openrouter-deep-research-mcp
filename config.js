@@ -44,7 +44,7 @@ const config = {
   models: {
     // Allow overriding planning model; provide a generally-available safe default
     planning: process.env.PLANNING_MODEL || "google/gemini-3-flash-preview", // Default planning/synthesis model
-    planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5.2-chat,google/gemini-3-pro-preview,anthropic/claude-opus-4.5,google/gemini-3-flash-preview")
+    planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5.2-chat,google/gemini-3-pro-preview,anthropic/claude-sonnet-4.5,google/gemini-3-flash-preview")
       .split(',').map(s=>s.trim()).filter(Boolean),
     useDynamicCatalog: process.env.USE_DYNAMIC_CATALOG === 'true',
     // Define models with domain strengths
@@ -58,9 +58,9 @@ const config = {
         // CSV fallback -> wrap ids as objects without explicit domains
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.HIGH_COST_MODELS) : [
-        { name: "google/gemini-3-pro-preview", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "anthropic/claude-sonnet-4.5", domains: ["reasoning", "technical", "general", "creative"] },
         { name: "openai/gpt-5.2-chat", domains: ["reasoning", "technical", "general"] },
-        { name: "anthropic/claude-opus-4.5", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "google/gemini-3-pro-preview", domains: ["reasoning", "technical", "general", "creative"] },
         { name: "perplexity/sonar-pro-search", domains: ["reasoning", "technical", "general", "creative"] },
         { name: "google/gemini-3-flash-preview", domains: ["reasoning", "technical", "general", "creative"] }
       ],
@@ -73,12 +73,11 @@ const config = {
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.LOW_COST_MODELS) : [
         { name: "google/gemini-3-flash-preview", domains: ["general", "reasoning", "technical", "coding"] },
+        { name: "anthropic/claude-haiku-4.5", domains: ["general", "technical", "reasoning"] },
         { name: "z-ai/glm-4.7", domains: ["general", "multimodal", "vision", "reasoning"] },
-        { name: "deepcogito/cogito-v2.1-671b", domains: ["coding", "technical", "reasoning"] },
         { name: "openai/gpt-oss-120b", domains: ["general", "reasoning", "search"] },
         { name: "moonshotai/kimi-k2-thinking", domains: ["general", "creative", "technical"] },
-        { name: "baidu/ernie-4.5-vl-424b-a47b", domains: ["general", "creative"] },
-        { name: "openai/o4-mini-deep-research", domains: ["coding", "editing", "technical"] }
+        { name: "baidu/ernie-4.5-vl-424b-a47b", domains: ["general", "creative"] }
       ],
     // Define a tier for potentially simpler tasks (adjust models as needed)
     veryLowCost: process.env.VERY_LOW_COST_MODELS ?
@@ -348,7 +347,7 @@ config.core = {
     circuitBreaker: {
       enabled: process.env.RAIL_CIRCUIT_BREAKER !== 'false',
       failureThreshold: parseInt(process.env.RAIL_CIRCUIT_THRESHOLD, 10) || 5,
-      resetTimeoutMs: parseInt(process.env.RAIL_CIRCUIT_RESET_MS, 10) || 30000
+      resetTimeoutMs: parseInt(process.env.RAIL_CIRCUIT_RESET_MS, 10) || 120000 // 2 minutes for recovery
     },
     // Routing strategy
     routing: {
@@ -358,19 +357,72 @@ config.core = {
     // Tunnels (agent-to-agent)
     tunnels: {
       enabled: process.env.RAIL_TUNNELS !== 'false',
-      defaultTtlMs: parseInt(process.env.RAIL_TUNNEL_TTL_MS, 10) || 60000,
+      defaultTtlMs: parseInt(process.env.RAIL_TUNNEL_TTL_MS, 10) || 600000, // 10 minutes - research can be slow
       requireAck: process.env.RAIL_TUNNEL_REQUIRE_ACK === 'true'
     },
     // Streaming consensus
     consensus: {
       enabled: process.env.RAIL_CONSENSUS !== 'false',
       minAgreement: parseFloat(process.env.RAIL_CONSENSUS_MIN) || 0.6,
-      timeoutMs: parseInt(process.env.RAIL_CONSENSUS_TIMEOUT_MS, 10) || 30000,
+      timeoutMs: parseInt(process.env.RAIL_CONSENSUS_TIMEOUT_MS, 10) || 300000, // 5 minutes - models can be slow
       updateIntervalMs: parseInt(process.env.RAIL_CONSENSUS_UPDATE_MS, 10) || 500
     },
     // Observability
     debug: process.env.RAIL_DEBUG === 'true',
     debugRails: (process.env.RAIL_DEBUG_RAILS || '').split(',').filter(Boolean)
+  },
+
+  // HVM Integration (v1.15.0 - Superintelligence Stream A)
+  hvm: {
+    enabled: process.env.HVM_ENABLED !== 'false',
+    interpreter: process.env.HVM_INTERPRETER || 'js', // 'js' | 'wasm' (wasm not yet available)
+    maxReductions: parseInt(process.env.HVM_MAX_REDUCTIONS, 10) || 100000,
+    // Parallel reduction settings
+    parallelization: {
+      enabled: process.env.HVM_PARALLEL !== 'false',
+      maxWorkers: parseInt(process.env.HVM_MAX_WORKERS, 10) || 4,
+      strategy: process.env.HVM_PARALLEL_STRATEGY || 'label-analysis' // label-analysis | greedy | conservative
+    },
+    // Crystallization-aware termination
+    crystallization: {
+      earlyExitThreshold: parseFloat(process.env.HVM_CRYSTALLIZATION_THRESHOLD) || 0.7,
+      checkIntervalMs: parseInt(process.env.HVM_CHECK_INTERVAL_MS, 10) || 100
+    },
+    // Observability
+    debug: process.env.HVM_DEBUG === 'true',
+    visualize: process.env.HVM_VISUALIZE === 'true'
+  },
+
+  // Mathematical Foundations (v1.15.0 - Superintelligence Stream C)
+  math: {
+    // P-adic Numbers (provider lineage distance)
+    padic: {
+      enabled: process.env.PADIC_ENABLED !== 'false',
+      prime: parseInt(process.env.PADIC_PRIME, 10) || 2,
+      cacheEnabled: process.env.PADIC_CACHE !== 'false',
+      cacheTTL: parseInt(process.env.PADIC_CACHE_TTL, 10) || 3600
+    },
+    // IQ Quadrature (phase-based consensus)
+    quadrature: {
+      enabled: process.env.QUADRATURE_ENABLED !== 'false',
+      phaseLockThreshold: parseFloat(process.env.QUADRATURE_PHASE_LOCK_THRESHOLD) || 0.1,
+      referenceModel: process.env.QUADRATURE_REFERENCE_MODEL || 'anthropic/claude-sonnet-4.5'
+    },
+    // Semantic Manifolds (curvature-aware embedding)
+    manifold: {
+      enabled: process.env.MANIFOLD_ENABLED !== 'false',
+      curvatureThreshold: parseFloat(process.env.MANIFOLD_CURVATURE_THRESHOLD) || 0.5,
+      neighborhoodSize: parseInt(process.env.MANIFOLD_NEIGHBORHOOD_SIZE, 10) || 10,
+      precomputeOnIndex: process.env.MANIFOLD_PRECOMPUTE === 'true'
+    },
+    // Procedural Rewards (Stream D)
+    rewards: {
+      enabled: process.env.REWARDS_ENABLED !== 'false',
+      crystallizationWeight: parseFloat(process.env.REWARDS_CRYSTALLIZATION_WEIGHT) || 0.5,
+      uncertaintyPenalty: parseFloat(process.env.REWARDS_UNCERTAINTY_PENALTY) || 0.3,
+      traceBonus: parseFloat(process.env.REWARDS_TRACE_BONUS) || 0.2,
+      tracePersistence: process.env.REWARDS_PERSIST_TRACE !== 'false'
+    }
   }
 };
 

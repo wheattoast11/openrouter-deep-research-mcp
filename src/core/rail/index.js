@@ -1,7 +1,8 @@
 /**
  * Rail Protocol - Unified Exports
  *
- * Seamless inter-agent communication with tunnels, consensus, and routing.
+ * Seamless inter-agent communication with tunnels, consensus, routing,
+ * and semantic error classification.
  *
  * @module core/rail
  */
@@ -13,6 +14,7 @@ const tunnel = require('./tunnel');
 const consensus = require('./consensus');
 const routes = require('./routes');
 const pipeline = require('./pipeline');
+const errors = require('../errors');
 
 module.exports = {
   // Core Rail types
@@ -50,5 +52,18 @@ module.exports = {
   // Pipeline execution
   Pipeline: pipeline.Pipeline,
   PipelineBuilder: pipeline.PipelineBuilder,
-  StageType: pipeline.StageType
+  StageType: pipeline.StageType,
+
+  // Semantic Error Taxonomy
+  SemanticError: errors.SemanticError,
+  ErrorCategory: errors.Category,
+  ErrorSeverity: errors.Severity,
+  TripDecision: errors.TripDecision,
+  classifyError: errors.classify,
+  wrapError: errors.wrapError,
+  recordErrorTrace: errors.recordTrace,
+  getErrorTraces: errors.getTraces,
+  getErrorTracesFromDB: errors.getTracesFromDB,
+  exportErrorTaxonomy: errors.exportTaxonomyState,
+  learnErrorPattern: errors.learnPattern
 };

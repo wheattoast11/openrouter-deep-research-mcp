@@ -680,13 +680,25 @@ async function main() {
       'Integration test suite'
     );
 
-    process.exit(success ? 0 : 1);
+    try {
+      const dbClient = require('../../../src/utils/dbClient');
+      if (dbClient?.close) {
+        await dbClient.close();
+      }
+    } catch (_) {}
+    process.exitCode = success ? 0 : 1;
   } catch (err) {
     console.error('\n❌ Test suite failed:', err.message);
     if (process.env.DEBUG) {
       console.error(err.stack);
     }
-    process.exit(1);
+    try {
+      const dbClient = require('../../../src/utils/dbClient');
+      if (dbClient?.close) {
+        await dbClient.close();
+      }
+    } catch (_) {}
+    process.exitCode = 1;
   }
 }
 

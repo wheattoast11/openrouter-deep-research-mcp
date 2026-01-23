@@ -16,6 +16,34 @@ const router = require('./router');
 const rail = require('./rail');
 const embeddedClient = require('./embeddedClient');
 const heartbeat = require('./heartbeat');
+const resonance = require('./resonance');
+const quadrature = { 
+  getGlobalCalibrator: () => null, 
+  quickPhaseLock: () => null 
+}; // require('./math/quadrature');
+
+// Lazy-loaded modules for next-gen ensemble
+// let dialectic = null;
+// let calibration = null;
+// let convergence = null;
+
+function getDialectic() {
+  // if (!dialectic) dialectic = require('./dialectic');
+  // return dialectic;
+  return null;
+}
+
+function getCalibration() {
+  // if (!calibration) calibration = require('./calibration');
+  // return calibration;
+  return null;
+}
+
+function getConvergence() {
+  // if (!convergence) convergence = require('./convergence');
+  // return convergence;
+  return null;
+}
 
 // SDK Adapter (lazy-loaded to avoid circular deps)
 let sdk = null;
@@ -149,5 +177,23 @@ module.exports = {
   HeartbeatState: heartbeat.HeartbeatState,
 
   // SDK Adapter (lazy-loaded)
-  getSDK
+  getSDK,
+
+  // Resonance Detection
+  ResonanceDetector: resonance.ResonanceDetector,
+  ResonanceState: resonance.ResonanceState,
+  createResonanceDetector: resonance.createDetector,
+  quickResonanceCheck: resonance.quickResonanceCheck,
+
+  // IQ Quadrature (Phase-Based Consensus)
+  // IQDecomposition: quadrature.IQDecomposition,
+  // IQSample: quadrature.IQSample,
+  // PhaseCalibrator: quadrature.PhaseCalibrator,
+  getGlobalCalibrator: quadrature.getGlobalCalibrator,
+  quickPhaseLock: quadrature.quickPhaseLock,
+
+  // Next-Gen Ensemble (lazy-loaded)
+  getDialectic,
+  getCalibration,
+  getConvergence
 };

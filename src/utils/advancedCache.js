@@ -5,6 +5,7 @@ const NodeCache = require('node-cache');
 const crypto = require('crypto');
 const dbClient = require('./dbClient');
 const config = require('../../config');
+const logger = require('./logger').child('AdvancedCache');
 
 class AdvancedCache {
   constructor() {
@@ -51,38 +52,48 @@ class AdvancedCache {
       }
 
       // Check semantic similarity using database vector search
-      const similar = await dbClient.findReportsBySimilarity(query, 3, this.similarityThreshold);
-      if (similar && similar.length > 0) {
-        const bestMatch = similar[0];
-        const sim = typeof bestMatch.similarityScore === 'number' ? bestMatch.similarityScore : (bestMatch.similarity || 0);
-        const reportId = String(bestMatch.id || bestMatch._id || '');
-        const content = bestMatch.final_report || bestMatch.finalReport || '';
-        const originalQuery = bestMatch.original_query || bestMatch.originalQuery || '';
-
-        // CRITICAL: Validate similarity is actually high enough before returning cached result
-        // This prevents returning unrelated cached content
-        if (sim < this.similarityThreshold) {
-          console.error(`[${new Date().toISOString()}] AdvancedCache: Rejecting low-similarity match (${sim?.toFixed ? sim.toFixed(3) : sim} < ${this.similarityThreshold}). Query: "${query.substring(0, 50)}..." Cached: "${originalQuery.substring(0, 50)}..."`);
-          return null; // Force fresh research
+      try {
+        if (dbClient.isShutdownComplete?.() || !dbClient.isDbInitialized?.()) {
+          logger.debug('Database not available for semantic cache search');
+          return null;
         }
+        
+        const similar = await dbClient.findReportsBySimilarity(query, 3, this.similarityThreshold);
+        if (similar && similar.length > 0) {
+          const bestMatch = similar[0];
+          const sim = typeof bestMatch.similarityScore === 'number' ? bestMatch.similarityScore : (bestMatch.similarity || 0);
+          const reportId = String(bestMatch.id || bestMatch._id || '');
+          const content = bestMatch.final_report || bestMatch.finalReport || '';
+          const originalQuery = bestMatch.original_query || bestMatch.originalQuery || '';
 
-        console.error(`[${new Date().toISOString()}] AdvancedCache: Semantic cache hit (similarity: ${sim?.toFixed ? sim.toFixed(3) : sim}) for query "${query.substring(0, 50)}..." matched cached query "${originalQuery.substring(0, 40)}..."`);
+          // CRITICAL: Validate similarity is actually high enough before returning cached result
+          // This prevents returning unrelated cached content
+          if (sim < this.similarityThreshold) {
+            console.error(`[${new Date().toISOString()}] AdvancedCache: Rejecting low-similarity match (${sim?.toFixed ? sim.toFixed(3) : sim} < ${this.similarityThreshold}). Query: "${query.substring(0, 50)}..." Cached: "${originalQuery.substring(0, 50)}..."`);
+            return null; // Force fresh research
+          }
 
-        // Cache the semantic match for future exact retrieval
-        this.resultCache.set(exactKey, {
-          result: content,
-          reportId: reportId,
-          similarity: sim,
-          originalQuery: originalQuery,
-          timestamp: new Date().toISOString()
-        });
+          console.error(`[${new Date().toISOString()}] AdvancedCache: Semantic cache hit (similarity: ${sim?.toFixed ? sim.toFixed(3) : sim}) for query "${query.substring(0, 50)}..." matched cached query "${originalQuery.substring(0, 40)}..."`);
 
-        return {
-          result: content,
-          reportId: reportId,
-          cacheType: 'semantic',
-          similarity: sim
-        };
+          // Cache the semantic match for future exact retrieval
+          this.resultCache.set(exactKey, {
+            result: content,
+            reportId: reportId,
+            similarity: sim,
+            originalQuery: originalQuery,
+            timestamp: new Date().toISOString()
+          });
+
+          return {
+            result: content,
+            reportId: reportId,
+            cacheType: 'semantic',
+            similarity: sim
+          };
+        }
+      } catch (dbErr) {
+        logger.warn('Database error during semantic cache search', { error: dbErr.message });
+        return null; // Graceful fallback
       }
 
       console.error(`[${new Date().toISOString()}] AdvancedCache: Cache miss for query "${query.substring(0, 50)}..."`);

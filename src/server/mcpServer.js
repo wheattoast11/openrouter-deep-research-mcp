@@ -59,6 +59,7 @@ function escapeHtml(str) {
 
 const { 
   // Schemas
+  zeroChatSchema,
   conductResearchSchema,
   researchFollowUpSchema,
   getPastResearchSchema,
@@ -92,6 +93,7 @@ const {
   batchResearchSchema, // Batch research for parallel job dispatch
   
   // Functions
+  zeroChat,
   conductResearch,
   researchFollowUp,
   getPastResearch,
@@ -468,7 +470,7 @@ function generateUITemplate(templateType, options = {}) {
   return templates[templateType] || templates['research-viewer'];
 }
 
-// Create MCP server with proper capabilities declaration per MCP spec 2025-06-18
+// Create MCP server with proper capabilities declaration per MCP spec 2025-11-25
 const server = new McpServer({
   name: config.server.name,
   version: config.server.version,
@@ -477,6 +479,8 @@ const server = new McpServer({
     prompts: { listChanged: true },
     resources: { subscribe: true, listChanged: true },
     logging: {},
+    sampling: {}, // SEP-1577: Sampling support
+    elicitation: { form: {}, url: {} }, // SEP-1036: Elicitation support
     // MCP 2025-11-25: Enable progress and job notifications for LLM agents
     notifications: { progress: true, job_complete: true }
   }
@@ -1166,6 +1170,11 @@ if (config.mcp?.features?.resources) {
 }
 
 // Register tools (minimal unified set)
+register(
+  "zero_chat",
+  zeroChatSchema,
+  wrapWithHandler('zero_chat', zeroChat)
+);
 register(
   "research",
   researchSchema,

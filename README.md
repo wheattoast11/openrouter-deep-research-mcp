@@ -18,7 +18,7 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## What's New (v1.12.0)
+## What's New (v1.14.0)
 
 - **Provider telemetry** - Model-level health, latency, error categories, fallback tracking
 - **Graceful degradation** - Key rotation cooldowns + streaming fallback on failures
@@ -130,7 +130,6 @@ Standard MCP config - STDIO is default, no flags needed:
 | Knowledge Base | ✓ | ✓ |
 | Session/Graph Tools | ✓ | ✓ |
 | Slash Commands | - | ✓ |
-| Zero CLI | - | standalone |
 
 ## Tools
 
@@ -224,8 +223,6 @@ User Query
 └─────────────────┘
 ```
 
-![Architecture](docs/diagram-architecture-branded.svg)
-
 ## Links
 
 - **Homepage:** [terminals.tech](https://terminals.tech)
@@ -244,4 +241,4 @@ npm publish --access public        # Publish to npm
 
 ---
 
-**Version:** 1.11.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
+**Version:** 1.14.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT

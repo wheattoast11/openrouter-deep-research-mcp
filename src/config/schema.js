@@ -180,12 +180,30 @@ const MCPSchema = z.object({
   mode: z.enum(['AGENT', 'MANUAL', 'ALL']).default('ALL'),
   features: z.object({
     prompts: booleanFromEnv.default(true),
-    resources: booleanFromEnv.default(true)
+    resources: booleanFromEnv.default(true),
+    sampling: z.object({
+      enabled: booleanFromEnv.default(true),
+      withTools: booleanFromEnv.default(true)
+    }).default({}),
+    elicitation: z.object({
+      form: booleanFromEnv.default(true),
+      url: booleanFromEnv.default(true)
+    }).default({})
   }).default({}),
   transport: z.object({
     streamableHttpEnabled: booleanFromEnv.default(true)
   }).default({})
 });
+
+/**
+ * Routing configuration schema
+ */
+const RoutingSchema = z.object({
+  boltzmannTemperature: floatFromEnv(0.3),
+  minConfidenceThreshold: floatFromEnv(0.5),
+  maxEnergyThreshold: floatFromEnv(0.8),
+  intentDetectionEnabled: booleanFromEnv.default(true)
+}).default({});
 
 /**
  * Full configuration schema
@@ -199,7 +217,8 @@ const ConfigSchema = z.object({
   logging: LoggingSchema.default({}),
   caching: CachingSchema.default({}),
   core: CoreSchema.default({}),
-  mcp: MCPSchema.default({})
+  mcp: MCPSchema.default({}),
+  routing: RoutingSchema.default({})
 });
 
 /**

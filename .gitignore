@@ -15,6 +15,13 @@ backups/
 .env.test.local
 .env.production.local
 
+# Private & Proprietary
+private/
+src/cli/
+bin/zero
+tests/unit/auth.test.js
+examples/auth-integration.js
+
 # SpecStory artifacts
 .specstory/
 .specstory/cursor_rules_backups/

@@ -551,18 +551,21 @@ async function createRouter(config = {}) {
 
 /**
  * Demonstration function showing router in action.
+ * Uses logger for output, suitable for diagnostic mode.
  */
 async function demonstrateRouter() {
-  console.log('Initializing Thermodynamic Router...\n');
+  logger.info('Initializing Thermodynamic Router for demonstration');
 
   const router = new ThermodynamicRouter();
   await router.initialize();
 
-  console.log('Attractors initialized:');
-  for (const attractor of router.getAttractors()) {
-    console.log(`  - ${attractor.id}: ${attractor.name} (variance: ${attractor.variance.toFixed(4)})`);
-  }
-  console.log('');
+  logger.info('Attractors initialized', {
+    attractors: router.getAttractors().map(a => ({
+      id: a.id,
+      name: a.name,
+      variance: a.variance.toFixed(4)
+    }))
+  });
 
   const testQueries = [
     'Who are our top customers this quarter?',
@@ -575,12 +578,19 @@ async function demonstrateRouter() {
     'Analyze market trends in our industry'
   ];
 
+  const results = [];
   for (const query of testQueries) {
-    console.log('-'.repeat(60));
     const decision = await router.route(query);
-    console.log(formatRoutingDecision(decision));
-    console.log('');
+    results.push({
+      query: query.substring(0, 50),
+      selected: decision.selectedAttractor,
+      confidence: decision.confidence.toFixed(3),
+      model: decision.model
+    });
   }
+
+  logger.info('Routing demonstration complete', { results });
+  return results;
 }
 
 module.exports = {
@@ -596,5 +606,8 @@ module.exports = {
 
 // Run demonstration if executed directly
 if (require.main === module) {
-  demonstrateRouter().catch(console.error);
+  demonstrateRouter().catch(err => {
+    logger.error('Demonstration failed', { error: err.message });
+    process.exit(1);
+  });
 }

@@ -7,8 +7,10 @@ const localKnowledge = require('../utils/localKnowledge'); // Local knowledge fo
 const UnifiedSearchMesh = require('../utils/robustWebScraper'); // Web grounding for real-time data
 const { Signal } = require('../core/signal'); // Signal Protocol integration
 const { tokenFromSignal } = require('../core/rail/index'); // Rail Protocol - Token wrapping for provenance
+const { StreamingConsensus, ConsensusState } = require('../core/rail/consensus'); // Rail Consensus for multi-model verification
 const providerTelemetry = require('../utils/providerTelemetry');
-const providerManager = require('../core/providers');
+const providerManager = require('../core/providers'); // Now CognitiveRouter
+const { Interaction, InteractionType } = require('../core/interactions/types');
 const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
@@ -39,12 +41,19 @@ const webScraper = new UnifiedSearchMesh();
 /**
  * Convert a research result to a Signal object
  * @param {Object} result - Research result from _executeSingleResearch
+ * @param {Object} phaseMetadata - Optional phase tracking metadata
+ * @param {number} phaseMetadata.sequenceNumber - Position in ensemble execution
+ * @param {number} phaseMetadata.ensembleSize - Total models in ensemble
+ * @param {string} phaseMetadata.phaseName - Current phase name (e.g., 'execution', 'synthesis')
+ * @param {number} phaseMetadata.duration - Execution duration in ms
  * @returns {Signal} Signal object for consensus/verification
  */
-function resultToSignal(result) {
+function resultToSignal(result, phaseMetadata = {}) {
   if (result.error) {
     return Signal.error(result.errorMessage || result.result, result.model, {
-      tags: ['research', 'ensemble']
+      tags: ['research', 'ensemble'],
+      phase: phaseMetadata.sequenceNumber ?? 0,
+      phaseName: phaseMetadata.phaseName || 'error'
     });
   }
 
@@ -56,7 +65,14 @@ function resultToSignal(result) {
   if (/\[Source:|https?:\/\//.test(result.result || '')) confidence += 0.05;
 
   return Signal.response(result.result, result.model, Math.min(confidence, 1.0), {
-    tags: ['research', 'ensemble', `agent-${result.agentId}`]
+    tags: ['research', 'ensemble', `agent-${result.agentId}`],
+    phase: phaseMetadata.sequenceNumber ?? 0,
+    phaseName: phaseMetadata.phaseName || 'execution',
+    ensembleMetadata: {
+      sequenceNumber: phaseMetadata.sequenceNumber,
+      ensembleSize: phaseMetadata.ensembleSize,
+      duration: phaseMetadata.duration
+    }
   });
 }
 
@@ -268,6 +284,11 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
   async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null, extra = {}) {
     const domain = await this.classifyQueryDomain(query, { requestId });
     const complexity = await this.assessQueryComplexity(query, { requestId });
+    
+    // Adaptive Ensemble Scaling (Batch A)
+    const adaptiveSize = complexity === 'simple' ? 1 : complexity === 'complex' ? 3 : 2;
+    const targetEnsembleSize = Math.max(1, Math.min(3, adaptiveSize));
+
     const mode = extra?.mode || 'standard';
     // Hyper mode prefers fastest locally-available providers from config/catalog (no hardcoded Morph models)
     let primaryModel;
@@ -350,17 +371,94 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
       } catch (_) {}
     }
 
-    const modelsToRun = Array.from(ensemble).slice(0, Math.max(2, Math.min(3, this.ensembleSize)));
-    logger.debug('Ensemble models selected', { requestId, agentId, models: modelsToRun });
+    // Adaptive Ensemble Scaling (Batch A)
+    // Use targetEnsembleSize derived from query complexity
+    const modelsToRun = Array.from(ensemble).slice(0, targetEnsembleSize);
+    logger.debug('Ensemble models selected', { requestId, agentId, models: modelsToRun, complexity, adaptiveSize: targetEnsembleSize });
 
-    const ensemblePromises = modelsToRun.map(model => 
-      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent, {
-        costPreference,
-        primaryModel: primaryModel,
-        ensemble: modelsToRun
+    // Create StreamingConsensus for multi-model verification
+    const consensus = new StreamingConsensus({
+      minAgreement: config.core?.rail?.consensus?.minAgreement ?? 0.6,
+      timeoutMs: config.core?.rail?.consensus?.timeoutMs ?? 30000,
+      updateIntervalMs: config.core?.rail?.consensus?.updateIntervalMs ?? 500
+    });
+
+    // Start consensus tracking (no progressToken needed for internal use)
+    consensus.start(requestId);
+
+    // Execute ensemble with consensus tracking - each model feeds its signal as it completes
+    const results = await Promise.all(
+      modelsToRun.map(async (model) => {
+        const result = await this._executeSingleResearch(
+          query, agentId, model, audienceLevel, includeSources,
+          images, textDocuments, structuredData, inputEmbeddings,
+          requestId, onEvent, {
+            costPreference,
+            primaryModel: primaryModel,
+            ensemble: modelsToRun
+          }
+        );
+
+        // Feed signal to consensus calculator as each model completes
+        if (result.signal) {
+          consensus.addSignal({
+            source: model,
+            confidence: result.signal.confidence || 0.8,
+            payload: result.result
+          });
+
+          // Emit consensus update event
+          if (onEvent) {
+            const currentConsensus = consensus.calculate();
+            await onEvent('consensus_update', {
+              requestId,
+              state: currentConsensus.state,
+              agreement: currentConsensus.agreement,
+              confidence: currentConsensus.confidence,
+              signalCount: currentConsensus.signalCount,
+              elapsed: currentConsensus.elapsed
+            });
+          }
+        }
+
+        return result;
       })
     );
-    return Promise.all(ensemblePromises);
+
+    // Get final consensus result
+    const finalConsensus = consensus.getResult();
+    consensus.stop();
+
+    logger.info('Ensemble consensus calculated', {
+      requestId,
+      agentId,
+      state: finalConsensus.state,
+      agreement: finalConsensus.agreement?.toFixed(2),
+      confidence: finalConsensus.confidence?.toFixed(2),
+      signalCount: finalConsensus.signalCount,
+      duration: finalConsensus.duration
+    });
+
+    // Emit final consensus event
+    if (onEvent) {
+      await onEvent('ensemble_consensus', {
+        requestId,
+        consensus: {
+          state: finalConsensus.state,
+          agreement: finalConsensus.agreement,
+          confidence: finalConsensus.confidence,
+          majority: finalConsensus.majority ? {
+            sources: finalConsensus.majority.sources,
+            count: finalConsensus.majority.count
+          } : null,
+          duration: finalConsensus.duration
+        }
+      });
+    }
+
+    // Attach consensus metadata to results for downstream use
+    results._consensus = finalConsensus;
+    return results;
   }
   
   // Updated to include structuredData, inputEmbeddings, requestId, and onEvent parameters
@@ -452,6 +550,15 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     const userMessageContent = [];
     let queryText = query; // Start with the original query text
     
+    // Terminals Interaction Primitive
+    const interaction = new Interaction({
+        type: InteractionType.RESEARCH,
+        input: query,
+        context: { agentId, requestId },
+        constraints: { cost: context.costPreference || 'low' }
+    });
+    interaction.addTrace('started');
+    
     if (modelSupportsVision && images && images.length > 0) {
        logger.debug('Including images with analysis prompt', { requestId, agentId, imageCount: images.length, model });
        // Modify query text to ask for image analysis
@@ -487,11 +594,11 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
        throw new Error(`ResearchAgent ${agentId}: Attempted to call API with undefined model.`);
     }
     
+    let activeModel = model;
     try {
     const fallbackCandidates = Array.isArray(context.ensemble) ? context.ensemble : [];
     const fallbackQueue = [model, ...fallbackCandidates.filter(id => id && id !== model)];
     let response = null;
-    let activeModel = model;
     let lastError = null;
 
     for (let i = 0; i < fallbackQueue.length; i++) {
@@ -536,19 +643,29 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
         usage
       };
 
-      // Create signal from result
-      resultObj.signal = resultToSignal(resultObj);
+      // Create signal from result with phase metadata
+      const phaseMetadata = {
+        sequenceNumber: context.phaseMetadata?.sequenceNumber ?? 0,
+        ensembleSize: context.phaseMetadata?.ensembleSize ?? 1,
+        phaseName: context.phaseMetadata?.phaseName || 'execution',
+        duration
+      };
+      resultObj.signal = resultToSignal(resultObj, phaseMetadata);
 
       // Wrap signal in Token for provenance tracking (Rail Protocol)
       resultObj.token = tokenFromSignal(resultObj.signal);
       resultObj.token.trace.push(`ResearchAgent:${agentId}:${activeModel}`);
 
-      // Emit signal event for real-time consumers
+      // Emit isomorphic MeshEvent for Knowledge Graph and external observers
       if (onEvent) {
+        const meshEvent = resultObj.token.toMeshEvent();
+        await onEvent('mesh_event', meshEvent);
+        
         await onEvent('model_signal', {
           signal: resultObj.signal.toJSON(),
           agentId,
-          model: activeModel
+          model: activeModel,
+          shapeHash: resultObj.signal.shapeHash
         });
       }
 
@@ -568,8 +685,14 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
         errorStack: error.stack // Include stack trace for better debugging
       };
 
-      // Create error signal
-      errorObj.signal = resultToSignal(errorObj);
+      // Create error signal with phase metadata
+      const errorPhaseMetadata = {
+        sequenceNumber: context.phaseMetadata?.sequenceNumber ?? 0,
+        ensembleSize: context.phaseMetadata?.ensembleSize ?? 1,
+        phaseName: 'error',
+        duration
+      };
+      errorObj.signal = resultToSignal(errorObj, errorPhaseMetadata);
 
       // Wrap error signal in Token for provenance tracking (Rail Protocol)
       errorObj.token = tokenFromSignal(errorObj.signal);
@@ -587,12 +710,14 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     const mode = extra?.mode || 'standard';
 
     // Bounded concurrency queue
-    const results = [];
+    const results = new Array(queries.length).fill(null);
     let idx = 0;
     const worker = async () => {
       while (idx < queries.length) {
         const current = idx++;
         const q = queries[current];
+        if (!q) continue; // Safety check
+
         try {
           if (onEvent) await onEvent('agent_started', { agent_id: q.id, query: q.query, cost: costPreference, mode });
           const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent, { mode });
@@ -608,7 +733,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     const workers = Array.from({ length: Math.min(parallelism, queries.length) }, () => worker());
     await Promise.all(workers);
 
-    const flatResults = results.flat();
+    const flatResults = results.filter(r => r !== null).flat();
     const duration = Date.now() - startTime;
     const successfulTasks = flatResults.filter(r => !r.error).length;
     const failedTasks = flatResults.length - successfulTasks;

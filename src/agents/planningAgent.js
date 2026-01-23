@@ -186,7 +186,11 @@ Refinement Guidelines:
     const relevantReports = (pastReports || []).filter(r => {
       const score = r.similarityScore ?? 0;
       if (score < MIN_SIMILARITY_FOR_CONTEXT) {
-        console.error(`[PlanningAgent] Excluding low-similarity report: "${r.query?.substring(0, 40)}..." (score: ${score.toFixed(3)} < ${MIN_SIMILARITY_FOR_CONTEXT})`);
+        logger.debug('Excluding low-similarity report', {
+          query: r.query?.substring(0, 40),
+          score: score.toFixed(3),
+          threshold: MIN_SIMILARITY_FOR_CONTEXT
+        });
         return false;
       }
       return true;
@@ -200,7 +204,10 @@ ${relevantReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateStri
 ---
 `;
     } else if (pastReports && pastReports.length > 0) {
-      console.error(`[PlanningAgent] All ${pastReports.length} past reports filtered out due to low similarity scores`);
+      logger.debug('All past reports filtered out due to low similarity', {
+        reportCount: pastReports.length,
+        threshold: MIN_SIMILARITY_FOR_CONTEXT
+      });
     }
 
     let clientContextText = '';

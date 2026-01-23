@@ -169,29 +169,6 @@ Complete reference for all environment variables supported by OpenRouter Agents 
 | `SIMPLE_TOOLS` | `true` | Enable short parameter aliases |
 | `MAX_TOOL_DEPTH` | `3` | Maximum tool recursion depth (0 to disable) |
 
-## Core Abstractions
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CORE_HANDLERS_ENABLED` | `false` | Enable consolidated handlers |
-| `CORE_HANDLER_DOMAINS` | `` | Domains using new handlers (comma-separated) |
-| `SIGNAL_PROTOCOL_ENABLED` | `false` | Enable Signal protocol |
-| `SIGNAL_MAX_HISTORY` | `1000` | Maximum signal history size |
-| `ROLESHIFT_ENABLED` | `false` | Enable RoleShift bidirectional protocol |
-| `ROLESHIFT_TIMEOUT_MS` | `60000` | RoleShift request timeout |
-| `STRICT_SCHEMA_VALIDATION` | `false` | Enable strict Zod schema validation |
-
-### Consensus Configuration
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CONSENSUS_MIN_AGREEMENT` | `0.6` | Minimum agreement for consensus |
-
-### Crystallization Configuration
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CRYSTAL_POSITIVE_WEIGHT` | `0.2` | Weight for positive crystallization patterns |
-| `CRYSTAL_NEGATIVE_WEIGHT` | `0.1` | Weight for negative crystallization patterns |
-
 ## Experimental
 
 | Variable | Default | Description |
@@ -224,10 +201,6 @@ PARALLELISM=4
 # Models (optional overrides)
 # PLANNING_MODEL=openai/gpt-5-chat
 # ENSEMBLE_SIZE=3
-
-# Core Features (opt-in)
-# CORE_HANDLERS_ENABLED=true
-# SIGNAL_PROTOCOL_ENABLED=true
 ```
 
 ---

@@ -44,6 +44,7 @@ const EventTypes = {
   TOOL_EXECUTED: 'TOOL_EXECUTED',
   SESSION_FORKED: 'SESSION_FORKED',
   CHECKPOINT_CREATED: 'CHECKPOINT_CREATED',
+  RESPONSE_RECEIVED: 'RESPONSE_RECEIVED',
   // Job lifecycle events for batch research tracking
   JOBS_DISPATCHED: 'JOBS_DISPATCHED',
   JOBS_COMPLETED: 'JOBS_COMPLETED'
@@ -69,8 +70,18 @@ const sessionReducer = (state, event) => {
   const newState = { ...state };
   newState.metadata = { ...state.metadata, lastActivityAt: new Date().toISOString() };
 
+  // Initialize history if missing
+  if (!newState.history) newState.history = [];
+
   switch (event.type) {
     case EventTypes.QUERY_SUBMITTED:
+      const queryItem = {
+        id: event.payload.queryId,
+        role: 'user',
+        content: event.payload.query,
+        timestamp: event.payload.timestamp || new Date().toISOString(),
+        metadata: event.payload.parameters
+      };
       return {
         ...newState,
         queries: [...state.queries, {
@@ -78,7 +89,21 @@ const sessionReducer = (state, event) => {
           query: event.payload.query,
           timestamp: event.payload.timestamp || new Date().toISOString(),
           parameters: event.payload.parameters
-        }]
+        }],
+        history: [...(state.history || []), queryItem]
+      };
+
+    case EventTypes.RESPONSE_RECEIVED:
+      const responseItem = {
+        id: event.payload.responseId,
+        role: 'assistant',
+        content: event.payload.content,
+        timestamp: event.payload.timestamp || new Date().toISOString(),
+        metadata: event.payload.metadata
+      };
+      return {
+        ...newState,
+        history: [...(state.history || []), responseItem]
       };
 
     case EventTypes.REPORT_SAVED:
@@ -489,6 +514,48 @@ class SessionManager {
       canUndo: store.canUndo ? store.canUndo() : false,
       canRedo: store.canRedo ? store.canRedo() : false
     };
+  }
+
+  /**
+   * Check if session can undo (adapter for handler interface)
+   */
+  async canUndo(sessionId) {
+    const state = await this.getState(sessionId);
+    return state?.canUndo || false;
+  }
+
+  /**
+   * Check if session can redo (adapter for handler interface)
+   */
+  async canRedo(sessionId) {
+    const state = await this.getState(sessionId);
+    return state?.canRedo || false;
+  }
+
+  /**
+   * Create checkpoint (alias for handler interface)
+   */
+  async checkpoint(sessionId, name) {
+    return this.createCheckpoint(sessionId, name);
+  }
+
+  /**
+   * Fork session (alias for handler interface)
+   */
+  async fork(sourceId, targetId) {
+    return this.forkSession(sourceId, targetId);
+  }
+
+  /**
+   * Add a message to a session (compatibility layer for tools.js)
+   */
+  async addMessage(sessionId, role, content, metadata = {}) {
+    const eventType = role === 'assistant' ? EventTypes.RESPONSE_RECEIVED : EventTypes.QUERY_SUBMITTED;
+    const payload = role === 'assistant' 
+      ? { responseId: `resp_${Date.now()}`, content, timestamp: new Date().toISOString(), metadata }
+      : { queryId: `q_${Date.now()}`, query: content, timestamp: new Date().toISOString(), parameters: metadata };
+    
+    return this.dispatch(sessionId, eventType, payload);
   }
 
   /**

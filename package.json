@@ -1,11 +1,10 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.12.0",
+  "version": "1.14.0",
   "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
   "bin": {
-    "openrouter-agents": "src/server/mcpServer.js",
-    "zero": "bin/zero"
+    "openrouter-agents": "src/server/mcpServer.js"
   },
   "scripts": {
     "start": "node src/server/mcpServer.js",
@@ -16,6 +15,7 @@
     "test:integration": "node tests/integration/orchestration/mic-drop.test.js",
     "test:mic-drop": "DRY_RUN=true node tests/integration/orchestration/mic-drop.test.js",
     "test:mic-drop:live": "node tests/integration/orchestration/mic-drop.test.js",
+    "bench": "node src/bench/index.js",
     "postinstall": "node scripts/postinstall.js",
     "prepublishOnly": "npm test",
     "setup-claude": "node scripts/setup-claude-code.js",
@@ -26,6 +26,7 @@
   "files": [
     "src/",
     "bin/",
+    "templates/",
     "config.js",
     "scripts/postinstall.js",
     "scripts/setup-claude-code.js",

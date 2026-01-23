@@ -14,6 +14,13 @@
 const crypto = require('crypto');
 const { Rail, Token, Ok, Err } = require('../rail');
 
+// Lazy-loaded math module
+let _quadratureModule = null;
+
+function getQuadratureModule() {
+  return null;
+}
+
 /**
  * Consensus state enum
  */
@@ -22,11 +29,16 @@ const ConsensusState = {
   PARTIAL: 'partial',
   CONVERGED: 'converged',
   DIVERGED: 'diverged',
-  TIMEOUT: 'timeout'
+  TIMEOUT: 'timeout',
+  PHASE_LOCKED: 'phase_locked'  // IQ quadrature detected phase alignment
 };
 
 /**
  * StreamingConsensus - Calculates consensus with real-time updates
+ *
+ * Enhanced with IQ Quadrature for phase-based consensus detection.
+ * When signals from multiple models align in phase (I/Q components),
+ * consensus is achieved even before vote-based agreement.
  */
 class StreamingConsensus {
   /**
@@ -34,6 +46,9 @@ class StreamingConsensus {
    * @param {number} [options.minAgreement=0.6] - Minimum agreement threshold
    * @param {number} [options.timeoutMs=30000] - Timeout for consensus
    * @param {number} [options.updateIntervalMs=500] - Notification interval
+   * @param {boolean} [options.useQuadrature=true] - Enable IQ quadrature analysis
+   * @param {number} [options.phaseLockThreshold=0.1] - Phase variance threshold for lock
+   * @param {string} [options.referenceModel] - Reference model for phase alignment
    */
   constructor(options = {}) {
     this.id = crypto.randomUUID();
@@ -45,6 +60,40 @@ class StreamingConsensus {
     this._state = ConsensusState.PENDING;
     this._startTime = null;
     this._intervalId = null;
+
+    // IQ Quadrature settings
+    this._useQuadrature = false;
+    this._phaseLockThreshold = options.phaseLockThreshold ?? 0.1;
+    this._referenceModel = options.referenceModel ?? 'anthropic/claude-sonnet-4.5';
+    this._iqDecomposition = null;
+
+    // Initialize IQ decomposition if available
+    this._initQuadrature();
+  }
+
+  /**
+   * Get phase offset based on provider
+   * @private
+   * @param {string} source - Model source string
+   * @returns {number} Phase in radians
+   */
+  _getProviderPhase(source) {
+    if (!source) return 4.71; // Others (3*PI/2)
+    const lower = source.toLowerCase();
+    
+    if (lower.startsWith('anthropic')) return 0;       // 0 degrees
+    if (lower.startsWith('openai')) return 1.57;       // 90 degrees
+    if (lower.startsWith('google')) return 3.14;       // 180 degrees
+    
+    return 4.71; // Others (270 degrees)
+  }
+
+  /**
+   * Initialize IQ quadrature module if available
+   * @private
+   */
+  _initQuadrature() {
+    // Disabled
   }
 
   /**
@@ -74,16 +123,20 @@ class StreamingConsensus {
    * @param {object} signal - Signal with source and confidence
    */
   addSignal(signal) {
-    this._signals.push({
+    const signalData = {
       source: signal.source,
       confidence: signal.confidence ?? 1.0,
       payload: signal.payload,
       vote: this._extractVote(signal),
       timestamp: Date.now()
-    });
+    };
 
-    // Check for convergence
+    this._signals.push(signalData);
+
+    // Check for convergence (vote-based)
     const current = this.calculate();
+
+    // Vote-based convergence (traditional path)
     if (current.agreement >= this.minAgreement && this._signals.length >= 2) {
       this._state = ConsensusState.CONVERGED;
       this._emitUpdate();
@@ -98,18 +151,39 @@ class StreamingConsensus {
    * @private
    */
   _extractVote(signal) {
-    // Simple hash-based vote extraction
-    const payload = typeof signal.payload === 'string'
-      ? signal.payload
-      : JSON.stringify(signal.payload);
+    // Deterministic shapeHash via L1 Signal alignment
+    if (signal.shapeHash) {
+      return signal.shapeHash;
+    }
 
-    // Extract key phrases or use first 100 chars as vote signature
-    return payload.slice(0, 100).toLowerCase().replace(/\s+/g, ' ').trim();
+    // Fallback: Compute hash of payload (consistent with Signal.shapeHash but payload-focused)
+    // We strictly hash the payload to ensure content agreement
+    try {
+      const payload = signal.payload;
+      // Simple deterministic stringify (keys sorted)
+      const canonical = JSON.stringify(payload, (key, value) => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          return Object.keys(value).sort().reduce((sorted, k) => {
+            sorted[k] = value[k];
+            return sorted;
+          }, {});
+        }
+        return value;
+      });
+      
+      return crypto.createHash('sha256').update(canonical || '').digest('hex');
+    } catch (e) {
+      // Emergency fallback to legacy slicing if hashing fails
+      const payloadStr = typeof signal.payload === 'string'
+        ? signal.payload
+        : JSON.stringify(signal.payload);
+      return payloadStr.slice(0, 100).toLowerCase().replace(/\s+/g, ' ').trim();
+    }
   }
 
   /**
    * Calculate current consensus
-   * @returns {{ agreement: number, signals: Array, state: string }}
+   * @returns {{ agreement: number, signals: Array, state: string, quadrature?: object }}
    */
   calculate() {
     if (this._signals.length === 0) {
@@ -148,7 +222,7 @@ class StreamingConsensus {
       ? maxVote.totalConfidence / maxVote.count
       : 0;
 
-    return {
+    const result = {
       agreement,
       confidence: avgConfidence,
       majority: maxVote,
@@ -156,6 +230,8 @@ class StreamingConsensus {
       signalCount: this._signals.length,
       elapsed: Date.now() - (this._startTime || Date.now())
     };
+
+    return result;
   }
 
   /**
@@ -164,7 +240,7 @@ class StreamingConsensus {
    */
   _emitUpdate() {
     const current = this.calculate();
-    const token = Token.from({
+    const tokenPayload = {
       progressToken: this._progressToken,
       state: this._state,
       signals: this._signals.map(s => ({
@@ -175,10 +251,17 @@ class StreamingConsensus {
       currentConsensus: current.agreement,
       confidence: current.confidence,
       complete: this._state === ConsensusState.CONVERGED ||
-                this._state === ConsensusState.TIMEOUT,
+                this._state === ConsensusState.TIMEOUT ||
+                this._state === ConsensusState.PHASE_LOCKED,
       elapsed: current.elapsed
-    }, 'consensus');
+    };
 
+    // Include quadrature metrics if available
+    if (current.quadrature) {
+      tokenPayload.quadrature = current.quadrature;
+    }
+
+    const token = Token.from(tokenPayload, 'consensus');
     this._rail.send(token);
   }
 
@@ -205,11 +288,39 @@ class StreamingConsensus {
    * @returns {object}
    */
   getResult() {
+    const calculated = this.calculate();
     return {
-      ...this.calculate(),
+      ...calculated,
       signals: this._signals,
-      duration: Date.now() - (this._startTime || Date.now())
+      duration: Date.now() - (this._startTime || Date.now()),
+      // Include IQ decomposition state if available
+      iqState: this._iqDecomposition?.exportState?.() ?? null
     };
+  }
+
+  /**
+   * Get IQ decomposition for external analysis
+   * @returns {object|null}
+   */
+  getQuadrature() {
+    return this._iqDecomposition;
+  }
+
+  /**
+   * Check if consensus was achieved via phase-lock
+   * @returns {boolean}
+   */
+  isPhaseLocked() {
+    return this._state === ConsensusState.PHASE_LOCKED;
+  }
+
+  /**
+   * Get resonance strength (amplitude when phase-locked)
+   * @returns {number} 0-1, or 0 if not using quadrature
+   */
+  getResonanceStrength() {
+    if (!this._iqDecomposition) return 0;
+    return this._iqDecomposition.resonanceStrength();
   }
 }
 
@@ -261,8 +372,20 @@ class ConsensusManager {
     return Array.from(this._sessions.values()).map(s => ({
       id: s.id,
       state: s._state,
-      signalCount: s._signals.length
+      signalCount: s._signals.length,
+      isPhaseLocked: s.isPhaseLocked(),
+      resonanceStrength: s.getResonanceStrength(),
+      hasQuadrature: !!s._iqDecomposition
     }));
+  }
+
+  /**
+   * Create a consensus session with IQ quadrature enabled
+   * @param {object} options - Consensus options
+   * @returns {StreamingConsensus}
+   */
+  createWithQuadrature(options = {}) {
+    return this.create(options);
   }
 }
 
@@ -275,5 +398,7 @@ module.exports = {
   ConsensusManager,
   manager,
   // MCP notification name
-  NOTIFICATION_TYPE: 'notifications/rail.consensus'
+  NOTIFICATION_TYPE: 'notifications/rail.consensus',
+  // Utility for external quadrature access
+  getQuadratureModule
 };

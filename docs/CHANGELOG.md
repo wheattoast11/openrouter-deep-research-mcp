@@ -316,3 +316,13 @@
 - Repo cleanup: moved docs/ and tests/
 
 For older changes, see repository history or Releases.
+
+## v1.1.1 — 2025-08-09
+
+- OAuth2/JWT auth scaffolding for MCP HTTP transport; cors + exposed Mcp-Session-Id
+- Streamable HTTP skeleton with DNS rebinding protection
+- 2025 model prioritization (Qwen3, Gemini 2.5, Grok-4, GPT-5) in dynamic catalog
+- Kurtosis-guided ensembles (2-3 models) with multimodal fallbacks
+- PGlite improvements: adaptive thresholds, keyword fallback, HNSW params (m=16, ef=64)
+- AIMD concurrency controller hooks in planning agent; hybrid batching in OpenRouter client
+- gen-docs script to embed report summaries into README

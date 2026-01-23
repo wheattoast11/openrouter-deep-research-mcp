@@ -19,6 +19,15 @@
 const crypto = require('crypto');
 const { deterministicStringify } = require('../utils/deterministic');
 
+// Lazy-loaded modules to avoid circular dependencies
+function getHVMModule() {
+  return null;
+}
+
+function getPadicModule() {
+  return null;
+}
+
 // =============================================================================
 // RESULT: Railway-Oriented Error Handling (SDK-Compatible)
 // =============================================================================
@@ -209,7 +218,7 @@ class Token {
       layer: 'L3',
       type: 'Token',
       address: this.address,
-      capabilities: ['derive', 'toJSON', 'toMeshEvent'],
+      capabilities: ['derive', 'toJSON', 'toMeshEvent', 'toHVMAgent', 'traceDistance'],
       state: {
         origin: this.origin,
         traceLength: this.trace?.length ?? 0,
@@ -218,6 +227,240 @@ class Token {
         shapeHash: this.shapeHash
       }
     };
+  }
+
+  // ===========================================================================
+  // HVM INTEGRATION (L2 Bridge)
+  // ===========================================================================
+
+  /**
+   * Determine the Interaction Calculus type for this token's value
+   * Maps token semantics to HVM3 IC types:
+   * - Query tokens → LAM (abstraction waiting for input)
+   * - Response tokens → APP (application of result)
+   * - Fork tokens → SUP (superposition of alternatives)
+   * - Null/void → ERA (erasure)
+   * - Default → VAR (reference)
+   *
+   * @returns {string} IC type: 'VAR' | 'ERA' | 'LAM' | 'APP' | 'SUP' | 'DUP'
+   */
+  determineICType() {
+    const value = this.value;
+
+    // Null/undefined → Erasure
+    if (value === null || value === undefined) {
+      return 'ERA';
+    }
+
+    // Signal-based detection
+    if (value && typeof value === 'object') {
+      const signalType = value.type;
+
+      // Query signals are abstractions waiting for input
+      if (signalType === 'query' || signalType === 'request') {
+        return 'LAM';
+      }
+
+      // Response signals are applications (computed results)
+      if (signalType === 'response' || signalType === 'result') {
+        return 'APP';
+      }
+
+      // Fork/branch signals are superpositions
+      if (signalType === 'fork' || signalType === 'branch' || signalType === 'amb') {
+        return 'SUP';
+      }
+
+      // Consensus signals involve duplication
+      if (signalType === 'consensus' || signalType === 'aggregate') {
+        return 'DUP';
+      }
+
+      // Arrays could represent multiple alternatives
+      if (Array.isArray(value)) {
+        return value.length > 1 ? 'SUP' : 'VAR';
+      }
+    }
+
+    // Default: variable reference
+    return 'VAR';
+  }
+
+  /**
+   * Convert this token to an HVM3 Interaction Calculus agent
+   * Enables tokens to participate in optimal lambda reduction
+   *
+   * The conversion maps:
+   * - Token ID → Agent ID
+   * - Token value → Agent term
+   * - Token trace → Reduction context
+   *
+   * @returns {object|null} HVM agent or null if HVM module unavailable
+   */
+  toHVMAgent() {
+    const hvm = getHVMModule();
+    if (!hvm) {
+      return null;
+    }
+
+    const icType = this.determineICType();
+    const { Var, Era, Lam, App, Sup, Dup, InteractionNet } = hvm;
+
+    // Build the HVM term based on IC type
+    let term;
+    switch (icType) {
+      case 'ERA':
+        term = new Era();
+        break;
+
+      case 'LAM': {
+        // Lambda abstraction: λx.body where body encodes the query
+        const varName = `token_${this.id.slice(0, 8)}`;
+        const bodyValue = this.value?.payload ?? this.value;
+        const body = new Var(deterministicStringify(bodyValue).slice(0, 32));
+        term = new Lam(varName, body);
+        break;
+      }
+
+      case 'APP': {
+        // Application: (func arg) where arg is the response
+        const func = new Var('response_handler');
+        const argValue = this.value?.payload ?? this.value;
+        const arg = new Var(deterministicStringify(argValue).slice(0, 32));
+        term = new App(func, arg);
+        break;
+      }
+
+      case 'SUP': {
+        // Superposition: {a, b} representing alternatives
+        // Extract items from arrays, branches, or alternatives properties
+        let items;
+        if (Array.isArray(this.value)) {
+          items = this.value;
+        } else if (this.value?.branches) {
+          items = this.value.branches;
+        } else if (this.value?.alternatives) {
+          items = this.value.alternatives;
+        } else {
+          items = [this.value];
+        }
+
+        const label = this.trace.length; // Use trace depth as label
+        if (items.length >= 2) {
+          const a = new Var(`alt_0_${items[0]?.toString().slice(0, 16) ?? 'nil'}`);
+          const b = new Var(`alt_1_${items[1]?.toString().slice(0, 16) ?? 'nil'}`);
+          term = new Sup(label, a, b);
+        } else {
+          term = new Var(`single_${this.id.slice(0, 8)}`);
+        }
+        break;
+      }
+
+      case 'DUP': {
+        // Duplication: let {x, y} = term in body
+        const label = this.trace.length;
+        const dupTerm = new Var(`dup_source_${this.id.slice(0, 8)}`);
+        const body = new Var(`dup_body_${this.id.slice(0, 8)}`);
+        term = new Dup(label, 'dup_x', 'dup_y', dupTerm, body);
+        break;
+      }
+
+      case 'VAR':
+      default: {
+        // Variable reference
+        const varName = typeof this.value === 'string'
+          ? this.value.slice(0, 32)
+          : `var_${this.id.slice(0, 8)}`;
+        term = new Var(varName);
+        break;
+      }
+    }
+
+    // Create agent with metadata
+    return {
+      id: this.id,
+      term,
+      icType,
+      origin: this.origin,
+      trace: this.trace,
+      shapeHash: this.shapeHash,
+      timestamp: this.timestamp,
+
+      /**
+       * Add this agent to an interaction net
+       * @param {InteractionNet} net
+       * @returns {string} Node ID in the net
+       */
+      addToNet(net) {
+        if (net && typeof net.addNode === 'function') {
+          return net.addNode(this.term, { tokenId: this.id, origin: this.origin });
+        }
+        return null;
+      }
+    };
+  }
+
+  /**
+   * Calculate p-adic distance between this token and another
+   * Based on trace (provenance) divergence point
+   *
+   * Distance interpretation:
+   * - 0: Same token (identical traces)
+   * - Small: Recent divergence (traces share long prefix)
+   * - Large: Early divergence (traces diverge early)
+   *
+   * @param {Token} other - Token to compare with
+   * @param {number} [prime=2] - Prime base for p-adic valuation
+   * @returns {number} P-adic distance (0 = identical, higher = more different)
+   */
+  traceDistance(other, prime = 2) {
+    if (!other || !(other instanceof Token)) {
+      return Infinity;
+    }
+
+    // Same token
+    if (this.id === other.id) {
+      return 0;
+    }
+
+    const padic = getPadicModule();
+
+    // Find trace divergence point
+    const trace1 = this.trace || [];
+    const trace2 = other.trace || [];
+    const minLen = Math.min(trace1.length, trace2.length);
+
+    let divergeAt = 0;
+    for (let i = 0; i < minLen; i++) {
+      if (trace1[i] !== trace2[i]) {
+        divergeAt = i;
+        break;
+      }
+      divergeAt = i + 1;
+    }
+
+    // If one trace is a prefix of the other
+    if (divergeAt === minLen) {
+      // Longer trace = more derived = further away
+      const extraSteps = Math.abs(trace1.length - trace2.length);
+      if (padic) {
+        return padic.padicNorm(extraSteps, prime);
+      }
+      return Math.pow(prime, -extraSteps);
+    }
+
+    // P-adic distance based on divergence point
+    // Earlier divergence = larger distance (inverse of p-adic norm)
+    if (padic) {
+      // Use sequence distance for the divergent parts (use actual trace strings)
+      const seq1 = trace1.slice(divergeAt);
+      const seq2 = trace2.slice(divergeAt);
+      return padic.padicDistance(seq1, seq2, prime);
+    }
+
+    // Fallback: exponential decay based on shared prefix length
+    // d = p^(-k) where k is the shared prefix length
+    return Math.pow(prime, -divergeAt);
   }
 }
 

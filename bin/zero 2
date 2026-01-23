@@ -1,0 +1,227 @@
+#!/usr/bin/env node
+/**
+ * Zero CLI - Bleeding-Edge Agentic Intelligence System
+ *
+ * A lightweight, security-hardened CLI that leverages:
+ * - Knowledge Graph for intelligent suggestions
+ * - Session Store for time-travel (undo/redo)
+ * - Signal Protocol for multi-model consensus
+ * - Fact-verification to prevent hallucinations
+ * - Multi-agent orchestration via tmux
+ *
+ * Zero external dependencies for core CLI.
+ *
+ * @author Tej Desai <admin@terminals.tech>
+ * @license MIT
+ */
+
+'use strict';
+
+const path = require('path');
+
+// Ensure we're in the right context
+process.title = 'zero';
+
+// Handle uncaught errors gracefully
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`\x1b[31mFatal error: ${err.message}\x1b[0m\n`);
+  if (process.env.DEBUG) {
+    process.stderr.write(err.stack + '\n');
+  }
+  gracefulShutdown(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  process.stderr.write(`\x1b[31mUnhandled rejection: ${reason}\x1b[0m\n`);
+  gracefulShutdown(1);
+});
+
+/**
+ * Parse accessibility flags early (before any output)
+ */
+function parseAccessibilityFlags(args) {
+  const flags = {
+    a11y: args.includes('--a11y') || args.includes('--simple') || args.includes('--accessible'),
+    noAnimation: args.includes('--no-animation') || args.includes('--static') || args.includes('--static-output'),
+    noColor: process.env.NO_COLOR !== undefined || process.env.TERM === 'dumb'
+  };
+
+  // Set environment variables for downstream modules
+  if (flags.a11y) {
+    process.env.ZERO_A11Y = '1';
+    process.env.NO_COLOR = '1';
+    flags.noAnimation = true; // a11y implies no animation
+    flags.noColor = true;
+  }
+  if (flags.noAnimation) {
+    process.env.ZERO_NO_ANIMATION = '1';
+  }
+  if (flags.noColor) {
+    process.env.NO_COLOR = '1';
+  }
+
+  return flags;
+}
+
+/**
+ * Determine which mode to run in and execute
+ * @returns {Promise<{isOneShotCommand: boolean}>}
+ */
+async function main() {
+  const args = process.argv.slice(2);
+
+  // Parse accessibility flags first (affects all output)
+  const a11yFlags = parseAccessibilityFlags(args);
+
+  // Filter out a11y flags from args passed to commands
+  const filteredArgs = args.filter(arg =>
+    !['--a11y', '--simple', '--accessible', '--no-animation', '--static', '--static-output'].includes(arg)
+  );
+
+  // Check if orchestrator mode (args contain known agent IDs)
+  let orchestrator;
+  try {
+    orchestrator = require('../src/cli/orchestrator/index.js');
+  } catch (err) {
+    // Orchestrator module not available, use standard CLI
+    orchestrator = null;
+  }
+
+  // REPL Mode Check
+  if (filteredArgs.length === 0 || filteredArgs[0] === 'start' || filteredArgs[0] === 'repl') {
+    process.env.LOG_LEVEL = 'warn'; // Suppress init logs
+    const repl = require('../src/cli/repl');
+    await repl.start();
+    return { isOneShotCommand: false };
+  }
+
+  // Route to orchestrator if:
+  // 1. Orchestrator module is available
+  // 2. Args contain known agent IDs or --orchestrate flag
+  if (orchestrator && orchestrator.isOrchestratorMode(filteredArgs)) {
+    await orchestrator.run(filteredArgs);
+    return { isOneShotCommand: false };
+  }
+
+  // Standard CLI mode
+  const cli = require('../src/cli/index.js');
+  await cli.run(filteredArgs);
+  
+  // Detect if command is long-running or one-shot
+  const command = filteredArgs[0];
+  const longRunningCommands = ['serve', 'repl', 'start'];
+  const isOneShotCommand = !longRunningCommands.includes(command);
+  
+  return { isOneShotCommand };
+}
+
+// Graceful shutdown state
+let isShuttingDown = false;
+
+// Graceful shutdown helper with PGlite WASM cleanup
+async function gracefulShutdown(exitCode = 0, options = {}) {
+  // Prevent multiple shutdown attempts
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  // Emergency timeout: 3s for one-shot commands, 30s for long-running
+  const timeoutMs = options.forceExit ? 3000 : 30000;
+  const emergencyTimer = setTimeout(() => {
+    if (process.env.DEBUG) {
+      process.stderr.write(`\x1b[33mEmergency shutdown triggered after ${timeoutMs}ms\x1b[0m\n`);
+    }
+    process.exit(exitCode);
+  }, timeoutMs);
+  emergencyTimer.unref();
+
+  try {
+    // 1. Stop background workers first to prevent new DB operations
+    try {
+      const resolved = require.resolve('../src/server/mcpServer');
+      const cached = require.cache[resolved];
+      if (cached && cached.exports && cached.exports.stopJobWorker) {
+        cached.exports.stopJobWorker();
+      }
+    } catch (_) { /* ignore if not loaded */ }
+
+    // 2. Close database gracefully to prevent mutex lock errors
+    try {
+      const dbPath = require.resolve('../src/utils/dbClient');
+      const cached = require.cache[dbPath];
+      if (cached?.exports?.close) {
+        const dbClient = cached.exports;
+        if (dbClient.waitForIdle) {
+          try { await dbClient.waitForIdle(1500); } catch (_) {}
+        }
+        const closePromise = dbClient.close();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('DB close timeout')), 2500)
+        );
+        await Promise.race([closePromise, timeoutPromise]).catch((e) => {
+          if (process.env.DEBUG) process.stderr.write(`Shutdown race: ${e.message}\n`);
+        });
+        
+        // Mutex Lock Fix (Node 25/macOS): 
+        // Give WASM worker threads a few extra ms to settle after db.close() 
+        // but before the process fully terminates.
+        await new Promise(r => setTimeout(r, 100));
+      }
+    } catch (_) {}
+  } catch (err) {
+    // Ignore errors during cleanup
+  }
+  
+  // Final safeguard: allow event loop to drain naturally
+  process.exitCode = exitCode;
+  
+  // Check if shutdown completed successfully
+  let shutdownComplete = false;
+  try {
+    const dbPath = require.resolve('../src/utils/dbClient');
+    const cached = require.cache[dbPath];
+    if (cached?.exports?.isShutdownComplete?.()) {
+      shutdownComplete = true;
+      clearTimeout(emergencyTimer);
+    }
+  } catch (_) {}
+  
+  // For one-shot commands: force exit after cleanup to prevent hanging
+  if (options.forceExit) {
+    // Give event loop 500ms to drain, then force exit
+    // This provides a buffer for WASM/mutex cleanup on macOS/Node 25
+    const finalTimer = setTimeout(() => {
+      // Surgical suppression of stderr:
+      // Only hide harmless libc++abi mutex messages that occur during 
+      // process teardown on Node 25/macOS, while preserving legitimate errors.
+      if (process.platform === 'darwin' && process.version.startsWith('v25')) {
+        const originalWrite = process.stderr.write;
+        process.stderr.write = function(chunk, encoding, callback) {
+          const msg = chunk.toString();
+          if (msg.includes('mutex lock failed') || msg.includes('libc++abi')) {
+            return true; // Filtered
+          }
+          return originalWrite.call(process.stderr, chunk, encoding, callback);
+        };
+      }
+      process.exit(exitCode);
+    }, 500);
+    finalTimer.unref();
+  }
+  // For long-running commands: emergencyTimer remains unref'ed to force exit if we hang
+}
+
+// Handle termination signals
+process.on('SIGINT', () => gracefulShutdown(0));
+process.on('SIGTERM', () => gracefulShutdown(0));
+
+// Run
+if (require.main === module) {
+  main().then(async (result) => {
+    const isOneShot = result?.isOneShotCommand !== false;
+    await gracefulShutdown(process.exitCode || 0, { forceExit: isOneShot });
+  }).catch(async (err) => {
+    process.stderr.write(`\x1b[31mError: ${err.message}\x1b[0m\n`);
+    process.exitCode = 1;
+    await gracefulShutdown(1, { forceExit: true });
+  });
+}

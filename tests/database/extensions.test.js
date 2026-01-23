@@ -172,7 +172,7 @@ async function runTests() {
 if (require.main === module) {
   runTests().catch(err => {
     console.error('Fatal error:', err.message);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }
 

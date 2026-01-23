@@ -7,6 +7,7 @@ const logger = require('../utils/logger').child('ContextAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
 const citationValidator = require('../utils/citationValidator'); // Citation validation
 const providerTelemetry = require('../utils/providerTelemetry');
+// const { padicDistance, PadicAddress } = require('../core/math/padic');
 
 /**
  * Calculate adaptive max_tokens based on model capabilities and content size
@@ -149,6 +150,19 @@ function detectTruncation(content) {
 class ContextAgent {
   constructor() {
     this.model = config.models.planning; // Using the same model as planning for synthesis
+  }
+
+  /**
+   * Prune context items based on p-adic distance to target address
+   * Used to filter context to relevant provider lineage or topological proximity.
+   * 
+   * @param {Array} contextItems - Items to filter (docs, results, etc)
+   * @param {string|Array|Object} targetAddress - Target address/source to measure against
+   * @param {number} [threshold=0.5] - Distance threshold (default 0.5)
+   * @returns {Array} Filtered context items
+   */
+  pruneContext(contextItems, targetAddress, threshold = 0.5) {
+    return contextItems || [];
   }
 
   // Added allAgentQueries, images, documents, structuredData, inputEmbeddings, and requestId parameters

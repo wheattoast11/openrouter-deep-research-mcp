@@ -58,12 +58,12 @@ These extensions are imported from the contrib directory:
 
 #### 9. `tcn` (Triggered Change Notifications)
 - **Use Case:** Universal event emission system.
-- **Capabilities:** Automatically triggers notifications on table changes (INSERT/UPDATE/DELETE), which are then broadcast to all agents via the Rail Protocol.
+- **Capabilities:** Automatically triggers notifications on table changes (INSERT/UPDATE/DELETE).
 - **Import:** `@electric-sql/pglite/contrib/tcn`
 
 #### 10. `tsm_system_time` (Temporal Queries)
 - **Use Case:** Efficient session time-travel and temporal sampling.
-- **Capabilities:** Allows sampling table data at specific points in time, enabling the Agent Zero temporal replay system.
+- **Capabilities:** Allows sampling table data at specific points in time.
 - **Import:** `@electric-sql/pglite/contrib/tsm_system_time`
 
 #### 11. `ltree` (Hierarchical Data)
@@ -112,7 +112,7 @@ These extensions are imported from the contrib directory:
 
 ### 2. Event-Driven Agent Awareness
 - **Universal Fan-in:** TCN triggers on `research_reports` and `jobs` tables feed into a central notification bus.
-- **Rail Integration:** Change notifications are automatically routed through Rail protocol tunnels, keeping all agents aware of the shared world model.
+- **Notification Routing:** Change notifications are automatically routed to relevant subsystems.
 
 ### 3. Hierarchical Topic Taxonomy
 - **`ltree` Integration:** Uses the `ltree` extension for path-based hierarchical routing.
@@ -128,7 +128,7 @@ These extensions are imported from the contrib directory:
 - **Cube-based Affinity:** Multi-dimensional distance calculations identify tightly connected agent groups for intelligent task allocation.
 
 ### 6. Temporal Replay System
-- **Convergence Analysis:** Replays Agent Zero's emergence path using temporal sampling.
+- **Convergence Analysis:** Replays emergence paths using temporal sampling.
 - **Stability Metrics:** Analyzes early vs. late convergence indicators to improve ensemble research quality.
 
 ---

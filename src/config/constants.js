@@ -45,7 +45,7 @@ const JOBS = {
  * Model configuration defaults
  */
 const MODELS = {
-  DEFAULT_PLANNING: 'google/gemini-3-pro-preview',
+  DEFAULT_PLANNING: 'google/gemini-3-flash-preview',
   DEFAULT_CLASSIFICATION: 'openai/gpt-5-mini',
   DEFAULT_ENSEMBLE_SIZE: 2,
   MAX_RESEARCH_ITERATIONS: 2,
@@ -146,21 +146,20 @@ const MCP_SPEC = {
  */
 const DEFAULT_MODELS = {
   HIGH_COST: [
-    { name: 'x-ai/grok-4', domains: ['reasoning', 'technical', 'general', 'creative'] },
-    { name: 'openai/gpt-5-chat', domains: ['reasoning', 'technical', 'general'] },
+    { name: 'anthropic/claude-sonnet-4.5', domains: ['reasoning', 'technical', 'general', 'creative'] },
+    { name: 'openai/gpt-5.2-chat', domains: ['reasoning', 'technical', 'general'] },
     { name: 'google/gemini-3-pro-preview', domains: ['reasoning', 'technical', 'general'] },
-    { name: 'anthropic/claude-sonnet-4.5', domains: ['reasoning', 'technical', 'general'] },
     { name: 'qwen/qwen3-coder', domains: ['coding', 'editing', 'technical'] },
     { name: 'qwen/qwen3-235b-a22b-2507', domains: ['general', 'reasoning', 'technical', 'coding'] }
   ],
   LOW_COST: [
+    { name: 'google/gemini-3-flash-preview', domains: ['coding', 'editing', 'technical'] },
+    { name: 'anthropic/claude-haiku-4.5', domains: ['general', 'technical', 'reasoning'] },
+    { name: 'z-ai/glm-4.7', domains: ['general', 'multimodal', 'vision', 'reasoning'] },
     { name: 'deepseek/deepseek-chat-v3.1', domains: ['general', 'reasoning', 'technical', 'coding'] },
-    { name: 'z-ai/glm-4.5v', domains: ['general', 'multimodal', 'vision', 'reasoning'] },
-    { name: 'z-ai/glm-4.5-air', domains: ['coding', 'technical', 'reasoning'] },
     { name: 'openai/gpt-oss-120b', domains: ['general', 'reasoning', 'search'] },
     { name: 'inception/mercury', domains: ['general', 'creative', 'technical'] },
-    { name: 'baidu/ernie-4.5-vl-424b-a47b', domains: ['general', 'creative'] },
-    { name: 'google/gemini-3-flash-preview', domains: ['coding', 'editing', 'technical'] }
+    { name: 'baidu/ernie-4.5-vl-424b-a47b', domains: ['general', 'creative'] }
   ],
   VERY_LOW_COST: [
     { name: 'openai/gpt-5-nano', domains: ['general', 'reasoning', 'creative'] }

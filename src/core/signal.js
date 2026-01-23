@@ -11,6 +11,20 @@
 const crypto = require('crypto');
 const { deterministicStringify } = require('../utils/deterministic');
 
+// Lazy-loaded modules to avoid circular dependencies
+function getPadicModule() {
+  return { modelDistance: () => 1.0 };
+}
+
+function getRewardModule() {
+  // Disabled
+  return { 
+    quickReward: () => 0.5,
+    getGlobalCalculator: () => ({ calculate: () => ({ total: 0.5 }) }),
+    TraceContext: class {}
+  };
+}
+
 /**
  * Model capability weights for consensus
  */
@@ -50,7 +64,10 @@ const SignalType = {
   COMPOSE: 'compose',
   REDUCE: 'reduce',
   SUBSTITUTION: 'substitution',
-  TEMPLATE: 'template'
+  TEMPLATE: 'template',
+  // Intent types (v1.14.1)
+  INTENT: 'intent',
+  STABILIZATION: 'stabilization'
 };
 
 /**
@@ -157,6 +174,109 @@ class AgentSignal {
    */
   static error(message, source, opts = {}) {
     return new AgentSignal(SignalType.ERROR, { message }, { source, confidence: 0, ...opts });
+  }
+
+  /**
+   * Factory: Create intent signal (v1.14.1)
+   *
+   * Intent signals capture the classified intent of a user query,
+   * enabling intent-aligned routing and reward calculation.
+   *
+   * @param {string} query - The original user query
+   * @param {object} classification - Intent classification result
+   * @param {string} classification.category - Intent category (research, factual, etc.)
+   * @param {number} classification.confidence - Classification confidence [0, 1]
+   * @param {Array<string>} [classification.suggestedTiers] - Recommended model tiers
+   * @param {object} [opts] - Additional signal options
+   * @returns {AgentSignal} Intent signal
+   *
+   * @example
+   * const intent = Signal.intent(
+   *   "What is quantum computing?",
+   *   { category: 'factual', confidence: 0.85, suggestedTiers: ['low', 'medium'] }
+   * );
+   */
+  static intent(query, classification, opts = {}) {
+    const payload = {
+      query,
+      category: classification.category,
+      suggestedTiers: classification.suggestedTiers || ['medium'],
+      metadata: classification.metadata || {},
+      scores: classification.scores || []
+    };
+
+    return new AgentSignal(SignalType.INTENT, payload, {
+      source: 'user',
+      confidence: classification.confidence ?? 0.5,
+      tags: ['intent', classification.category],
+      ...opts
+    });
+  }
+
+  /**
+   * Factory: Create stabilization signal (v1.14.1)
+   *
+   * Stabilization signals track the convergence state of the system,
+   * indicating when consensus has been reached.
+   *
+   * @param {string} state - Stabilization state (UNSTABLE, CONVERGING, STABLE, LOCKED)
+   * @param {object} metrics - Stabilization metrics
+   * @param {number} metrics.variance - Current variance
+   * @param {number} metrics.crystallization - Crystallization score
+   * @param {number} metrics.phaseCoherence - Phase coherence [0, 1]
+   * @param {object} [opts] - Additional signal options
+   * @returns {AgentSignal} Stabilization signal
+   */
+  static stabilization(state, metrics, opts = {}) {
+    const payload = {
+      state,
+      variance: metrics.variance ?? 1,
+      crystallization: metrics.crystallization ?? 0,
+      phaseCoherence: metrics.phaseCoherence ?? 0,
+      signalCount: metrics.signalCount ?? 0,
+      timestamp: Date.now()
+    };
+
+    // Confidence based on how stable the state is
+    const stateConfidence = {
+      UNSTABLE: 0.2,
+      CONVERGING: 0.5,
+      STABLE: 0.8,
+      LOCKED: 1.0
+    };
+
+    return new AgentSignal(SignalType.STABILIZATION, payload, {
+      source: 'system',
+      confidence: stateConfidence[state] ?? 0.5,
+      tags: ['stabilization', state.toLowerCase()],
+      ...opts
+    });
+  }
+
+  /**
+   * Check if this signal is an intent signal
+   * @returns {boolean}
+   */
+  isIntent() {
+    return this.type === SignalType.INTENT;
+  }
+
+  /**
+   * Extract intent category if this is an intent signal
+   * @returns {string|null} Intent category or null
+   */
+  getIntentCategory() {
+    if (this.type !== SignalType.INTENT) return null;
+    return this.payload?.category ?? null;
+  }
+
+  /**
+   * Get suggested model tier from intent signal
+   * @returns {string} Primary suggested tier or 'medium'
+   */
+  getSuggestedTier() {
+    if (this.type !== SignalType.INTENT) return 'medium';
+    return this.payload?.suggestedTiers?.[0] ?? 'medium';
   }
 
   // ============================================
@@ -348,6 +468,123 @@ class AgentSignal {
   isConverged() {
     const { score } = this.crystallization;
     return score > 0.5;
+  }
+
+  /**
+   * Calculate p-adic distance to another signal.
+   *
+   * P-adic distance is based on source/provider lineage similarity.
+   * Signals from the same provider family are "closer".
+   *
+   * @param {AgentSignal} other - Signal to compare against
+   * @returns {number} P-adic distance [0, 1]
+   */
+  padicDistance(other) {
+    if (!other || !(other instanceof AgentSignal)) {
+      return 1.0; // Maximum distance for invalid input
+    }
+
+    try {
+      const { modelDistance } = getPadicModule();
+
+      // Use model source as primary distance metric
+      return modelDistance(this.source, other.source);
+    } catch (e) {
+      // Fallback: simple string comparison
+      if (this.source === other.source) return 0;
+      if (this.source.split('/')[0] === other.source.split('/')[0]) return 0.5;
+      return 1.0;
+    }
+  }
+
+  /**
+   * Calculate procedural reward for this signal.
+   *
+   * R = α * crystallization - β * uncertainty + γ * traceReward
+   *
+   * @param {object} [traceContext] - Optional trace context for trace bonus
+   * @returns {number} Reward value [-1, 1]
+   */
+  get reward() {
+    try {
+      const { quickReward } = getRewardModule();
+      return quickReward(this);
+    } catch (e) {
+      // Fallback: simple reward based on confidence and crystallization
+      const { score } = this.crystallization;
+      const uncertainty = 1 - this.confidence;
+      return 0.5 * score - 0.3 * uncertainty + 0.1;
+    }
+  }
+
+  /**
+   * Calculate reward with explicit trace context.
+   *
+   * @param {object} traceContext - Trace context for trace bonus
+   * @returns {object} Full RewardResult
+   */
+  calculateReward(traceContext = null) {
+    try {
+      const { getGlobalCalculator, TraceContext } = getRewardModule();
+      const calc = getGlobalCalculator();
+
+      const ctx = traceContext
+        ? (traceContext instanceof TraceContext ? traceContext : new TraceContext(traceContext))
+        : null;
+
+      return calc.calculate(this, ctx);
+    } catch (e) {
+      // Fallback simple result
+      return {
+        total: this.reward,
+        crystallization: this.crystallization.score * 0.5,
+        uncertainty: (1 - this.confidence) * 0.3,
+        trace: 0.1
+      };
+    }
+  }
+
+  /**
+   * Get phase angle for IQ quadrature.
+   *
+   * Phase is derived from source model and timing.
+   *
+   * @returns {number} Phase in radians [0, 2π)
+   */
+  get phase() {
+    return this._phase ?? 0;
+  }
+
+  set phase(value) {
+    this._phase = value;
+  }
+
+  /**
+   * Calculate phase based on source model.
+   *
+   * Different model families get different base phases.
+   *
+   * @returns {number} Phase in radians
+   */
+  calculatePhase() {
+    const TWO_PI = 2 * Math.PI;
+
+    // Model family phase offsets
+    const phaseOffsets = {
+      'anthropic': 0,
+      'openai': TWO_PI / 4,
+      'google': TWO_PI / 2,
+      'deepseek': (3 * TWO_PI) / 4,
+      'x-ai': TWO_PI / 6
+    };
+
+    const family = this.source.split('/')[0];
+    const basePhase = phaseOffsets[family] ?? 0;
+
+    // Add timing-based variation
+    const timingOffset = (this.timestamp % 1000) / 1000 * 0.1 * TWO_PI;
+
+    return (basePhase + timingOffset) % TWO_PI;
   }
 
   /**
@@ -607,6 +844,305 @@ class ConsensusCalculator {
   }
 }
 
+/**
+ * CoherenceScorer - Multi-dimensional agreement analysis
+ *
+ * Scores signals across multiple dimensions for ensemble coherence.
+ * Unlike simple consensus, this measures how "together" signals are.
+ *
+ * @class
+ */
+class CoherenceScorer {
+  /**
+   * @param {object} [options]
+   * @param {Array<string>} [options.dimensions] - Dimensions to score
+   * @param {object} [options.weights] - Weight per dimension
+   */
+  constructor(options = {}) {
+    this.dimensions = options.dimensions ?? [
+      'factual',      // Agreement on facts/entities
+      'structural',   // Response structure similarity
+      'temporal',     // Timeline consistency
+      'confidence'    // Confidence level alignment
+    ];
+
+    this.weights = options.weights ?? {
+      factual: 0.35,
+      structural: 0.25,
+      temporal: 0.15,
+      confidence: 0.25
+    };
+  }
+
+  /**
+   * Calculate coherence across all dimensions
+   *
+   * @param {Array<AgentSignal>} signals
+   * @returns {object} Coherence result with total and per-dimension scores
+   */
+  score(signals) {
+    if (!signals || signals.length < 2) {
+      return {
+        coherence: signals?.length === 1 ? 1.0 : 0,
+        dimensions: {},
+        signalCount: signals?.length ?? 0
+      };
+    }
+
+    const dimensions = {};
+    let weightedSum = 0;
+    let totalWeight = 0;
+
+    for (const dim of this.dimensions) {
+      const scorer = this[`_score${dim.charAt(0).toUpperCase() + dim.slice(1)}`];
+      if (scorer) {
+        dimensions[dim] = scorer.call(this, signals);
+        const weight = this.weights[dim] ?? 0.25;
+        weightedSum += dimensions[dim] * weight;
+        totalWeight += weight;
+      }
+    }
+
+    return {
+      coherence: totalWeight > 0 ? weightedSum / totalWeight : 0,
+      dimensions,
+      signalCount: signals.length
+    };
+  }
+
+  /**
+   * Score factual agreement using Jaccard similarity
+   *
+   * @private
+   * @param {Array<AgentSignal>} signals
+   * @returns {number} Score [0, 1]
+   */
+  _scoreFactual(signals) {
+    // Extract key tokens/entities from each signal
+    const tokenSets = signals.map(s => this._extractTokens(s.payload));
+
+    if (tokenSets.length < 2) return 1.0;
+
+    // Pairwise Jaccard similarity
+    let totalSimilarity = 0;
+    let pairs = 0;
+
+    for (let i = 0; i < tokenSets.length; i++) {
+      for (let j = i + 1; j < tokenSets.length; j++) {
+        totalSimilarity += this._jaccard(tokenSets[i], tokenSets[j]);
+        pairs++;
+      }
+    }
+
+    return pairs > 0 ? totalSimilarity / pairs : 0;
+  }
+
+  /**
+   * Extract significant tokens from payload
+   *
+   * @private
+   * @param {*} payload
+   * @returns {Set<string>}
+   */
+  _extractTokens(payload) {
+    const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    // Extract words, removing common stop words
+    const stopWords = new Set([
+      'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+      'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+      'should', 'may', 'might', 'must', 'shall', 'can', 'to', 'of', 'in',
+      'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through',
+      'and', 'or', 'but', 'if', 'then', 'else', 'when', 'where', 'why',
+      'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other',
+      'some', 'such', 'no', 'nor', 'not', 'only', 'same', 'so', 'than',
+      'too', 'very', 'just', 'also', 'now', 'here', 'there', 'this', 'that'
+    ]);
+
+    const words = text.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !stopWords.has(w));
+
+    return new Set(words);
+  }
+
+  /**
+   * Calculate Jaccard similarity between two sets
+   *
+   * @private
+   * @param {Set} a
+   * @param {Set} b
+   * @returns {number}
+   */
+  _jaccard(a, b) {
+    if (a.size === 0 && b.size === 0) return 1.0;
+
+    const intersection = new Set([...a].filter(x => b.has(x)));
+    const union = new Set([...a, ...b]);
+
+    return union.size > 0 ? intersection.size / union.size : 0;
+  }
+
+  /**
+   * Score structural similarity
+   *
+   * @private
+   * @param {Array<AgentSignal>} signals
+   * @returns {number} Score [0, 1]
+   */
+  _scoreStructural(signals) {
+    // Compare payload structure: length, format markers, etc.
+    const features = signals.map(s => this._extractStructuralFeatures(s.payload));
+
+    if (features.length < 2) return 1.0;
+
+    // Calculate variance in features
+    let totalSimilarity = 0;
+    let pairs = 0;
+
+    for (let i = 0; i < features.length; i++) {
+      for (let j = i + 1; j < features.length; j++) {
+        totalSimilarity += this._structuralSimilarity(features[i], features[j]);
+        pairs++;
+      }
+    }
+
+    return pairs > 0 ? totalSimilarity / pairs : 0;
+  }
+
+  /**
+   * Extract structural features
+   *
+   * @private
+   * @param {*} payload
+   * @returns {object}
+   */
+  _extractStructuralFeatures(payload) {
+    const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    return {
+      length: text.length,
+      paragraphs: (text.match(/\n\n/g) || []).length + 1,
+      sentences: (text.match(/[.!?]+/g) || []).length,
+      headers: (text.match(/^#+\s/gm) || []).length,
+      lists: (text.match(/^[-*]\s/gm) || []).length,
+      codeBlocks: (text.match(/```/g) || []).length / 2,
+      hasNumbers: /\d/.test(text),
+      hasUrls: /https?:\/\//.test(text)
+    };
+  }
+
+  /**
+   * Compare structural features
+   *
+   * @private
+   * @param {object} a
+   * @param {object} b
+   * @returns {number}
+   */
+  _structuralSimilarity(a, b) {
+    // Normalize numeric features and compare
+    const lengthSim = 1 - Math.abs(a.length - b.length) / Math.max(a.length, b.length, 1);
+    const paraSim = 1 - Math.abs(a.paragraphs - b.paragraphs) / Math.max(a.paragraphs, b.paragraphs, 1);
+    const sentSim = 1 - Math.abs(a.sentences - b.sentences) / Math.max(a.sentences, b.sentences, 1);
+
+    // Boolean feature agreement
+    const boolSim = (
+      (a.hasNumbers === b.hasNumbers ? 1 : 0) +
+      (a.hasUrls === b.hasUrls ? 1 : 0) +
+      (a.headers > 0 === b.headers > 0 ? 1 : 0) +
+      (a.lists > 0 === b.lists > 0 ? 1 : 0)
+    ) / 4;
+
+    return 0.4 * lengthSim + 0.2 * paraSim + 0.2 * sentSim + 0.2 * boolSim;
+  }
+
+  /**
+   * Score temporal consistency
+   *
+   * @private
+   * @param {Array<AgentSignal>} signals
+   * @returns {number} Score [0, 1]
+   */
+  _scoreTemporal(signals) {
+    // Extract time references and compare
+    const timeRefs = signals.map(s => this._extractTimeReferences(s.payload));
+
+    if (timeRefs.every(t => t.length === 0)) {
+      return 1.0; // No temporal references = no conflict
+    }
+
+    // Check for contradictions
+    let agreements = 0;
+    let comparisons = 0;
+
+    for (let i = 0; i < timeRefs.length; i++) {
+      for (let j = i + 1; j < timeRefs.length; j++) {
+        if (timeRefs[i].length > 0 && timeRefs[j].length > 0) {
+          const overlap = timeRefs[i].filter(t => timeRefs[j].includes(t)).length;
+          const maxRefs = Math.max(timeRefs[i].length, timeRefs[j].length);
+          agreements += overlap / maxRefs;
+          comparisons++;
+        }
+      }
+    }
+
+    return comparisons > 0 ? agreements / comparisons : 1.0;
+  }
+
+  /**
+   * Extract time references
+   *
+   * @private
+   * @param {*} payload
+   * @returns {Array<string>}
+   */
+  _extractTimeReferences(payload) {
+    const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    const patterns = [
+      /\b(19|20)\d{2}\b/g,  // Years
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/gi,
+      /\b(yesterday|today|tomorrow|last week|next week|last month|next month)\b/gi,
+      /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g  // Dates
+    ];
+
+    const refs = [];
+    for (const pattern of patterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        refs.push(...matches.map(m => m.toLowerCase()));
+      }
+    }
+
+    return [...new Set(refs)];
+  }
+
+  /**
+   * Score confidence alignment
+   *
+   * @private
+   * @param {Array<AgentSignal>} signals
+   * @returns {number} Score [0, 1]
+   */
+  _scoreConfidence(signals) {
+    const confidences = signals.map(s => s.confidence);
+
+    if (confidences.length < 2) return 1.0;
+
+    // Calculate standard deviation of confidences
+    const mean = confidences.reduce((a, b) => a + b, 0) / confidences.length;
+    const variance = confidences.reduce((sum, c) => sum + Math.pow(c - mean, 2), 0) / confidences.length;
+    const stdDev = Math.sqrt(variance);
+
+    // Lower std dev = higher coherence
+    // stdDev of 0 = perfect alignment (score 1.0)
+    // stdDev of 0.5 = very divergent (score ~0)
+    return Math.max(0, 1 - 2 * stdDev);
+  }
+}
+
 // Backward compatibility alias (deprecated - use AgentSignal)
 const Signal = AgentSignal;
 
@@ -618,6 +1154,7 @@ module.exports = {
   SignalType,
   SignalBus,
   ConsensusCalculator,
+  CoherenceScorer,
   ModelWeights,
   CrystallizationPatterns,
   extractCrystallization

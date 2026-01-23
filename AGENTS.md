@@ -1,9 +1,22 @@
 # AGENTS.md
 
-This file orients agentic coding assistants working in this repo.
-It summarizes how to build/test and the house style observed in code.
+Last verified: 2026-01-20 (Grounding: 2026-01-20)
 
-Last verified: 2026-01-20
+## Isomorphic 5-Layer Architecture Alignment
+
+Agent Zero now operates as the **L5 Protocol Bridge** for the terminals.tech ecosystem.
+
+### Layer Correspondence (AXON Architecture)
+- **L1 (Core)**: `Signal` and `Token` now support `shapeHash` (deterministic structural fingerprints).
+- **L2 (Machine)**: `HVMClient` provides symbolic steering via logit bias mapping.
+- **L3 (Mesh)**: `ResearchAgent` emits isomorphic `MeshEvent` formatted tokens.
+- **L4 (Brain)**: Research cycles use `CognitiveContext` primitives.
+- **L5 (Protocol)**: MCP implementation serves as the bridge between terminals.tech and external models.
+
+## Resilience & Production Status
+- **Node 25 Auto-Heal**: `dbClient.js` automatically enables "Resilient In-Memory Mode" on Node 25/macOS to prevent WASM mutex crashes.
+- **Isomorphic Reduction**: All signals are now reduced to deterministic hashes for structural integrity verification.
+- **High-Fidelity Ensemble**: `HYPER_MODE` enabled with `ENSEMBLE_SIZE=3` for high-fidelity technical research.
 
 ## Quick Commands
 
@@ -72,11 +85,45 @@ Language: Node.js (CommonJS modules), no TypeScript.
 - Use structured error types (see `src/utils/errors.js`).
 - Return plain objects for tool outputs; avoid classes in API boundaries.
 
-### Error Handling
-- Wrap errors with `MCPError` or domain-specific subclasses.
-- Preserve cause chains where possible (`cause` field + stack merge).
-- Include `requestId`/context in logs; sanitize secrets.
-- Distinguish retryable vs terminal failures.
+### Error Handling (Semantic Error Taxonomy v1.14.1)
+
+**Use the Semantic Error Taxonomy** (`src/core/errors/`) for all error handling:
+
+```javascript
+const errors = require('./src/core/errors');
+
+// Wrap any error for semantic classification
+const semantic = errors.wrapError(rawError);
+// → { category, severity, tripDecision, suggestedFix }
+
+// Record to trace history (auto-persists to DB)
+await errors.recordTrace(error, { operation: 'research' }, sessionId);
+
+// Export full state for debugging
+const state = errors.exportTaxonomyState();
+```
+
+**Error Categories and Circuit Breaker Decisions:**
+| Category | Trip on... | Action |
+|----------|------------|--------|
+| `network` | 3 errors/min | Trip circuit |
+| `rate_limit` | Any occurrence | Always trip |
+| `auth`, `config`, `resource` | Any occurrence | Escalate (fatal) |
+| `timeout`, `execution` | 3-5 errors/min | Trip circuit |
+| `validation`, `schema`, `not_found` | Never | Ignore (client error) |
+| `unknown` | 10 errors/min | Trip after threshold |
+
+**Best Practices:**
+- Wrap errors with `wrapError()` or throw `SemanticError`
+- Record all errors with `recordTrace()` for debugging
+- Use `exportTaxonomyState()` for AI-assisted improvement
+- Learn new patterns with `learnPattern(pattern, category, severity)`
+- Check `error_trace` table in DB for historical analysis
+
+**Self-Improvement Loop:**
+Errors are auto-classified and persisted. When an unknown error appears frequently,
+`suggestedPattern` is generated. AI/operators can review traces and teach new patterns
+that will be applied to future errors automatically.
 
 ### Logging
 - Use `src/utils/logger` (structured, MCP-compliant).

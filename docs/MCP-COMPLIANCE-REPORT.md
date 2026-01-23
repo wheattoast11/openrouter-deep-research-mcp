@@ -2,7 +2,7 @@
 
 **Report Date:** December 15, 2025
 **Package:** @terminals-tech/openrouter-agents
-**Version:** 1.10.0 (Zero Protocol Release)
+**Version:** 1.10.0
 **MCP SDK:** 1.21.1
 **Target Spec:** [MCP Specification 2025-06-18](https://spec.modelcontextprotocol.io/specification/2025-06-18/)
 
@@ -635,7 +635,7 @@ The following issues were identified and resolved in this version:
 | Elicitation cleanup race | `elicitation.js:206` | Check existence before deletion in setTimeout |
 | HTTPS bypass in prod | `clientMetadata.js:19` | Enforce HTTPS regardless of env var in production |
 | Missing introspection auth | `enterpriseAuth.js:200` | Added RFC 7662 client credentials |
-| Core features disabled | `config.js:249-260` | Enabled Signal, RoleShift, Core handlers by default |
+| Core features disabled | `config.js:249-260` | Enabled Core handlers by default |
 
 ### MCP 2025-11-25 Draft Features (Forward-Compatible)
 
@@ -650,7 +650,6 @@ The server implements ALL forward-compatible draft specification features:
 | Enterprise Auth | SEP-990 | `enterpriseAuth.js` | **VERIFIED** | RFC 7523/8693/7662 compliant |
 | Client Metadata | SEP-991 | `clientMetadata.js` | **VERIFIED** | CIMD, HTTPS enforcement, cache management |
 | Server Discovery | SEP-1649 | `mcpServer.js` | **VERIFIED** | `.well-known/mcp-server` endpoint |
-| RoleShift Protocol | N/A | `roleShift.js` | **VERIFIED** | Bidirectional server→client requests |
 
 **Verification Method**: Line-by-line code exploration with specialized agents
 **Verification Date**: December 8, 2025

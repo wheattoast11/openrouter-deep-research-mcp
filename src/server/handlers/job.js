@@ -36,9 +36,12 @@ async function handleJob(op, params, context = {}) {
 /**
  * Get job status with optional event streaming
  */
+// Updated to use new dbClient methods with error wrapping
 async function getJobStatus(params, dbClient) {
-  const { id, format = 'summary', max_events = 50, since_event_id } = params;
-  const jobId = params.job_id || id;
+  const { wrapError } = require('../../utils/errors');
+  try {
+    const { id, format = 'summary', max_events = 50, since_event_id } = params;
+    const jobId = params.job_id || id;
 
   if (!jobId) {
     throw new Error('job_id is required');
@@ -130,7 +133,12 @@ async function getJobStatus(params, dbClient) {
     }
   }
 
-  return result;
+    return result;
+  } catch (error) {
+    const jobId = params?.job_id || params?.id;
+    const wrapped = wrapError(error, 'Failed to get job status', { jobId });
+    throw wrapped;
+  }
 }
 
 /**
