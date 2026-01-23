@@ -1,8 +1,8 @@
 # MCP Specification 2025-06-18 Compliance Report
 
-**Report Date:** December 15, 2025
+**Report Date:** January 23, 2026
 **Package:** @terminals-tech/openrouter-agents
-**Version:** 1.10.0
+**Version:** 1.15.0
 **MCP SDK:** 1.21.1
 **Target Spec:** [MCP Specification 2025-06-18](https://spec.modelcontextprotocol.io/specification/2025-06-18/)
 
@@ -620,9 +620,9 @@ All compliance assessments are grounded in:
 
 ## 14. Conclusion
 
-The OpenRouter Deep Research MCP server v1.10.0 achieves **full compliance** with the MCP Specification 2025-06-18 (latest stable) and demonstrates **production-grade implementation** suitable for enterprise deployment.
+The OpenRouter Deep Research MCP server v1.15.0 achieves **full compliance** with the MCP Specification 2025-06-18 (latest stable) and demonstrates **production-grade implementation** suitable for enterprise deployment.
 
-### v1.10.0 Compliance Fixes
+### v1.15.0 Compliance Fixes
 
 The following issues were identified and resolved in this version:
 

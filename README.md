@@ -18,12 +18,11 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## What's New (v1.14.0)
+## What's New (v1.15.0)
 
 - **Provider telemetry** - Model-level health, latency, error categories, fallback tracking
 - **Graceful degradation** - Key rotation cooldowns + streaming fallback on failures
 - **Provider health tool** - `get_provider_health` + provider summary in `get_server_status`
-- **CLI degrade indicator** - Inline hint when fallbacks are used
 
 [Full Changelog](docs/CHANGELOG.md) | [Extensions Guide](docs/EXTENSIONS.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 
@@ -241,4 +240,4 @@ npm publish --access public        # Publish to npm
 
 ---
 
-**Version:** 1.14.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
+**Version:** 1.15.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
