@@ -430,5 +430,5 @@ async function runTests() {
 // Run the tests
 runTests().catch(error => {
   console.error(`Error running tests: ${error.message}`);
-  process.exit(1);
+  process.exitCode = 1;
 });

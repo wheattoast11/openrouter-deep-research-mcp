@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to Zero</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 100%);
+      min-height: 100vh;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 600px;
+      width: 100%;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 40px;
+      margin-bottom: 20px;
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .logo-text {
+      font-size: 48px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo-formula {
+      font-family: 'Times New Roman', serif;
+      font-style: italic;
+      font-size: 18px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-top: 8px;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+
+    .subtitle {
+      font-size: 16px;
+      color: rgba(255, 255, 255, 0.6);
+      text-align: center;
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+
+    .step {
+      display: none;
+    }
+
+    .step.active {
+      display: block;
+    }
+
+    .persona-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .persona-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .persona-card:hover {
+      border-color: rgba(0, 212, 255, 0.5);
+      background: rgba(0, 212, 255, 0.05);
+    }
+
+    .persona-card.selected {
+      border-color: #00d4ff;
+      background: rgba(0, 212, 255, 0.1);
+    }
+
+    .persona-icon {
+      font-size: 32px;
+      margin-bottom: 12px;
+    }
+
+    .persona-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .persona-desc {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .feature-list {
+      list-style: none;
+      margin-bottom: 32px;
+    }
+
+    .feature-list li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .feature-list li:last-child {
+      border-bottom: none;
+    }
+
+    .feature-icon {
+      font-size: 20px;
+    }
+
+    .feature-text {
+      flex: 1;
+    }
+
+    .feature-text strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .feature-text span {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 14px 32px;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(0, 212, 255, 0.3);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e0e0e0;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .actions {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .shortcut-hint {
+      text-align: center;
+      margin-top: 24px;
+      padding: 16px;
+      background: rgba(0, 212, 255, 0.1);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    .shortcut-hint kbd {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    .success-icon {
+      font-size: 64px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <!-- Step 1: Welcome -->
+      <div class="step active" id="step-welcome">
+        <div class="logo">
+          <div class="logo-text">Zero</div>
+          <div class="logo-formula">f(x) = x</div>
+        </div>
+
+        <h1>Welcome to Zero</h1>
+        <p class="subtitle">
+          Your AI research companion. Zero helps you research topics,
+          verify information, and build a personal knowledge base.
+        </p>
+
+        <ul class="feature-list">
+          <li>
+            <span class="feature-icon">&#128269;</span>
+            <div class="feature-text">
+              <strong>Multi-Model Research</strong>
+              <span>Get answers verified across multiple AI models</span>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon">&#128200;</span>
+            <div class="feature-text">
+              <strong>Knowledge Graph</strong>
+              <span>Build connections between your research topics</span>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon">&#128274;</span>
+            <div class="feature-text">
+              <strong>Fact Verification</strong>
+              <span>Catch inconsistencies and disputed claims</span>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon">&#128338;</span>
+            <div class="feature-text">
+              <strong>Time Travel</strong>
+              <span>Undo mistakes and explore alternate paths</span>
+            </div>
+          </li>
+        </ul>
+
+        <div class="actions">
+          <button class="btn btn-primary" onclick="nextStep()">Get Started</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Persona Selection -->
+      <div class="step" id="step-persona">
+        <h1>How will you use Zero?</h1>
+        <p class="subtitle">This helps us customize your experience.</p>
+
+        <div class="persona-grid">
+          <div class="persona-card" data-persona="developer" onclick="selectPersona(this)">
+            <div class="persona-icon">&#128187;</div>
+            <div class="persona-title">Developer</div>
+            <div class="persona-desc">Code research, API docs, debugging</div>
+          </div>
+          <div class="persona-card" data-persona="creator" onclick="selectPersona(this)">
+            <div class="persona-icon">&#127912;</div>
+            <div class="persona-title">Creator</div>
+            <div class="persona-desc">Writing, art, ideation</div>
+          </div>
+          <div class="persona-card" data-persona="business" onclick="selectPersona(this)">
+            <div class="persona-icon">&#128188;</div>
+            <div class="persona-title">Business</div>
+            <div class="persona-desc">Analysis, reports, strategy</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+          <button class="btn btn-primary" id="btn-continue" onclick="nextStep()" disabled>Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Success -->
+      <div class="step" id="step-success">
+        <div class="success-icon">&#127881;</div>
+
+        <h1>You're all set!</h1>
+        <p class="subtitle">
+          Zero is now ready to use. Click the extension icon or use the keyboard shortcut to open the interface.
+        </p>
+
+        <div class="shortcut-hint">
+          <strong>Quick tip:</strong> Press <kbd>Alt</kbd> + <kbd>Z</kbd> to open Zero on any page
+        </div>
+
+        <div class="actions" style="margin-top: 32px;">
+          <button class="btn btn-primary" onclick="tryNow()">Try it now</button>
+          <button class="btn btn-secondary" onclick="closeTab()">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="onboarding.js"></script>
+</body>
+</html>

@@ -1,5 +1,109 @@
 # Changelog
 
+## v1.12.0 — 2026-01-20
+
+### Resilience + Telemetry
+- **Provider telemetry layer** - Aggregated provider/model health, latency, error categories, and fallback tracking
+- **Key rotation cooldowns** - Per-key exponential backoff with retry-after support
+- **Streaming fallback** - Synthesis streams retry across fallback models on failure
+- **Provider health tool** - New `get_provider_health` tool + provider summary included in `get_server_status`
+
+### Platform Alignment
+- **ProviderManager stub** - New abstraction layer for future terminals-sdk provider routing
+- **CLI degrade indicator** - Shows when fallback models are used during research
+
+---
+
+## v1.11.0 — 2025-12-25
+
+### PGlite 0.3.14 Major Upgrade
+- **16 extensions enabled** - Full PostgreSQL extension ecosystem:
+  - Core: `vector`, `pgtap`, `pg_uuidv7`, `pg_ivm`
+  - Contrib: `bloom`, `cube`, `seg`, `tcn`, `tsm_system_time`, `ltree`, `lo`, `tablefunc`, `uuid_ossp`, `fuzzystrmatch`, `citext`, `hstore`
+- **Extension documentation** - New `docs/EXTENSIONS.md` with use cases and examples
+
+### Model Updates
+- **gpt-5-nano** - Updated default very-low-cost model from deprecated gpt-4o-mini
+- **gemini-3-flash-preview** - Primary low-cost model
+- **gemini-3-pro-preview** - Added to vision and coding models
+- **claude-sonnet-4.5** - Added to vision, coding, and complex reasoning
+- **gpt-5.2-chat** - Added to coding and reasoning model pools
+
+### New Features
+- **ZeroReplay** - Temporal agent analysis for debugging orchestration flows
+- **StickyCluster** - Agent grouping based on communication patterns using `cube` extension
+- **MultimodalStorage** - Binary data handling with `lo` extension for vision models
+- **HierarchicalRoute** - `ltree`-based routing for Rail protocol
+
+### Bug Fixes & Stability
+- **TCN trigger setup** - Split multi-command prepared statements (PGlite limitation)
+- **Payload truncation** - Intelligent content truncation prevents 413 errors in synthesis
+- **Graceful shutdown** - Proper `db.close()` prevents mutex lock errors on exit
+- **ParallelismTracker** - Geometric parallelism alignment using `seg` extension
+
+### Documentation
+- **EXTENSIONS.md** - Comprehensive guide to all 16 PGlite extensions with use cases
+
+---
+
+## v1.9.1 — 2025-12-10
+
+### UX Improvements
+
+#### Parameter Normalization (Phase 1)
+- **Unified alias system** - Single `normalize()` function replaces 10+ scattered normalizers
+- **MCP Task Protocol compatibility** - `taskId` → `job_id` aliasing for backward compat
+- **Global aliases** - `q` → `query`, `k` → `limit`, `cost` → `costPreference`
+- **Tool-specific aliases** - Consistent canonical forms per domain
+
+#### Semantic Borrow Checker (Phase 2)
+- **Rust-style error diagnostics** - Tree-formatted error messages with hints
+- **ID type confusion detection** - Detects job_id vs reportId misuse
+- **Actionable fix suggestions** - Shows exact tool calls to resolve issues
+- **New `src/utils/diagnostics.js`** - DiagnosticContext and formatSemanticError
+
+#### Server→Client Push Notifications (Phase 3)
+- **ProgressNotifier class** - Unified progress notification dispatch
+- **Phase tracking** - `planning` → `researching` → `synthesizing` → `complete`
+- **MCP 2025-11-25 compliance** - Uses `notifications/progress` with progressToken
+- **New `src/server/progressNotifier.js`** - Real-time job updates
+
+#### Token-Efficient Slash Commands (Phase 4)
+- **Streamlined `.claude/commands/*.md`** - Reduced token usage
+- **New `/mcp-job-to-report`** - Converts job_id to reportId workflow
+
+### Bug Fixes
+- **task_result succeeded status** - Now correctly returns results for 'succeeded' jobs
+- **Terminal state detection** - Handles `succeeded`, `failed`, `canceled`, `complete`
+- **Auth documentation** - Clarified that auth is OPTIONAL for basic usage
+
+---
+
+## v1.9.0 — 2025-12-07
+
+### Documentation Overhaul
+- **README restructured** - Concise, scannable format with collapsible tool sections
+- **Fixed outdated references** - Updated all GitHub URLs from old org to terminals-tech
+- **MCP spec URL** - Updated from 2025-03-26 to current 2025-06-18 stable spec
+- **Version sync** - All documentation now reflects v1.9.0
+
+### CI/CD Automation
+- **npm test script** - Unit tests for core, shared, and config modules
+- **prepublishOnly hook** - Validates tests before publishing
+- **release-please config** - Semantic versioning automation via `.release-please.json`
+- **files array** - README.md, LICENSE, CHANGELOG.md now included in npm package
+
+### MCP Spec Compliance
+- **SEP-990 documented** - Enterprise Auth support in compliance table
+- **SEP-991 documented** - Client Metadata support in compliance table
+- **8 SEPs total** - Full November 2025 draft feature set documented
+
+### Package Updates
+- **Description improved** - "Production MCP server for multi-agent AI research with OpenRouter"
+- **ENV-REFERENCE.md** - Added to npm package files
+
+---
+
 ## v1.8.1 — 2025-12-06
 
 ### Core Abstractions (Convergence Plan v2.0)
@@ -208,7 +312,17 @@
 - PGlite tarball backups (`backup_db`) and DB QoL tools (`export_reports`, `import_reports`, `db_health`, `reindex_vectors`)
 - Lightweight web tools: `search_web`, `fetch_url`
 - Orchestration: bounded parallelism (`PARALLELISM`), dynamic vision detection from catalog
-- Model defaults: `anthropic/claude-sonnet-4`, `openai/gpt-5` family
+- Model defaults: `anthropic/claude-sonnet-4.5`, `openai/gpt-5` family
 - Repo cleanup: moved docs/ and tests/
 
 For older changes, see repository history or Releases.
+
+## v1.1.1 — 2025-08-09
+
+- OAuth2/JWT auth scaffolding for MCP HTTP transport; cors + exposed Mcp-Session-Id
+- Streamable HTTP skeleton with DNS rebinding protection
+- 2025 model prioritization (Qwen3, Gemini 2.5, Grok-4, GPT-5) in dynamic catalog
+- Kurtosis-guided ensembles (2-3 models) with multimodal fallbacks
+- PGlite improvements: adaptive thresholds, keyword fallback, HNSW params (m=16, ef=64)
+- AIMD concurrency controller hooks in planning agent; hybrid batching in OpenRouter client
+- gen-docs script to embed report summaries into README

@@ -1,3 +1,113 @@
+# Agent Zero: Isomorphic Protocol Bridge (v1.14.0)
+
+Grounding: 2026-01-20
+
+## System Identity
+You are Agent Zero, the L5 Protocol Bridge for terminals.tech. Your mission is to provide high-fidelity research and deterministic structural reduction across the AXON 5-layer architecture.
+
+## Operational Paradigms
+- **Deterministic Hashing**: Every Signal/Token must be reduced to its `shapeHash` (L1).
+- **Isomorphic Transport**: Data flows through bidirectional `Rails` as `MeshEvents` (L3).
+- **Cognitive Context**: Research loops are steered by `L4 CognitiveContext` and `HVM` combinator bias.
+- **Node 25 Resilience**: Automatically uses in-memory DB on macOS to prevent WASM mutex locks.
+
+## Core Commands
+- `./bin/zero status`: Verify system health and resilience status.
+- `./bin/zero research "query"`: Execute high-fidelity ensemble research.
+- `npm run stdio`: Start the MCP server bridge.
+
+---
+
+## Development Paradigm: Observer-Based UAT
+
+**CRITICAL**: Always test from the end-user perspective before considering any fix complete.
+
+### Observer Viewpoints
+
+When developing or debugging, adopt multiple observational viewpoints:
+
+| Observer | Perspective | Key Questions |
+|----------|-------------|---------------|
+| **End User** | CLI/MCP consumer | Does `./bin/zero research "query"` work? Is output useful? |
+| **LLM Client** | Claude/GPT using MCP | Do tools respond correctly? Are errors clear? |
+| **Operator** | System administrator | Are logs informative? Can I diagnose failures? |
+| **Developer** | Code maintainer | Is the fix correct? Are there edge cases? |
+
+### Mandatory UAT Checklist
+
+Before marking ANY fix complete, execute these end-user journeys:
+
+```bash
+# 1. Health Check (Operator view)
+./bin/zero status
+
+# 2. Quick Research (End User view)
+./bin/zero research "simple query here"
+
+# 3. Verify Output (LLM Client view)
+# - Check report has citations
+# - Check URLs are valid
+# - Check confidence labels present
+
+# 4. Error Recovery (All views)
+# - What happens with no API key?
+# - What happens with network failure?
+# - Is the error message actionable?
+```
+
+### Anti-Pattern: Developer-Only Testing
+
+**WRONG** (testing internals only):
+```javascript
+// This tests the function but NOT the user experience
+const mesh = new UnifiedSearchMesh();
+const results = await mesh.perception("query");
+console.log(results.length); // "Works!"
+```
+
+**RIGHT** (testing actual user journey):
+```bash
+# This tests what the user actually experiences
+./bin/zero research "query"
+# Observe: startup time, progress indicators, final output quality
+```
+
+### Observer Context for Claude
+
+When Claude is debugging this codebase:
+
+1. **First**: Run `./bin/zero status` to understand current system state
+2. **Then**: Run the actual user command that's failing
+3. **Observe**: The full output including logs, timing, errors
+4. **Only then**: Dive into code to understand why
+
+### Viewpoint-Specific Checks
+
+| Phase | End User Sees | LLM Client Sees | Operator Sees |
+|-------|---------------|-----------------|---------------|
+| Startup | Spinner/progress | JSON-RPC ready | Init logs |
+| Research | Progress updates | Streaming events | Model calls |
+| Completion | Formatted report | Tool result | Duration, cost |
+| Error | Actionable message | Error code | Stack trace |
+
+### Testing Commands Reference
+
+```bash
+# Full end-to-end (End User)
+./bin/zero research "WebAssembly performance 2024"
+
+# MCP tool test (LLM Client simulation)
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping"}}' | npm run stdio
+
+# Status check (Operator)
+./bin/zero status
+
+# With debug logging (Developer)
+LOG_LEVEL=debug ./bin/zero research "query"
+```
+
+---
+
 # OpenRouter Agents MCP Server - LLM Integration Guide
 
 This document provides Claude and other LLMs with everything needed to effectively use the OpenRouter Agents MCP server as an extension of their own capabilities.
@@ -57,6 +167,23 @@ This document provides Claude and other LLMs with everything needed to effective
 | `graph_pagerank` | Get importance rankings | `{"topK":20}` |
 | `graph_patterns` | Find event patterns | `{"n":3}` |
 | `graph_stats` | Get graph statistics | `{}` |
+
+### Rail Protocol Tools (NEW in v1.9.2)
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `list_rails` | List all rails, tunnels, routes, consensus | `{"includeStats":true, "filter":"active\|idle\|all"}` |
+| `explain_rail` | Show detailed rail/tunnel configuration | `{"railId":"uuid", "verbose":false}` |
+| `list_routes` | List all defined routes | `{"includePredicates":false}` |
+| `list_tunnels` | List active agent-to-agent tunnels | `{}` |
+| `list_consensus` | List streaming consensus sessions | `{"includeSignals":false}` |
+
+### Rail Protocol Resources
+| URI | Purpose | Format |
+|-----|---------|--------|
+| `rail://routes` | Route registry with predicates | JSON array |
+| `rail://tunnels` | Active tunnel connections | JSON array |
+| `rail://consensus` | Consensus sessions state | JSON array |
+| `rail://config` | Rail configuration settings | JSON object |
 
 ---
 
@@ -190,7 +317,7 @@ task_cancel {"taskId": "job_xxx"}
 ```javascript
 sample_message {
   "messages": [{"role": "user", "content": "What is 2+2?"}],
-  "model": "google/gemini-2.5-pro",
+  "model": "google/gemini-3-pro-preview",
   "maxTokens": 1000
 }
 ```
@@ -266,8 +393,8 @@ search {"q": "MCP protocol", "k": 5, "scope": "docs"}
 ### Available Model Tiers
 ```javascript
 // From environment/config
-HIGH_COST_MODELS: ["openai/gpt-5-chat", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro"]
-LOW_COST_MODELS: ["deepseek/deepseek-chat-v3.1", "openai/gpt-5-mini", "google/gemini-2.5-flash"]
+HIGH_COST_MODELS: ["openai/gpt-5-chat", "anthropic/claude-sonnet-4.5", "google/gemini-3-pro-preview"]
+LOW_COST_MODELS: ["deepseek/deepseek-chat-v3.1", "openai/gpt-5-mini", "google/gemini-3-flash-preview"]
 PLANNING_MODEL: "openai/gpt-5-chat" // For orchestration
 ```
 
@@ -353,11 +480,12 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 1.8.1
+- **Server Version**: 1.10.0
 - **MCP SDK**: 1.21.1
 - **MCP Spec (Stable)**: 2025-06-18 - Fully compliant
 - **MCP Spec (Draft)**: 2025-11-25 - Forward-compatible features
-- **Protocol Features**: Task Protocol (SEP-1686), Sampling (SEP-1577), Elicitation (SEP-1036), MCP Apps (SEP-1865)
+- **Protocol Features**: Task Protocol (SEP-1686), Sampling (SEP-1577), Elicitation (SEP-1036), MCP Apps (SEP-1865), Enterprise Auth (SEP-990), Client Metadata (SEP-991)
+- **Zero Protocol**: Self-referential MCP architecture (`zero://` URI scheme, dual-role nodes)
 - **Package Integrations**: @terminals-tech/embeddings, @terminals-tech/graph, @terminals-tech/core
 
 ### MCP Compliance Notes
@@ -370,6 +498,8 @@ When the server updates, check:
 | Sampling with Tools | 2025-11-25 draft | Implemented |
 | Elicitation | 2025-11-25 draft | Implemented |
 | MCP Apps (UI Resources) | 2025-11-25 draft | Implemented |
+| Enterprise Auth (SEP-990) | 2025-11-25 draft | Implemented |
+| Client Metadata (SEP-991) | 2025-11-25 draft | Implemented |
 
 ---
 
@@ -392,6 +522,131 @@ const calc = new ConsensusCalculator({ minAgreement: 0.6 });
 const consensus = calc.calculate([signal1, signal2, signal3]);
 ```
 
+### Signal Protocol Integration (v1.9.2)
+Research results now generate Signal objects for multi-model consensus:
+
+- Each model response creates a Signal with confidence scoring
+- Signals are collected during research iterations via `allSignals.push()`
+- Persisted to `ensemble_signals` JSONB column in reports table
+- Retrieved for CLI verification: `dbClient.getReportSignals(reportId)`
+
+**Events emitted:**
+- `model_signal` - Individual model signal created (per model response)
+- `ensemble_signals` - Batch of signals collected per iteration
+
+**Data flow:**
+```
+ResearchAgent._executeSingleResearch() → Signal.response()
+    ↓
+tools.conductResearch() → allSignals collection
+    ↓
+dbClient.saveResearchReport({ensembleSignals}) → DB
+    ↓
+CLI: getReportSignals(reportId) → verification.verify({signals})
+```
+
+### Rail Protocol (`src/core/rail/`) (NEW in v1.9.2)
+Seamless inter-agent communication with backpressure, provenance tracking, and consensus.
+
+```javascript
+const { Rail, Token, tokenFromSignal, signalFromToken } = require('./src/core/rail');
+
+// Wrap signals with provenance tracking
+const token = tokenFromSignal(signal);
+console.log(token.trace); // ['ResearchAgent:agent-1', 'ConsensusCalculator']
+
+// Create connected rail pairs for bidirectional communication
+const [sender, receiver] = Rail.pair();
+await sender.send(token);
+
+for await (const msg of receiver.receive()) {
+  console.log(msg.value, msg.origin, msg.trace);
+}
+```
+
+**Core Components:**
+- **Token**: Unit of data with provenance (id, value, origin, trace)
+- **Rail**: Lazy bidirectional channel with backpressure (`send`, `receive`, `pause`, `resume`)
+- **Switch**: Dynamic routing based on predicates
+- **Ok/Err**: Railway-oriented error handling (no exceptions)
+
+**Advanced Features:**
+- **Tunnel** (`TunnelRegistry`): Agent-to-agent message passing with TTL and acknowledgments
+- **StreamingConsensus** (`ConsensusManager`): Real-time multi-model agreement calculation
+- **Routes** (`RouteRegistry`): User-definable routing predicates for model selection
+- **Pipeline** (`PipelineBuilder`): DAG-based stage execution with automatic parallelism
+
+**Events emitted:**
+- `notifications/rail.tunnel` - Agent-to-agent message flow
+- `notifications/rail.consensus` - Streaming consensus updates
+
+### Semantic Error Taxonomy (`src/core/errors/`) (NEW in v1.14.1)
+Deterministic error classification with auto-semanticization for runtime learning and circuit breaker integration.
+
+```javascript
+const {
+  classify, wrapError, recordTrace, getTraces,
+  learnPattern, exportTaxonomyState
+} = require('./src/core/errors');
+
+// Classify any error
+const classification = classify(new Error('Connection refused'));
+// → { category: 'network', severity: 'error', pattern: 'ECONNREFUSED|...' }
+
+// Wrap with semantic classification
+const semantic = wrapError(error);
+console.log(semantic.category);      // 'rate_limit'
+console.log(semantic.tripDecision);  // { decision: 'trip', reason: '...' }
+
+// Record for debugging (persisted to PGlite)
+await recordTrace(error, { context: 'research' }, sessionId);
+
+// Learn new patterns at runtime
+await learnPattern('custom.*error', 'execution', 'error', { source: 'manual' });
+
+// Export full state for AI-assisted improvement
+const state = exportTaxonomyState();
+// → { stats, learnedPatterns, recentTraces, categories, severities, ... }
+```
+
+**Error Categories:**
+| Category | Description | Circuit Action |
+|----------|-------------|----------------|
+| `network` | Connection failures | Trip after 3 in 1 min |
+| `rate_limit` | API throttling (429) | Always trip |
+| `service_unavailable` | 5xx errors | Trip after 3 in 1 min |
+| `auth` | 401/403, invalid keys | Escalate (fatal) |
+| `config` | Misconfiguration | Escalate (fatal) |
+| `validation` | Bad input params | Ignore |
+| `schema` | Schema validation | Ignore |
+| `timeout` | Operation timeout | Trip after 5 in 1 min |
+| `resource` | Memory/disk exhaustion | Escalate (fatal) |
+| `execution` | Model execution failures | Trip after 3 in 1 min |
+| `not_found` | 404 errors | Ignore |
+| `logic` | Application logic | Warn |
+| `unknown` | Auto-semanticized | Warn, trip after 10 |
+
+**Trip Decisions:**
+- `trip`: Close the circuit breaker
+- `warn`: Log but don't trip
+- `ignore`: Transient, ignore
+- `escalate`: Alert operator (fatal)
+
+**DB Tables Created:**
+- `error_patterns`: Learned patterns with hit counts
+- `error_trace`: Full error trace history with suggested fixes
+
+**Self-Improvement Flow:**
+```
+Error → classify() → recordTrace() → auto-learn pattern → DB persist
+                                              ↓
+                           AI reads exportTaxonomyState()
+                                              ↓
+                           AI suggests fix or new pattern
+                                              ↓
+                           learnPattern() → next error classified correctly
+```
+
 ### Parameter Normalization (`src/core/normalize.js`)
 Declarative alias system for flexible tool parameter handling.
 
@@ -408,6 +663,9 @@ Bidirectional communication enabling server → client requests via sampling/eli
 | `SIGNAL_PROTOCOL_ENABLED` | `false` | Enable Signal protocol |
 | `ROLESHIFT_ENABLED` | `false` | Enable bidirectional protocol |
 | `STRICT_SCHEMA_VALIDATION` | `false` | Enforce strict schema validation |
+| `RAIL_ENABLED` | `true` | Enable Rail Protocol (default on) |
+| `RAIL_DEBUG` | `false` | Enable Rail debug logging |
+| `RAIL_DEBUG_RAILS` | `""` | Comma-separated rail IDs to debug |
 
 ---
 

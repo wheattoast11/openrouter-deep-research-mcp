@@ -1,20 +1,24 @@
 # MCP SQL Query
 
-Execute a read-only SQL query against the MCP server database.
+Execute read-only SELECT queries.
 
-## Instructions
+## Steps
 
-1. Parse the user's intent and construct a safe SELECT query
-2. Execute using `mcp__openrouter-agents__query` with:
-   - `sql`: The SELECT statement
-   - `params`: Array of parameters for placeholders ($1, $2, etc.)
-   - `explain`: true (to get natural language explanation)
-3. Present the results in a readable format
+1. `query({ sql: "<SELECT...>", params: [], explain: true })`
+2. Present results in table format
 
-## Common Tables
-- `research_reports`: id, query, final_report, rating, created_at
-- `jobs`: id, type, status, result, created_at
-- `doc_index`: id, source_type, title, content
+## Tables
 
-## Query Request
+| Table | Key Columns |
+|-------|-------------|
+| research_reports | id, original_query, final_report, rating, created_at |
+| jobs | id, type, status, result, progress, created_at |
+| doc_index | source_type, source_id, title, content |
+
+## Safety
+
+- SELECT only (no INSERT/UPDATE/DELETE)
+- Use $1, $2 placeholders for params
+
+## Query
 $ARGUMENTS

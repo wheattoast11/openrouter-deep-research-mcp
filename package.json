@@ -1,7 +1,7 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.9.0",
-  "description": "OpenRouter MCP server for research agents",
+  "version": "1.15.0",
+  "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
   "bin": {
     "openrouter-agents": "src/server/mcpServer.js"
@@ -10,7 +10,13 @@
     "start": "node src/server/mcpServer.js",
     "dev": "nodemon src/server/mcpServer.js",
     "stdio": "node src/server/mcpServer.js --stdio",
+    "test": "node tests/unit/core.test.js && node tests/unit/config.test.js",
+    "test:integration": "node tests/integration/orchestration/mic-drop.test.js",
+    "test:mic-drop": "DRY_RUN=true node tests/integration/orchestration/mic-drop.test.js",
+    "test:mic-drop:live": "node tests/integration/orchestration/mic-drop.test.js",
+    "bench": "node src/bench/index.js",
     "postinstall": "node scripts/postinstall.js",
+    "prepublishOnly": "npm test",
     "setup-claude": "node scripts/setup-claude-code.js",
     "gen:examples": "node scripts/generate-examples.js",
     "gen:docs": "node scripts/gen-docs.js",
@@ -18,12 +24,19 @@
   },
   "files": [
     "src/",
+    "bin/",
+    "templates/",
     "config.js",
     "scripts/postinstall.js",
     "scripts/setup-claude-code.js",
     ".claude/",
     "CLAUDE.md",
-    "docs/TOOL-PATTERNS.md"
+    "README.md",
+    "LICENSE",
+    "docs/CHANGELOG.md",
+    "docs/TOOL-PATTERNS.md",
+    "docs/ENV-REFERENCE.md",
+    "docs/EXTENSIONS.md"
   ],
   "publishConfig": {
     "access": "public"
@@ -44,11 +57,11 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.2.17",
+    "@electric-sql/pglite": "^0.3.14",
     "@modelcontextprotocol/sdk": "^1.21.1",
+    "@terminals-tech/core": "^0.1.1",
     "@terminals-tech/embeddings": "^0.1.0",
     "@terminals-tech/graph": "^0.1.0",
-    "@terminals-tech/core": "^0.1.1",
     "axios": "^1.6.2",
     "csv-parse": "^5.6.0",
     "date-fns": "^4.1.0",

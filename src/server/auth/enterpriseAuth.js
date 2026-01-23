@@ -196,18 +196,40 @@ class EnterpriseAuthHandler {
       }
     }
 
-    // For opaque tokens, use introspection endpoint
+    // For opaque tokens, use introspection endpoint (RFC 7662)
     const introspectionEndpoint = new URL('/oauth/introspect', this.idpUrl).toString();
+
+    // Build request headers with client authentication
+    const headers = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json'
+    };
+
+    // RFC 7662 requires client authentication for introspection
+    // Prefer HTTP Basic auth if client credentials are configured
+    const clientId = process.env.ENTERPRISE_CLIENT_ID || config.mcp?.auth?.enterpriseClientId;
+    const clientSecret = process.env.ENTERPRISE_CLIENT_SECRET || config.mcp?.auth?.enterpriseClientSecret;
+
+    if (clientId && clientSecret) {
+      // HTTP Basic authentication (preferred per RFC 7662)
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      headers['Authorization'] = `Basic ${credentials}`;
+    }
+
+    const bodyParams = {
+      token: accessToken,
+      token_type_hint: 'access_token'
+    };
+
+    // Fallback: include client_id in body if no secret (public client)
+    if (clientId && !clientSecret) {
+      bodyParams.client_id = clientId;
+    }
 
     const response = await fetch(introspectionEndpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        token: accessToken,
-        token_type_hint: 'access_token'
-      })
+      headers,
+      body: new URLSearchParams(bodyParams)
     });
 
     if (!response.ok) {

@@ -1,11 +1,16 @@
 // src/agents/researchAgent.js
-const openRouterClient = require('../utils/openRouterClient');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import the new parser
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
 const logger = require('../utils/logger').child('ResearchAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
-const RobustWebScraper = require('../utils/robustWebScraper'); // Web grounding for real-time data
+const UnifiedSearchMesh = require('../utils/robustWebScraper'); // Web grounding for real-time data
+const { Signal } = require('../core/signal'); // Signal Protocol integration
+const { tokenFromSignal } = require('../core/rail/index'); // Rail Protocol - Token wrapping for provenance
+const { StreamingConsensus, ConsensusState } = require('../core/rail/consensus'); // Rail Consensus for multi-model verification
+const providerTelemetry = require('../utils/providerTelemetry');
+const providerManager = require('../core/providers'); // Now CognitiveRouter
+const { Interaction, InteractionType } = require('../core/interactions/types');
 const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
@@ -31,7 +36,45 @@ const WEB_GROUNDING_CONFIG = {
 };
 
 // Singleton web scraper instance
-const webScraper = new RobustWebScraper();
+const webScraper = new UnifiedSearchMesh();
+
+/**
+ * Convert a research result to a Signal object
+ * @param {Object} result - Research result from _executeSingleResearch
+ * @param {Object} phaseMetadata - Optional phase tracking metadata
+ * @param {number} phaseMetadata.sequenceNumber - Position in ensemble execution
+ * @param {number} phaseMetadata.ensembleSize - Total models in ensemble
+ * @param {string} phaseMetadata.phaseName - Current phase name (e.g., 'execution', 'synthesis')
+ * @param {number} phaseMetadata.duration - Execution duration in ms
+ * @returns {Signal} Signal object for consensus/verification
+ */
+function resultToSignal(result, phaseMetadata = {}) {
+  if (result.error) {
+    return Signal.error(result.errorMessage || result.result, result.model, {
+      tags: ['research', 'ensemble'],
+      phase: phaseMetadata.sequenceNumber ?? 0,
+      phaseName: phaseMetadata.phaseName || 'error'
+    });
+  }
+
+  // Calculate confidence from result quality indicators
+  let confidence = 0.8; // Base confidence
+  const responseLength = (result.result || '').length;
+  if (responseLength > 2000) confidence += 0.05;
+  if (responseLength > 4000) confidence += 0.05;
+  if (/\[Source:|https?:\/\//.test(result.result || '')) confidence += 0.05;
+
+  return Signal.response(result.result, result.model, Math.min(confidence, 1.0), {
+    tags: ['research', 'ensemble', `agent-${result.agentId}`],
+    phase: phaseMetadata.sequenceNumber ?? 0,
+    phaseName: phaseMetadata.phaseName || 'execution',
+    ensembleMetadata: {
+      sequenceNumber: phaseMetadata.sequenceNumber,
+      ensembleSize: phaseMetadata.ensembleSize,
+      duration: phaseMetadata.duration
+    }
+  });
+}
 
 class ResearchAgent {
   constructor() {
@@ -62,19 +105,25 @@ class ResearchAgent {
       logger.info('Performing web grounding search', { requestId, query: query.substring(0, 80) });
       const startTime = Date.now();
 
-      const results = await webScraper.searchWeb(query, WEB_GROUNDING_CONFIG.maxResults);
+      const signals = await webScraper.perception(query, WEB_GROUNDING_CONFIG.maxResults);
 
-      if (!results || results.length === 0) {
+      if (!signals || signals.length === 0) {
         logger.warn('Web grounding returned no results', { requestId, query: query.substring(0, 50) });
         return { success: false, context: '', sources: [] };
       }
+
+      const results = signals.map(s => ({
+        title: s.payload.title,
+        url: s.payload.url,
+        text: s.payload.snippet
+      }));
 
       const duration = Date.now() - startTime;
       logger.info('Web grounding completed', { requestId, resultCount: results.length, durationMs: duration });
 
       // Format results for LLM context
       const formattedResults = results.map((r, i) =>
-        `[${i + 1}] ${r.title}\nSource: ${r.url}\n${r.text || r.snippet || ''}`
+        `[${i + 1}] ${r.title}\nSource: ${r.url}\n${r.text || ''}`
       ).join('\n\n');
 
       const context = `
@@ -108,7 +157,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     // Assuming requestId is passed down or generated if needed
     const requestId = options?.requestId || 'unknown-req'; 
     try {
-      const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
+      const response = await providerManager.chat(this.classificationModel, messages, {
         temperature: 0.1, // Low temp for consistent classification
         max_tokens: 64 // Ensure well above OpenRouter minimum of 16
       });
@@ -138,7 +187,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
         const systemPrompt = `Assess the complexity of the following research query. Is it likely answerable with a concise factual statement or does it require deep analysis? Respond with ONLY one complexity level: ${COMPLEXITY_LEVELS.join(', ')}.`;
         const messages = [ { role: 'system', content: systemPrompt }, { role: 'user', content: query } ];
         try {
-           const response = await openRouterClient.chatCompletion(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
+           const response = await providerManager.chat(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
            let complexity = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
            if (COMPLEXITY_LEVELS.includes(complexity)) {
               logger.debug('Classified query complexity', { requestId, query: query.substring(0, 50), complexity });
@@ -235,18 +284,23 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
   async conductResearch(query, agentId, costPreference = 'low', audienceLevel = 'intermediate', includeSources = true, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null, extra = {}) {
     const domain = await this.classifyQueryDomain(query, { requestId });
     const complexity = await this.assessQueryComplexity(query, { requestId });
+    
+    // Adaptive Ensemble Scaling (Batch A)
+    const adaptiveSize = complexity === 'simple' ? 1 : complexity === 'complex' ? 3 : 2;
+    const targetEnsembleSize = Math.max(1, Math.min(3, adaptiveSize));
+
     const mode = extra?.mode || 'standard';
     // Hyper mode prefers fastest locally-available providers from config/catalog (no hardcoded Morph models)
     let primaryModel;
     if (mode === 'hyper') {
       try {
         const preferred = [
-          'inception/mercury',
-          'google/gemini-2.5-flash',
-          'z-ai/glm-4.5-air',
-          'z-ai/glm-4.5v',
-          'deepseek/deepseek-chat-v3.1',
-          'openai/gpt-oss-120b'
+          'google/gemini-3-flash-preview',
+          'anthropic/claude-sonnet-4.5',
+          'google/gemini-3-pro-preview',
+          'perplexity/sonar-pro-search',
+          'moonshotai/kimi-k2-thinking',
+          'openai/gpt-5.2-chat'
         ];
         // From dynamic catalog if available; else fall back to configured lists
         let catalog = [];
@@ -282,9 +336,13 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
 
     if (mode === 'hyper') {
       const hyperAlts = [
-        'qwen/qwen3-235b-a22b-2507',
-        'google/gemini-2.5-flash',
-        'z-ai/glm-4.5-air'
+        'google/gemini-3-pro-preview',
+        'anthropic/claude-haiku-4.5',
+        'deepcogito/cogito-v2.1-671b',
+        'perplexity/sonar-pro-search',
+        'moonshotai/kimi-k2-thinking',
+        'openai/gpt-5.2-chat',
+        'openai/o4-mini-deep-research'
       ];
       for (const id of hyperAlts) addAlt(id);
     }
@@ -313,17 +371,98 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
       } catch (_) {}
     }
 
-    const modelsToRun = Array.from(ensemble).slice(0, Math.max(2, Math.min(3, this.ensembleSize)));
-    logger.debug('Ensemble models selected', { requestId, agentId, models: modelsToRun });
+    // Adaptive Ensemble Scaling (Batch A)
+    // Use targetEnsembleSize derived from query complexity
+    const modelsToRun = Array.from(ensemble).slice(0, targetEnsembleSize);
+    logger.debug('Ensemble models selected', { requestId, agentId, models: modelsToRun, complexity, adaptiveSize: targetEnsembleSize });
 
-    const ensemblePromises = modelsToRun.map(model => 
-      this._executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent)
+    // Create StreamingConsensus for multi-model verification
+    const consensus = new StreamingConsensus({
+      minAgreement: config.core?.rail?.consensus?.minAgreement ?? 0.6,
+      timeoutMs: config.core?.rail?.consensus?.timeoutMs ?? 30000,
+      updateIntervalMs: config.core?.rail?.consensus?.updateIntervalMs ?? 500
+    });
+
+    // Start consensus tracking (no progressToken needed for internal use)
+    consensus.start(requestId);
+
+    // Execute ensemble with consensus tracking - each model feeds its signal as it completes
+    const results = await Promise.all(
+      modelsToRun.map(async (model) => {
+        const result = await this._executeSingleResearch(
+          query, agentId, model, audienceLevel, includeSources,
+          images, textDocuments, structuredData, inputEmbeddings,
+          requestId, onEvent, {
+            costPreference,
+            primaryModel: primaryModel,
+            ensemble: modelsToRun
+          }
+        );
+
+        // Feed signal to consensus calculator as each model completes
+        if (result.signal) {
+          consensus.addSignal({
+            source: model,
+            confidence: result.signal.confidence || 0.8,
+            payload: result.result
+          });
+
+          // Emit consensus update event
+          if (onEvent) {
+            const currentConsensus = consensus.calculate();
+            await onEvent('consensus_update', {
+              requestId,
+              state: currentConsensus.state,
+              agreement: currentConsensus.agreement,
+              confidence: currentConsensus.confidence,
+              signalCount: currentConsensus.signalCount,
+              elapsed: currentConsensus.elapsed
+            });
+          }
+        }
+
+        return result;
+      })
     );
-    return Promise.all(ensemblePromises);
+
+    // Get final consensus result
+    const finalConsensus = consensus.getResult();
+    consensus.stop();
+
+    logger.info('Ensemble consensus calculated', {
+      requestId,
+      agentId,
+      state: finalConsensus.state,
+      agreement: finalConsensus.agreement?.toFixed(2),
+      confidence: finalConsensus.confidence?.toFixed(2),
+      signalCount: finalConsensus.signalCount,
+      duration: finalConsensus.duration
+    });
+
+    // Emit final consensus event
+    if (onEvent) {
+      await onEvent('ensemble_consensus', {
+        requestId,
+        consensus: {
+          state: finalConsensus.state,
+          agreement: finalConsensus.agreement,
+          confidence: finalConsensus.confidence,
+          majority: finalConsensus.majority ? {
+            sources: finalConsensus.majority.sources,
+            count: finalConsensus.majority.count
+          } : null,
+          duration: finalConsensus.duration
+        }
+      });
+    }
+
+    // Attach consensus metadata to results for downstream use
+    results._consensus = finalConsensus;
+    return results;
   }
   
   // Updated to include structuredData, inputEmbeddings, requestId, and onEvent parameters
-  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null) { 
+  async _executeSingleResearch(query, agentId, model, audienceLevel, includeSources, images = null, textDocuments = null, structuredData = null, inputEmbeddings = null, requestId = 'unknown-req', onEvent = null, context = {}) { 
      // Dynamic capability check via model catalog
      let modelSupportsVision = false;
      try {
@@ -334,10 +473,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
      // Fallback known list
      if (!modelSupportsVision) {
              const KNOWN_VISION_MODELS = [
-        "openai/gpt-4o", "openai/gpt-4o-mini",
-        "google/gemini-2.5-pro", "google/gemini-2.5-flash",
-        "z-ai/glm-4.5v",
-        "anthropic/claude-3.7-sonnet"
+        "anthropic/claude-opus-4.5", "google/gemini-3-flash-preview", "openai/gpt-5.2"
       ];
        modelSupportsVision = KNOWN_VISION_MODELS.includes(model);
      }
@@ -414,6 +550,15 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     const userMessageContent = [];
     let queryText = query; // Start with the original query text
     
+    // Terminals Interaction Primitive
+    const interaction = new Interaction({
+        type: InteractionType.RESEARCH,
+        input: query,
+        context: { agentId, requestId },
+        constraints: { cost: context.costPreference || 'low' }
+    });
+    interaction.addTrace('started');
+    
     if (modelSupportsVision && images && images.length > 0) {
        logger.debug('Including images with analysis prompt', { requestId, agentId, imageCount: images.length, model });
        // Modify query text to ask for image analysis
@@ -448,11 +593,38 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
        // Throw an explicit error here to prevent calling the API with an invalid model
        throw new Error(`ResearchAgent ${agentId}: Attempted to call API with undefined model.`);
     }
+    
+    let activeModel = model;
     try {
-      const response = await openRouterClient.chatCompletion(model, messages, {
-        temperature: 0.3, // Low temperature for factual research
-        max_tokens: 4000 // Allow ample space for detailed analysis
-      });
+    const fallbackCandidates = Array.isArray(context.ensemble) ? context.ensemble : [];
+    const fallbackQueue = [model, ...fallbackCandidates.filter(id => id && id !== model)];
+    let response = null;
+    let lastError = null;
+
+    for (let i = 0; i < fallbackQueue.length; i++) {
+      activeModel = fallbackQueue[i];
+      try {
+        response = await providerManager.chat(activeModel, messages, {
+          temperature: 0.3, // Low temperature for factual research
+          max_tokens: 4000 // Allow ample space for detailed analysis
+        });
+        if (i > 0) {
+          logger.warn('Research fallback model succeeded', { requestId, agentId, fallbackFrom: model, fallbackTo: activeModel });
+          providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: model, toModel: activeModel });
+        }
+        break;
+      } catch (error) {
+        lastError = error;
+        logger.warn('Research model failed, trying fallback', { requestId, agentId, model: activeModel, error: error.message });
+        if (i > 0) {
+          providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: model, toModel: activeModel });
+        }
+      }
+    }
+
+    if (!response) {
+      throw lastError || new Error('Research failed with no response');
+    }
       // Capture usage if provided
       const usage = response.usage || null;
       if (onEvent && usage) {
@@ -461,27 +633,72 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
       
       const duration = Date.now() - startTime;
       logger.info('Research completed', { requestId, agentId, durationMs: duration, model });
-      return {
+
+      const resultObj = {
         agentId, // Keep original agentId for grouping
-        model,   // Record the specific model used
+        model: activeModel,   // Record the specific model used
         query,
         result: response.choices[0].message.content,
         error: false, // Indicate success
         usage
       };
+
+      // Create signal from result with phase metadata
+      const phaseMetadata = {
+        sequenceNumber: context.phaseMetadata?.sequenceNumber ?? 0,
+        ensembleSize: context.phaseMetadata?.ensembleSize ?? 1,
+        phaseName: context.phaseMetadata?.phaseName || 'execution',
+        duration
+      };
+      resultObj.signal = resultToSignal(resultObj, phaseMetadata);
+
+      // Wrap signal in Token for provenance tracking (Rail Protocol)
+      resultObj.token = tokenFromSignal(resultObj.signal);
+      resultObj.token.trace.push(`ResearchAgent:${agentId}:${activeModel}`);
+
+      // Emit isomorphic MeshEvent for Knowledge Graph and external observers
+      if (onEvent) {
+        const meshEvent = resultObj.token.toMeshEvent();
+        await onEvent('mesh_event', meshEvent);
+        
+        await onEvent('model_signal', {
+          signal: resultObj.signal.toJSON(),
+          agentId,
+          model: activeModel,
+          shapeHash: resultObj.signal.shapeHash
+        });
+      }
+
+      return resultObj;
     } catch (error) {
       const duration = Date.now() - startTime;
       logger.error('Research error', { requestId, agentId, durationMs: duration, query: query.substring(0, 50), model, error });
+
       // Return error information structured similarly to success response
-      return {
+      const errorObj = {
         agentId,
-        model,
+        model: activeModel,
         query,
-        result: `ResearchAgent ${agentId} (Model: ${model}) failed for query "${query.substring(0, 50)}...": ${error.message}`,
+        result: `ResearchAgent ${agentId} (Model: ${activeModel}) failed for query "${query.substring(0, 50)}...": ${error.message}`,
         error: true,
         errorMessage: error.message,
         errorStack: error.stack // Include stack trace for better debugging
       };
+
+      // Create error signal with phase metadata
+      const errorPhaseMetadata = {
+        sequenceNumber: context.phaseMetadata?.sequenceNumber ?? 0,
+        ensembleSize: context.phaseMetadata?.ensembleSize ?? 1,
+        phaseName: 'error',
+        duration
+      };
+      errorObj.signal = resultToSignal(errorObj, errorPhaseMetadata);
+
+      // Wrap error signal in Token for provenance tracking (Rail Protocol)
+      errorObj.token = tokenFromSignal(errorObj.signal);
+      errorObj.token.trace.push(`ResearchAgent:${agentId}:${activeModel}:error`);
+
+      return errorObj;
     }
   }
 
@@ -493,12 +710,14 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     const mode = extra?.mode || 'standard';
 
     // Bounded concurrency queue
-    const results = [];
+    const results = new Array(queries.length).fill(null);
     let idx = 0;
     const worker = async () => {
       while (idx < queries.length) {
         const current = idx++;
         const q = queries[current];
+        if (!q) continue; // Safety check
+
         try {
           if (onEvent) await onEvent('agent_started', { agent_id: q.id, query: q.query, cost: costPreference, mode });
           const value = await this.conductResearch(q.query, q.id, costPreference, 'intermediate', true, images, textDocuments, structuredData, inputEmbeddings, requestId, onEvent, { mode });
@@ -514,7 +733,7 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     const workers = Array.from({ length: Math.min(parallelism, queries.length) }, () => worker());
     await Promise.all(workers);
 
-    const flatResults = results.flat();
+    const flatResults = results.filter(r => r !== null).flat();
     const duration = Date.now() - startTime;
     const successfulTasks = flatResults.filter(r => !r.error).length;
     const failedTasks = flatResults.length - successfulTasks;

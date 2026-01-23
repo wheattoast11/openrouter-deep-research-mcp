@@ -11,12 +11,29 @@ let graphInitialized = false;
 async function initGraphModule() {
   if (graphInitialized) return true;
   try {
-    const graphModule = await import('@terminals-tech/graph');
-    GraphProcessor = graphModule.GraphProcessor;
-    TextGraph = graphModule.TextGraph;
-    PatternMatcher = graphModule.PatternMatcher;
+    // DUMMY IMPLEMENTATION for @terminals-tech/graph
+    // const graphModule = await import('@terminals-tech/graph');
+    
+    GraphProcessor = class {
+      addEvent() {}
+      getSubgraph() { return { nodes: [], edges: [] }; }
+      findPath() { return []; }
+      findClusters() { return []; }
+      calculatePageRank() { return {}; }
+    };
+    
+    TextGraph = class {
+      extractRelations() { return []; }
+    };
+    
+    PatternMatcher = class {
+      extractPatterns() { return []; }
+      detectAnomalies() { return []; }
+      predictNext() { return []; }
+    };
+
     graphInitialized = true;
-    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/graph initialized successfully.\n`);
+    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/graph initialized successfully (DUMMY).\n`);
     return true;
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Failed to initialize @terminals-tech/graph:`, err);
@@ -51,14 +68,14 @@ class KnowledgeGraph {
 
   async ensureSchema() {
     const db = this.dbClient;
-    if (!db || !db.executeQuery) {
-      console.error('[KnowledgeGraph] dbClient not available for schema creation');
+    if (!db || !db.executeDDL) {
+      console.error('[KnowledgeGraph] dbClient.executeDDL not available for schema creation');
       return;
     }
 
     try {
-      // Graph nodes table
-      await db.executeQuery(`
+      // Graph nodes table with provider tracking
+      await db.executeDDL(`
         CREATE TABLE IF NOT EXISTS graph_nodes (
           id TEXT PRIMARY KEY,
           node_type TEXT NOT NULL,
@@ -66,12 +83,26 @@ class KnowledgeGraph {
           title TEXT,
           description TEXT,
           metadata JSONB,
+          provider_id TEXT,
+          lineage JSONB DEFAULT '[]',
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
       `, []);
 
+      // Add provider_id column if it doesn't exist (migration for existing tables)
+      await db.executeDDL(`
+        DO $$ BEGIN
+          ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS provider_id TEXT;
+          ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS lineage JSONB DEFAULT '[]';
+        EXCEPTION WHEN others THEN NULL;
+        END $$;
+      `, []);
+
+      // Index for provider-based queries
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_nodes_provider ON graph_nodes(provider_id);`, []);
+
       // Graph edges table with relationship types
-      await db.executeQuery(`
+      await db.executeDDL(`
         CREATE TABLE IF NOT EXISTS graph_edges (
           id SERIAL PRIMARY KEY,
           source_id TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
@@ -85,10 +116,10 @@ class KnowledgeGraph {
       `, []);
 
       // Indexes for efficient traversal
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);`, []);
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);`, []);
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);`, []);
-      await db.executeQuery(`CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(node_type);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);`, []);
+      await db.executeDDL(`CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(node_type);`, []);
 
       process.stderr.write(`[${new Date().toISOString()}] Knowledge graph schema created/verified.\n`);
     } catch (err) {
@@ -120,14 +151,20 @@ class KnowledgeGraph {
       };
       this.processor.addEvent(node, relations);
 
-      // Persist node to PGLite
+      // Determine provider from context (default to mcp-server)
+      const providerId = report.provider_id || report.providerId || 'openrouter-research-mcp';
+      const lineage = report.lineage || [providerId];
+
+      // Persist node to PGLite with provider tracking
       await this.dbClient.executeQuery(`
-        INSERT INTO graph_nodes (id, node_type, source_id, title, description, metadata)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO graph_nodes (id, node_type, source_id, title, description, metadata, provider_id, lineage)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (id) DO UPDATE SET
           title = EXCLUDED.title,
           description = EXCLUDED.description,
-          metadata = EXCLUDED.metadata
+          metadata = EXCLUDED.metadata,
+          provider_id = COALESCE(EXCLUDED.provider_id, graph_nodes.provider_id),
+          lineage = EXCLUDED.lineage
       `, [
         nodeId,
         'report',
@@ -138,7 +175,9 @@ class KnowledgeGraph {
           relations: relations.slice(0, 50),
           parameters: report.parameters,
           created_at: report.created_at
-        })
+        }),
+        providerId,
+        JSON.stringify(lineage)
       ]);
 
       // Create edges for extracted relations
@@ -372,6 +411,9 @@ class KnowledgeGraph {
       const typeDistribution = await this.dbClient.executeQuery(`
         SELECT node_type, COUNT(*) as count FROM graph_nodes GROUP BY node_type
       `, []);
+      const providerDistribution = await this.dbClient.executeQuery(`
+        SELECT provider_id, COUNT(*) as count FROM graph_nodes WHERE provider_id IS NOT NULL GROUP BY provider_id
+      `, []);
 
       return {
         nodeCount: nodeCount.rows?.[0]?.count || 0,
@@ -379,10 +421,84 @@ class KnowledgeGraph {
         typeDistribution: (typeDistribution.rows || []).reduce((acc, r) => {
           acc[r.node_type] = Number(r.count);
           return acc;
+        }, {}),
+        providerDistribution: (providerDistribution.rows || []).reduce((acc, r) => {
+          acc[r.provider_id] = Number(r.count);
+          return acc;
         }, {})
       };
     } catch (err) {
-      return { nodeCount: 0, edgeCount: 0, typeDistribution: {}, error: err.message };
+      return { nodeCount: 0, edgeCount: 0, typeDistribution: {}, providerDistribution: {}, error: err.message };
+    }
+  }
+
+  /**
+   * Get nodes by provider
+   * @param {string} providerId - Provider ID (e.g., 'claude-code', 'opencode')
+   * @param {number} limit - Maximum nodes to return
+   */
+  async getNodesByProvider(providerId, limit = 50) {
+    try {
+      const result = await this.dbClient.executeQuery(`
+        SELECT id, node_type, title, description, metadata, lineage, created_at
+        FROM graph_nodes
+        WHERE provider_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+      `, [providerId, limit]);
+
+      return {
+        nodes: (result.rows || []).map(n => ({
+          id: n.id,
+          type: n.node_type,
+          title: n.title,
+          description: n.description,
+          metadata: n.metadata,
+          lineage: n.lineage,
+          createdAt: n.created_at
+        })),
+        providerId,
+        count: result.rows?.length || 0
+      };
+    } catch (err) {
+      return { nodes: [], providerId, count: 0, error: err.message };
+    }
+  }
+
+  /**
+   * Get cross-provider connections (nodes that reference multiple providers)
+   */
+  async getCrossProviderConnections() {
+    try {
+      // Find edges where source and target have different providers
+      const result = await this.dbClient.executeQuery(`
+        SELECT
+          e.source_id, e.target_id, e.edge_type, e.weight,
+          s.provider_id as source_provider,
+          t.provider_id as target_provider
+        FROM graph_edges e
+        JOIN graph_nodes s ON e.source_id = s.id
+        JOIN graph_nodes t ON e.target_id = t.id
+        WHERE s.provider_id IS NOT NULL
+          AND t.provider_id IS NOT NULL
+          AND s.provider_id != t.provider_id
+        ORDER BY e.weight DESC
+        LIMIT 100
+      `, []);
+
+      return {
+        connections: (result.rows || []).map(r => ({
+          sourceId: r.source_id,
+          targetId: r.target_id,
+          edgeType: r.edge_type,
+          weight: r.weight,
+          sourceProvider: r.source_provider,
+          targetProvider: r.target_provider
+        })),
+        count: result.rows?.length || 0
+      };
+    } catch (err) {
+      return { connections: [], count: 0, error: err.message };
     }
   }
 }

@@ -1,16 +1,19 @@
-# MCP Server Status Check
+# MCP Status
 
-Perform a comprehensive health check of the OpenRouter Agents MCP server.
+Comprehensive server health check.
 
-## Instructions
+## Steps
 
-1. Run `mcp__openrouter-agents__ping` to verify basic connectivity
-2. Run `mcp__openrouter-agents__get_server_status` for full status
-3. Run `mcp__openrouter-agents__history` to see recent research reports
-4. Run `mcp__openrouter-agents__task_list` to see any active or recent tasks
-5. Present a summary including:
-   - Server version and health
-   - Database and embedder status
-   - Job queue status (queued, running, succeeded, failed)
-   - Recent research reports (last 5)
-   - Any active tasks
+1. `ping()` -> basic connectivity
+2. `get_server_status()` -> db, embedder, jobs
+3. `history({ limit: 5 })` -> recent reports
+4. `task_list({ limit: 5 })` -> active jobs
+
+## Key Indicators
+
+| Component | Healthy State |
+|-----------|---------------|
+| database.initialized | true |
+| embedder.ready | true |
+| jobs.running | 0-5 normal |
+| jobs.failed | 0 ideal |

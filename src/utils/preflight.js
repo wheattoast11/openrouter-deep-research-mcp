@@ -540,7 +540,7 @@ function preflightForTool(toolName, dbClient) {
  * Check if OpenRouter API key is configured
  */
 function checkAPIKey() {
-  const apiKey = config.openrouter?.apiKey;
+  const apiKey = config.openrouter?.apiKey || config.openrouter?.apiKeys?.[0];
 
   if (!apiKey) {
     return {

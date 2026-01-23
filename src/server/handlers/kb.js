@@ -5,6 +5,7 @@
  */
 
 const { normalize } = require('../../core/normalize');
+const { ConsensusCalculator } = require('../../core/signal');
 
 /**
  * Unified KB handler
@@ -89,10 +90,12 @@ async function executeQuery(params, dbClient) {
     throw new Error('Only SELECT queries are allowed. Use sql parameter for SELECT queries.');
   }
 
-  // Check for dangerous patterns
+  // Check for dangerous patterns using word boundaries to avoid false positives
+  // (e.g., "created_at" should not match "create")
   const dangerous = ['drop', 'delete', 'update', 'insert', 'alter', 'truncate', 'create'];
   for (const word of dangerous) {
-    if (normalized.includes(word)) {
+    const regex = new RegExp(`\\b${word}\\b`, 'i');
+    if (regex.test(normalized)) {
       throw new Error(`Dangerous SQL keyword detected: ${word}. Only read-only SELECT allowed.`);
     }
   }
@@ -134,25 +137,56 @@ async function retrieve(params, dbClient) {
 
 /**
  * Get report by ID
+ *
+ * Includes job_id detection to provide helpful guidance when users
+ * mistakenly pass a job ID instead of a report ID.
  */
 async function getReport(params, dbClient) {
   const reportId = params.reportId || params.id || params.report_id;
   const { mode = 'full', maxChars = 2000, query: summaryQuery } = params;
 
   if (!reportId) {
-    throw new Error('reportId is required');
+    throw new Error('reportId is required. Use history() to list available reports.');
+  }
+
+  // Detect if user passed a job_id instead of reportId
+  // Job IDs have format: job_<timestamp>_<random>
+  if (/^job_\d+_[a-z0-9]{6,}$/i.test(String(reportId))) {
+    throw new Error(
+      `"${reportId}" appears to be a Job ID, not a Report ID.\n` +
+      `Report IDs are integers (e.g., "5", "42").\n\n` +
+      `To get the report from this job:\n` +
+      `1. job_status({ job_id: "${reportId}" }) -> check if status is "succeeded"\n` +
+      `2. Extract the reportId from the response\n` +
+      `3. get_report({ reportId: "<the_report_id>" })`
+    );
+  }
+
+  // Validate numeric format (report IDs are integers)
+  if (!/^\d+$/.test(String(reportId).trim())) {
+    throw new Error(
+      `Invalid report ID format: "${reportId}"\n` +
+      `Report IDs must be numeric (e.g., "5", "42").\n` +
+      `Use history() to list available reports with their IDs.`
+    );
   }
 
   // Fetch report
   let report;
-  if (typeof dbClient.getReport === 'function') {
-    report = await dbClient.getReport(reportId);
+  if (typeof dbClient.getReportById === 'function') {
+    report = await dbClient.getReportById(reportId);
   } else {
     const rows = await dbClient.query(
-      'SELECT id, query, final_report, cost_preference, audience_level, created_at, rating, rating_comment FROM research_reports WHERE id = $1',
+      'SELECT id, original_query as query, final_report, parameters, created_at FROM research_reports WHERE id = $1',
       [reportId]
     );
     report = rows?.[0];
+    // Extract nested fields from parameters JSONB
+    if (report?.parameters) {
+      const params = typeof report.parameters === 'string' ? JSON.parse(report.parameters) : report.parameters;
+      report.cost_preference = params.costPreference;
+      report.audience_level = params.audienceLevel;
+    }
   }
 
   if (!report) {
@@ -203,7 +237,8 @@ async function getReport(params, dbClient) {
       break;
   }
 
-  return {
+  // Build base response
+  const response = {
     reportId,
     query: report.query,
     costPreference: report.cost_preference,
@@ -214,6 +249,33 @@ async function getReport(params, dbClient) {
     mode,
     content: outputContent
   };
+
+  // Add confidence metadata from Signal protocol if available
+  try {
+    if (typeof dbClient.getReportSignals === 'function') {
+      const signals = await dbClient.getReportSignals(reportId);
+      if (signals && signals.length > 0) {
+        const calc = new ConsensusCalculator();
+        const consensus = calc.calculate(signals);
+        response.confidence = {
+          score: consensus.confidence,
+          topModel: consensus.topSource,
+          signalCount: consensus.signalCount,
+          method: consensus.method
+        };
+      }
+    }
+  } catch (_) {
+    // Silently continue if signals unavailable
+  }
+
+  // Add truncation indicator
+  if (mode !== 'full' && content.length > outputContent.length) {
+    response.truncated = true;
+    response.fullLength = content.length;
+  }
+
+  return response;
 }
 
 /**
@@ -222,11 +284,11 @@ async function getReport(params, dbClient) {
 async function listHistory(params, dbClient) {
   const { limit = 10, queryFilter } = params;
 
-  let sql = 'SELECT id, query, cost_preference, audience_level, created_at, rating FROM research_reports';
+  let sql = 'SELECT id, original_query, parameters, created_at FROM research_reports';
   const sqlParams = [];
 
   if (queryFilter) {
-    sql += ' WHERE query ILIKE $1';
+    sql += ' WHERE original_query ILIKE $1';
     sqlParams.push(`%${queryFilter}%`);
   }
 
@@ -239,14 +301,16 @@ async function listHistory(params, dbClient) {
     limit,
     filter: queryFilter || null,
     count: rows?.length || 0,
-    reports: (rows || []).map(r => ({
-      id: r.id,
-      query: r.query,
-      costPreference: r.cost_preference,
-      audienceLevel: r.audience_level,
-      createdAt: r.created_at,
-      rating: r.rating
-    }))
+    reports: (rows || []).map(r => {
+      const params = r.parameters ? (typeof r.parameters === 'string' ? JSON.parse(r.parameters) : r.parameters) : {};
+      return {
+        id: r.id,
+        query: r.original_query,
+        costPreference: params.costPreference,
+        audienceLevel: params.audienceLevel,
+        createdAt: r.created_at
+      };
+    })
   };
 }
 

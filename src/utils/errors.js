@@ -205,6 +205,41 @@ class EmbedderNotReadyError extends MCPError {
 }
 
 /**
+ * Validation error with diagnostic context
+ * Used for parameter validation failures with rich error guidance
+ */
+class ValidationError extends MCPError {
+  constructor(message, diagnostic = {}) {
+    super(message, {
+      category: ErrorCategory.VALIDATION,
+      code: 'VALIDATION_ERROR',
+      isRetryable: false,
+      context: diagnostic
+    });
+    this.name = 'ValidationError';
+    this.expected = diagnostic.expected || null;
+    this.provided = diagnostic.provided || null;
+    this.suggestions = diagnostic.suggestions || [];
+  }
+}
+
+/**
+ * Parameter mismatch error - wrong type of ID or format provided
+ * Captures what was provided vs expected with fix suggestions
+ */
+class ParameterMismatchError extends ValidationError {
+  constructor(paramName, provided, expected, suggestions = []) {
+    super(`Parameter ${paramName}: expected ${expected}, got "${provided}"`, {
+      expected,
+      provided,
+      suggestions
+    });
+    this.name = 'ParameterMismatchError';
+    this.paramName = paramName;
+  }
+}
+
+/**
  * Classify API errors based on status code and response
  */
 function classifyAPIError(statusCode, responseBody) {
@@ -359,6 +394,128 @@ function isRetryable(error) {
   ].includes(category);
 }
 
+/**
+ * Format error with actionable recovery guidance for LLM agents
+ * Returns structured error with suggested recovery actions
+ *
+ * @param {Error} error - The error to format
+ * @param {Object} context - Context about the failed operation
+ * @param {string} context.toolName - Name of the tool that failed
+ * @param {Object} context.params - Parameters that were passed
+ * @returns {Object} Structured error with recovery actions
+ */
+function formatActionableError(error, context = {}) {
+  const { toolName, params } = context;
+
+  // Base error info
+  const category = error instanceof MCPError ? error.category : inferCategory(error);
+  const code = error.code || 'ERROR';
+  const retryable = error instanceof MCPError ? error.isRetryable : isRetryable(error);
+
+  // Build recovery actions based on error category and code
+  const recoveryActions = [];
+
+  switch (code) {
+    case 'NOT_FOUND':
+      recoveryActions.push({
+        action: 'history',
+        params: { limit: 5 },
+        reason: 'List available reports to find valid IDs',
+        priority: 'primary'
+      });
+      recoveryActions.push({
+        action: 'search',
+        params: { q: params?.query || 'recent', k: 5 },
+        reason: 'Search for related content',
+        priority: 'secondary'
+      });
+      break;
+
+    case 'VALIDATION_ERROR':
+      if (error.suggestions && error.suggestions.length > 0) {
+        recoveryActions.push({
+          action: toolName,
+          params: { ...params, ...error.suggestions[0] },
+          reason: `Fix: ${error.suggestions[0]?.reason || 'Apply suggested correction'}`,
+          priority: 'primary'
+        });
+      }
+      break;
+
+    default:
+      // Category-based recovery
+      switch (category) {
+        case ErrorCategory.TIMEOUT:
+        case ErrorCategory.NETWORK:
+          if (toolName && params) {
+            recoveryActions.push({
+              action: toolName,
+              params: { ...params, costPreference: 'low' },
+              reason: 'Retry with lower-cost (faster) models',
+              priority: 'primary'
+            });
+          }
+          break;
+
+        case ErrorCategory.RATE_LIMIT:
+          recoveryActions.push({
+            action: 'wait',
+            params: { delayMs: error.context?.retryAfter || 5000 },
+            reason: 'Wait before retrying (rate limited)',
+            priority: 'primary'
+          });
+          if (toolName && params) {
+            recoveryActions.push({
+              action: toolName,
+              params: { ...params, costPreference: 'low' },
+              reason: 'Retry after waiting',
+              priority: 'secondary'
+            });
+          }
+          break;
+
+        case ErrorCategory.AUTHENTICATION:
+          recoveryActions.push({
+            action: 'ping',
+            params: { info: true },
+            reason: 'Verify server configuration and API key',
+            priority: 'primary'
+          });
+          break;
+
+        case ErrorCategory.DATABASE:
+        case ErrorCategory.EMBEDDER:
+          recoveryActions.push({
+            action: 'get_server_status',
+            params: {},
+            reason: 'Check service health before retrying',
+            priority: 'primary'
+          });
+          break;
+      }
+  }
+
+  return {
+    error: true,
+    message: error.message,
+    code,
+    category,
+    isRetryable: retryable,
+    recoveryActions,
+    status: {
+      phase: 'error',
+      isTerminal: !retryable,
+      requiresAction: recoveryActions.length > 0
+    },
+    // Include diagnostics for validation errors
+    diagnostics: error instanceof ValidationError ? {
+      expected: error.expected,
+      provided: error.provided,
+      suggestions: error.suggestions
+    } : undefined
+  };
+}
+
 module.exports = {
   ErrorCategory,
   MCPError,
@@ -370,11 +527,14 @@ module.exports = {
   InitializationError,
   RetryExhaustedError,
   EmbedderNotReadyError,
+  ValidationError,
+  ParameterMismatchError,
   classifyAPIError,
   inferCategory,
   wrapError,
   formatErrorForLog,
   formatErrorForResponse,
+  formatActionableError,
   sanitizeContext,
   isRetryable
 };

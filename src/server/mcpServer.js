@@ -24,6 +24,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
+const crypto = require('crypto'); // For timing-safe API key comparison
 const config = require('../../config');
 
 // MCP 2025-11-25 Feature Modules
@@ -34,8 +35,31 @@ const elicitationHandler = require('./elicitation');
 // Structured logging (MCP-compliant)
 const logger = require('../utils/logger');
 
+// Semantic error diagnostics (Rust-inspired)
+const {
+  createDiagnosticContext,
+  validateWithDiagnostics,
+  formatSemanticError
+} = require('../utils/diagnostics');
+
+/**
+ * HTML escape to prevent XSS in UI resource templates.
+ * @param {string} str - Untrusted string to escape
+ * @returns {string} HTML-safe string
+ */
+function escapeHtml(str) {
+  if (typeof str !== 'string') return String(str ?? '');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const { 
   // Schemas
+  zeroChatSchema,
   conductResearchSchema,
   researchFollowUpSchema,
   getPastResearchSchema,
@@ -69,6 +93,7 @@ const {
   batchResearchSchema, // Batch research for parallel job dispatch
   
   // Functions
+  zeroChat,
   conductResearch,
   researchFollowUp,
   getPastResearch,
@@ -110,6 +135,10 @@ const cors = require('cors');
 const { getKnowledgeGraph } = require('../utils/knowledgeGraph');
 const { getSessionManager, EventTypes } = require('../utils/sessionStore');
 
+// Zero Protocol - Self-referential MCP architecture
+const { DualRoleNode, ConnectionState, createZeroNode } = require('../core/dualRoleNode');
+const { ZeroUri, ZeroUriRouter, self: zeroSelf, parse: parseZeroUri, isZeroUri } = require('../core/zeroUri');
+
 // Consolidated handlers (feature-flagged via CORE_HANDLERS_ENABLED)
 const handlers = config.core?.handlers?.enabled ? require('./handlers') : null;
 
@@ -123,8 +152,9 @@ const LEGACY_ONLY_TOOLS = new Set([
 // Initialize singleton instances
 let knowledgeGraph = null;
 let sessionManager = null;
+let zeroNode = null;
 
-// Lazy init for knowledge graph and session manager
+// Lazy init for knowledge graph, session manager, and Zero node
 async function ensureIntegrations() {
   if (!knowledgeGraph) {
     knowledgeGraph = getKnowledgeGraph(dbClient);
@@ -133,6 +163,63 @@ async function ensureIntegrations() {
   if (!sessionManager) {
     sessionManager = getSessionManager(dbClient);
     await sessionManager.initialize().catch(e => logger.error('SessionManager init error', { error: e }));
+  }
+  if (!zeroNode) {
+    try {
+      zeroNode = new DualRoleNode({
+        identity: config.server.name || 'openrouter-agents',
+        protocol: 'mcp',
+        capabilities: {
+          tools: true,
+          prompts: true,
+          resources: true,
+          sampling: true,
+          elicitation: true,
+        },
+      });
+      // Automatically connect to self for the fixed-point demonstration
+      await zeroNode.connectToSelf();
+      logger.info('Zero node initialized', {
+        identity: zeroNode.identity,
+        state: zeroNode.state,
+        fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED
+      });
+
+      // Wire DualRoleNode services for void simulation (Fix 1 from architecture plan)
+      if (zeroNode.state === ConnectionState.SELF_CONNECTED) {
+        const toolHandlers = {
+          'tools/ping': async () => ({ pong: true }),
+          'tools/research': async (params) => researchTool(params, null, `zero-${Date.now()}`),
+          'tools/conduct_research': async (params) => conductResearch(params, null, `zero-${Date.now()}`),
+          'tools/search': async (params) => searchTool(params, null, `zero-${Date.now()}`),
+          'tools/query': async (params) => queryTool(params, null, `zero-${Date.now()}`),
+          'tools/retrieve': async (params) => retrieveTool(params, null, `zero-${Date.now()}`),
+          'tools/get_report': async (params) => getReportContent(params, null, `zero-${Date.now()}`),
+          'tools/history': async (params) => listResearchHistory(params, null, `zero-${Date.now()}`),
+          'tools/get_server_status': async (params) => getServerStatus(params, null, `zero-${Date.now()}`),
+          'tools/batch_research': async (params) => batchResearchTool(params, null, `zero-${Date.now()}`),
+        };
+
+        for (const [name, handler] of Object.entries(toolHandlers)) {
+          zeroNode.registerService(name, async (params) => {
+            try {
+              const result = await handler(params);
+              // Handle both string results and object results
+              if (typeof result === 'string') return result;
+              if (result?.content?.[0]?.text) return result.content[0].text;
+              return JSON.stringify(result, null, 2);
+            } catch (e) {
+              logger.error('Zero service error', { service: name, error: e.message });
+              return JSON.stringify({ error: e.message }, null, 2);
+            }
+          });
+        }
+        logger.info('Zero services registered', { count: Object.keys(toolHandlers).length });
+      }
+    } catch (e) {
+      logger.error('Zero node init error', { error: e.message });
+      zeroNode = null;
+    }
   }
 }
 
@@ -167,6 +254,14 @@ function generateUITemplate(templateType, options = {}) {
     const mcpBridge = {
       requestId: 0,
       pending: new Map(),
+
+      // HTML escape to prevent XSS
+      escapeHtml(str) {
+        if (typeof str !== 'string') return String(str ?? '');
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      },
 
       init() {
         window.addEventListener('message', (e) => {
@@ -375,7 +470,7 @@ function generateUITemplate(templateType, options = {}) {
   return templates[templateType] || templates['research-viewer'];
 }
 
-// Create MCP server with proper capabilities declaration per MCP spec 2025-06-18
+// Create MCP server with proper capabilities declaration per MCP spec 2025-11-25
 const server = new McpServer({
   name: config.server.name,
   version: config.server.version,
@@ -383,7 +478,11 @@ const server = new McpServer({
     tools: {},
     prompts: { listChanged: true },
     resources: { subscribe: true, listChanged: true },
-    logging: {} // Enable MCP logging notifications
+    logging: {},
+    sampling: {}, // SEP-1577: Sampling support
+    elicitation: { form: {}, url: {} }, // SEP-1036: Elicitation support
+    // MCP 2025-11-25: Enable progress and job notifications for LLM agents
+    notifications: { progress: true, job_complete: true }
   }
 });
 
@@ -455,11 +554,30 @@ async function routeThroughHandler(toolName, params, context) {
  * Wrap a legacy tool with handler routing
  * When CORE_HANDLERS_ENABLED=true, routes through handlers first
  * Falls back to legacy implementation if handlers unavailable or for LEGACY_ONLY_TOOLS
+ *
+ * Includes semantic error formatting (Rust-inspired "borrow checker" style)
+ * for actionable error messages that guide users to correct usage.
  */
 function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
   return async (params, exchange, requestId = `req-${Date.now()}`) => {
+    // Create diagnostic context at the start for rich error formatting
+    const diagnosticCtx = createDiagnosticContext(toolName, params);
+
     try {
-      const norm = needsNormalization ? normalizeParamsForTool(toolName, params) : params;
+      // Run tool-specific validation with diagnostics
+      const validation = validateWithDiagnostics(toolName, params);
+      if (!validation.valid) {
+        const formatted = formatSemanticError(toolName, new Error(validation.error), validation.ctx);
+        return {
+          content: [{ type: 'text', text: formatted }],
+          isError: true
+        };
+      }
+
+      // Use normalized params from validator if available, otherwise normalize
+      const norm = validation.normalized
+        ? { ...params, ...validation.normalized }
+        : (needsNormalization ? normalizeParamsForTool(toolName, params) : params);
 
       // Try handler routing for non-legacy tools
       if (handlers && !LEGACY_ONLY_TOOLS.has(toolName)) {
@@ -472,8 +590,10 @@ function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
       const text = await legacyFn(norm, exchange, requestId);
       return { content: [{ type: 'text', text }] };
     } catch (e) {
+      // Format error with semantic diagnostics
+      const formatted = formatSemanticError(toolName, e, diagnosticCtx);
       return {
-        content: [{ type: 'text', text: `Error ${toolName}: ${e.message}` }],
+        content: [{ type: 'text', text: formatted }],
         isError: true
       };
     }
@@ -882,13 +1002,13 @@ if (config.mcp?.features?.resources) {
       switch (uri) {
         case 'mcp://specs/core':
           content = {
-            spec: 'https://spec.modelcontextprotocol.io/specification/2025-03-26/',
+            spec: 'https://spec.modelcontextprotocol.io/specification/2025-06-18/',
             jsonrpc: 'https://www.jsonrpc.org/specification',
             org: 'https://github.com/modelcontextprotocol',
             docs: 'https://modelcontextprotocol.io/',
             sdk: 'https://github.com/modelcontextprotocol/sdk',
             implementations: {
-              openrouter_agents: 'https://github.com/wheattoast11/openrouter-deep-research',
+              openrouter_agents: 'https://github.com/terminals-tech/openrouter-agents',
               anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
             }
           };
@@ -973,7 +1093,7 @@ if (config.mcp?.features?.resources) {
                 models: {
                   simple: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder'],
                   complex: ['x-ai/grok-4', 'morph/morph-v3-large'],
-                  vision: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash']
+                  vision: ['z-ai/glm-4.5v', 'google/gemini-3-flash-preview']
                 }
               },
               batch_processing: {
@@ -1050,6 +1170,11 @@ if (config.mcp?.features?.resources) {
 }
 
 // Register tools (minimal unified set)
+register(
+  "zero_chat",
+  zeroChatSchema,
+  wrapWithHandler('zero_chat', zeroChat)
+);
 register(
   "research",
   researchSchema,
@@ -1183,16 +1308,33 @@ register("batch_research", batchResearchSchema, async (p, ex) => {
 // ==========================================
 
 // Session tool legacy implementations (for when handlers disabled)
+// Each method calls ensureIntegrations() to guarantee sessionManager is initialized
 const sessionLegacy = {
-  undo: async (p) => JSON.stringify(await sessionManager.undo(p.sessionId || 'default'), null, 2),
-  redo: async (p) => JSON.stringify(await sessionManager.redo(p.sessionId || 'default'), null, 2),
+  undo: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.undo(p.sessionId || 'default'), null, 2);
+  },
+  redo: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.redo(p.sessionId || 'default'), null, 2);
+  },
   fork_session: async (p) => {
+    await ensureIntegrations();
     const newId = p.newSessionId || `fork_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
     return JSON.stringify(await sessionManager.forkSession(p.sessionId || 'default', newId), null, 2);
   },
-  time_travel: async (p) => JSON.stringify(await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp), null, 2),
-  session_state: async (p) => JSON.stringify(await sessionManager.getState(p.sessionId || 'default'), null, 2),
-  checkpoint: async (p) => JSON.stringify(await sessionManager.createCheckpoint(p.sessionId || 'default', p.name), null, 2)
+  time_travel: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp), null, 2);
+  },
+  session_state: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.getState(p.sessionId || 'default'), null, 2);
+  },
+  checkpoint: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.createCheckpoint(p.sessionId || 'default', p.name), null, 2);
+  }
 };
 
 register("undo", {
@@ -1227,13 +1369,32 @@ register("checkpoint", {
 // ==========================================
 
 // Graph tool legacy implementations (for when handlers disabled)
+// Each method calls ensureIntegrations() to guarantee knowledgeGraph is initialized
 const graphLegacy = {
-  traverse: async (p) => JSON.stringify(await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic'), null, 2),
-  path: async (p) => JSON.stringify(await knowledgeGraph.findPath(p.from, p.to), null, 2),
-  clusters: async () => JSON.stringify(await knowledgeGraph.getClusters(), null, 2),
-  pagerank: async (p) => JSON.stringify(await knowledgeGraph.getPageRank(p.topK || 20), null, 2),
-  patterns: async (p) => JSON.stringify(await knowledgeGraph.findPatterns(p.n || 3), null, 2),
-  stats: async () => JSON.stringify(await knowledgeGraph.getStats(), null, 2)
+  traverse: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic'), null, 2);
+  },
+  path: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.findPath(p.from, p.to), null, 2);
+  },
+  clusters: async () => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getClusters(), null, 2);
+  },
+  pagerank: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getPageRank(p.topK || 20), null, 2);
+  },
+  patterns: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.findPatterns(p.n || 3), null, 2);
+  },
+  stats: async () => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getStats(), null, 2);
+  }
 };
 
 register("graph_traverse", {
@@ -1260,28 +1421,127 @@ register("graph_patterns", {
 register("graph_stats", {}, wrapWithHandler('graph_stats', graphLegacy.stats, false));
 
 // ==========================================
+// Zero Protocol Tools - Self-Referential Architecture
+// ==========================================
+
+// Zero node status - returns the fixed-point state
+register("zero_status", {
+  verbose: z.boolean().optional().default(false).describe("Include detailed state information")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  const status = {
+    identity: zeroNode.identity,
+    protocol: zeroNode.protocol,
+    state: zeroNode.state,
+    fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED,
+    selfUri: zeroSelf(zeroNode.identity).toString(),
+    services: Array.from(zeroNode.services?.keys() || []),
+    peers: Array.from(zeroNode.peers?.keys() || []),
+  };
+  if (params.verbose) {
+    status.capabilities = zeroNode.capabilities;
+    status.adapter = {
+      protocol: zeroNode.adapter?.protocol,
+      role: zeroNode.adapter?.role,
+      connected: zeroNode.adapter?.connected,
+    };
+  }
+  return { content: [{ type: 'text', text: JSON.stringify(status, null, 2) }] };
+});
+
+// Zero connect - connect to a zero:// URI
+register("zero_connect", {
+  uri: z.string().describe("Zero URI to connect to (e.g., zero://self, zero://peer/id, zero://discover)")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  try {
+    if (!isZeroUri(params.uri)) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: `Invalid Zero URI: ${params.uri}`, hint: 'Valid formats: zero://self, zero://peer/<id>, zero://discover' }, null, 2) }], isError: true };
+    }
+    const parsed = parseZeroUri(params.uri);
+    let result;
+    if (parsed.type === 'self') {
+      await zeroNode.connectToSelf();
+      result = {
+        connected: true,
+        type: 'self',
+        state: zeroNode.state,
+        fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED,
+        message: 'Fixed point reached: f(Zero) = Zero'
+      };
+    } else {
+      result = {
+        connected: false,
+        type: parsed.type,
+        message: `Connection type '${parsed.type}' not yet implemented. Currently only zero://self is supported.`
+      };
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: e.message }, null, 2) }], isError: true };
+  }
+});
+
+// Zero handshake - perform identity verification
+register("zero_handshake", {
+  challenge: z.string().optional().describe("Challenge string for verification (auto-generated if not provided)")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  try {
+    const result = await zeroNode.handshake(params.challenge);
+    return { content: [{ type: 'text', text: JSON.stringify({
+      success: true,
+      identity: zeroNode.identity,
+      state: zeroNode.state,
+      handshake: result,
+      fixedPointVerified: result?.identityMatch === true
+    }, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: e.message }, null, 2) }], isError: true };
+  }
+});
+
+// ==========================================
 // MCP 2025-11-25 Protocol Tools (SEP-1686, SEP-1577, SEP-1036)
 // ==========================================
 
 // Task Protocol Tools (SEP-1686)
+// Note: taskId is accepted for backward compatibility but job_id is the canonical form
+// after normalization. The normalize.js TOOL_ALIASES converts taskId -> job_id.
 const taskLegacy = {
-  get: async (p) => JSON.stringify(await taskAdapter.getTask(p.taskId), null, 2),
-  result: async (p) => JSON.stringify(await taskAdapter.getTaskResult(p.taskId), null, 2),
-  cancel: async (p) => JSON.stringify(await taskAdapter.cancelTask(p.taskId), null, 2),
+  get: async (p) => JSON.stringify(await taskAdapter.getTask(p.job_id || p.taskId), null, 2),
+  result: async (p) => JSON.stringify(await taskAdapter.getTaskResult(p.job_id || p.taskId), null, 2),
+  cancel: async (p) => JSON.stringify(await taskAdapter.cancelTask(p.job_id || p.taskId), null, 2),
   list: async (p) => JSON.stringify(await taskAdapter.listTasks(p.cursor, p.limit || 20), null, 2)
 };
 
-register("task_get", { taskId: z.string().describe("Task/job ID to retrieve") },
-  wrapWithHandler('task_get', taskLegacy.get, false));
+// Accept both job_id (canonical) and taskId (backward compat) in schema
+register("task_get", {
+  job_id: z.string().optional().describe("Job ID to retrieve (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_get', taskLegacy.get, true));  // Enable normalization
 
-register("task_result", { taskId: z.string().describe("Task/job ID to get result for") },
-  wrapWithHandler('task_result', taskLegacy.result, false));
+register("task_result", {
+  job_id: z.string().optional().describe("Job ID to get result for (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_result', taskLegacy.result, true));  // Enable normalization
 
-register("task_cancel", { taskId: z.string().describe("Task/job ID to cancel") },
-  wrapWithHandler('task_cancel', taskLegacy.cancel, false));
+register("task_cancel", {
+  job_id: z.string().optional().describe("Job ID to cancel (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_cancel', taskLegacy.cancel, true));  // Enable normalization
 
 register("task_list", { cursor: z.string().optional(), limit: z.number().optional() },
-  wrapWithHandler('task_list', taskLegacy.list, false));
+  wrapWithHandler('task_list', taskLegacy.list, true));  // Enable normalization for consistency
 
 // Sampling with Tools (SEP-1577)
 register("sample_message", {
@@ -1335,15 +1595,26 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   let lastSseTransport = null; // Variable to hold the last SSE transport
   const sseConnections = new Map(); // Map to store active SSE connections
 
-  // For command-line usage, use STDIO
-  if (process.argv.includes('--stdio')) {
-    // console.error('Starting MCP server with STDIO transport'); // Commented out: Logs interfere with STDIO JSON-RPC
+  // Transport mode detection per MCP spec (STDIO is default per spec: "Clients SHOULD support stdio")
+  const hasStdioFlag = process.argv.includes('--stdio');
+  const hasHttpFlag = process.argv.includes('--http');
+
+  // Mutual exclusivity check
+  if (hasStdioFlag && hasHttpFlag) {
+    logger.error('Cannot specify both --stdio and --http flags');
+    process.exit(1);
+  }
+
+  // STDIO transport: explicit --stdio flag OR default when no flags specified
+  if (hasStdioFlag || !hasHttpFlag) {
+    // STDIO mode - no logging to stdout/stderr during operation (JSON-RPC protocol)
     const transport = new StdioServerTransport();
-    // console.error('Attempting server.connect(transport)...'); // Commented out: Logs interfere with STDIO JSON-RPC
     await server.connect(transport);
-    // console.error('server.connect(transport) completed.'); // Commented out: Logs interfere with STDIO JSON-RPC
     return; // Exit after setting up stdio, don't proceed to HTTP setup
-  } else { // Only setup HTTP/SSE if --stdio is NOT specified
+  }
+
+  // HTTP/SSE transport: only when --http is explicitly specified
+  {
   // For HTTP usage, set up Express with SSE and optional Streamable HTTP
     const app = express();
     const port = config.server.port;
@@ -1351,6 +1622,9 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   const serverApiKey = config.server.apiKey;
   const jwksUrl = process.env.AUTH_JWKS_URL || null;
   const expectedAudience = process.env.AUTH_EXPECTED_AUD || 'mcp-server';
+
+  // Supabase auth for terminals.tech OAuth (Google/GitHub)
+  const supabaseAuth = require('./auth/supabaseAuth');
 
   app.use(cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'], allowedHeaders: ['Content-Type', 'authorization', 'mcp-session-id'] }));
 
@@ -1376,7 +1650,7 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
     });
   }
     
-  // Authentication Middleware (JWT first, fallback API key if configured)
+  // Authentication Middleware (Supabase JWT → Enterprise JWT → API key)
   const authenticate = async (req, res, next) => {
     const allowNoAuth = process.env.ALLOW_NO_API_KEY === 'true';
     const authHeader = req.headers.authorization || '';
@@ -1385,6 +1659,20 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
       return res.status(401).json({ error: 'Unauthorized: Missing bearer token' });
     }
     const token = authHeader.split(' ')[1];
+
+    // 1. Try Supabase auth first (terminals.tech Google/GitHub OAuth)
+    if (supabaseAuth.isEnabled()) {
+      try {
+        const user = await supabaseAuth.validateToken(token);
+        req.user = user;
+        req.userId = user.userId;
+        return next();
+      } catch (e) {
+        // Fall through to other auth methods
+      }
+    }
+
+    // 2. Try enterprise JWKS auth
     if (jwksUrl) {
       try {
         // Lazy import jose to keep dep optional
@@ -1396,26 +1684,41 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         }
         return next();
       } catch (e) {
-        if (!serverApiKey) {
+        if (!serverApiKey && !supabaseAuth.isEnabled()) {
           return res.status(403).json({ error: 'Forbidden: JWT verification failed' });
         }
         // Fall through to API key if configured
       }
     }
-    if (serverApiKey && token === serverApiKey) return next();
+
+    // 3. Try API key auth with timing-safe comparison
+    if (serverApiKey && token) {
+      try {
+        const tokenBuf = Buffer.from(token);
+        const keyBuf = Buffer.from(serverApiKey);
+        if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
+          return next();
+        }
+      } catch (e) {
+        // Length mismatch or other error - fall through to reject
+      }
+    }
     if (allowNoAuth) return next();
     return res.status(403).json({ error: 'Forbidden: Auth failed' });
   };
  
   logger.info('Starting MCP server with HTTP/SSE transport', { port });
+  if (supabaseAuth.isEnabled()) {
+    logger.info('Supabase auth enabled (terminals.tech OAuth)', { providers: ['google', 'github'] });
+  }
   if (jwksUrl) {
-    logger.info('OAuth2/JWT auth enabled', { jwksUrl, audience: expectedAudience });
+    logger.info('Enterprise JWT auth enabled', { jwksUrl, audience: expectedAudience });
   } else if (serverApiKey) {
     logger.info('API key fallback enabled for HTTP transport');
   } else if (process.env.ALLOW_NO_API_KEY === 'true') {
     logger.warn('Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true)');
-  } else {
-    logger.error('SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail');
+  } else if (!supabaseAuth.isEnabled()) {
+    logger.error('No auth configured. Set SUPABASE_JWT_SECRET or SERVER_API_KEY');
   }
   
   // Streamable HTTP transport (preferred) guarded by feature flag
@@ -1695,6 +1998,109 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
      }
    });
 
+   // Auth configuration endpoint for clients (no auth required)
+   // Tells clients how to authenticate with this server
+   app.get('/auth/config', (req, res) => {
+     res.json({
+       supabase: supabaseAuth.getAuthConfig(),
+       enterprise: {
+         enabled: !!jwksUrl,
+         jwksUrl: jwksUrl || null
+       },
+       apiKey: {
+         enabled: !!serverApiKey
+       },
+       instructions: supabaseAuth.isEnabled()
+         ? 'Login at terminals.tech with Google or GitHub. Use the returned access_token in Authorization: Bearer <token>'
+         : jwksUrl
+           ? 'Use enterprise SSO JWT in Authorization: Bearer <token>'
+           : serverApiKey
+             ? 'Use SERVER_API_KEY in Authorization: Bearer <key>'
+             : 'No authentication configured'
+     });
+   });
+
+   // OAuth redirect helper - redirects to terminals.tech login
+   app.get('/auth/login/:provider', (req, res) => {
+     const { provider } = req.params;
+     const redirectTo = req.query.redirect_to || `${req.protocol}://${req.get('host')}/auth/callback`;
+
+     if (!supabaseAuth.isEnabled()) {
+       return res.status(400).json({ error: 'Supabase auth not configured' });
+     }
+
+     if (!['google', 'github'].includes(provider)) {
+       return res.status(400).json({ error: 'Invalid provider. Use google or github' });
+     }
+
+     try {
+       const loginUrl = supabaseAuth.getOAuthUrl(provider, redirectTo);
+       res.redirect(loginUrl);
+     } catch (e) {
+       res.status(500).json({ error: e.message });
+     }
+   });
+
+   // Callback handler - displays token for user to copy
+   app.get('/auth/callback', (req, res) => {
+     // Supabase redirects with tokens in URL hash (client-side)
+     // This page extracts them and displays for MCP client setup
+     res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>terminals.tech MCP Auth</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+    .token { background: #f0f0f0; padding: 10px; border-radius: 4px; word-break: break-all; font-family: monospace; font-size: 12px; }
+    .success { color: #22c55e; }
+    .error { color: #ef4444; }
+    button { margin-top: 10px; padding: 8px 16px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>terminals.tech MCP Authentication</h1>
+  <div id="result"></div>
+  <script>
+    // HTML escape to prevent XSS from URL parameters
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const accessToken = params.get('access_token');
+    const error = params.get('error_description') || params.get('error');
+
+    const result = document.getElementById('result');
+    if (accessToken) {
+      result.innerHTML = \`
+        <p class="success">Authentication successful!</p>
+        <p>Your access token (copy this for MCP client):</p>
+        <div class="token" id="token">\${esc(accessToken)}</div>
+        <button onclick="navigator.clipboard.writeText(document.getElementById('token').textContent)">Copy Token</button>
+        <p style="margin-top: 20px;">Use this in your MCP client configuration:</p>
+        <pre>Authorization: Bearer \${esc(accessToken.substring(0, 20))}...</pre>
+      \`;
+    } else if (error) {
+      result.innerHTML = \`<p class="error">Error: \${esc(error)}</p>\`;
+    } else {
+      result.innerHTML = '<p>Waiting for authentication...</p>';
+    }
+  </script>
+</body>
+</html>`);
+   });
+
+   // Verify token endpoint - check if a token is valid
+   app.get('/auth/verify', authenticate, (req, res) => {
+     res.json({
+       valid: true,
+       user: req.user || null,
+       userId: req.userId || null
+     });
+   });
+
    // Server discovery endpoint for MCP clients (SEP-1649 Server Cards)
    // No auth required per MCP draft spec Nov 2025
    app.get('/.well-known/mcp-server', (req, res) => {
@@ -1886,7 +2292,14 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         const rows=new Map();
         function addAgentRow(id,text,cls){
           let r=rows.get(id);
-          if(!r){ r=document.createElement('div'); r.className='row'; r.innerHTML='<span class="chip">agent '+id+'</span><span class="chip" id="st"></span><span id="q" class="muted"></span>'; agentsEl.appendChild(r); rows.set(id,r); }
+          if(!r){
+            r=document.createElement('div'); r.className='row';
+            const agentChip=document.createElement('span'); agentChip.className='chip'; agentChip.textContent='agent '+id;
+            const stChip=document.createElement('span'); stChip.className='chip'; stChip.id='st';
+            const qSpan=document.createElement('span'); qSpan.className='muted'; qSpan.id='q';
+            r.appendChild(agentChip); r.appendChild(stChip); r.appendChild(qSpan);
+            agentsEl.appendChild(r); rows.set(id,r);
+          }
           r.querySelector('#st').textContent=text; r.querySelector('#st').className='chip '+(cls||'');
         }
         function appendLog(s){ logEl.textContent += s; logEl.scrollTop = logEl.scrollHeight; }
@@ -1950,58 +2363,96 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
     return lastSseTransport.handlePostMessage(req, res);
   });
 
-   // Start server
-   app.listen(port, () => {
-     logger.info('MCP server listening', { port });
+   // Start server with error handling
+   const httpServer = app.listen(port);
+
+   httpServer.on('error', (err) => {
+     if (err.code === 'EADDRINUSE') {
+       logger.error('Port already in use', {
+         port,
+         suggestion: `Another instance running? Try: lsof -i tcp:${port}`,
+         alternatives: [
+           'Use STDIO transport (default): npx @terminals-tech/openrouter-agents',
+           `Use different port: SERVER_PORT=${port + 1} npx @terminals-tech/openrouter-agents --http`
+         ]
+       });
+       process.exit(1); // Clean exit instead of crash
+     }
+     throw err;
    });
-  } // Close the else block for HTTP setup
+
+   httpServer.on('listening', () => {
+     logger.info('MCP server listening', { port, transport: 'HTTP' });
+   });
+  } // Close the block for HTTP setup
  };
 
  /**
   * Job worker function - processes async research jobs
   * Only starts if database is initialized
   */
- function startJobWorker() {
-   const initState = dbClient.getInitState ? dbClient.getInitState() : null;
-   if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
-     logger.warn('Job worker not started: database not initialized', { initState });
-     return;
-   }
+ // Debounce state for health warnings (shared across workers)
+ let lastHealthWarningTime = 0;
+ let lastHealthIssues = '';
+ const HEALTH_WARNING_DEBOUNCE_MS = 60000; // Only log once per minute per unique issue set
 
-   logger.info('Starting job worker', { concurrency: require('../../config').jobs.concurrency });
+let workerStopped = false;
+let activeHeartbeats = new Set();
 
-   const { concurrency, heartbeatMs } = require('../../config').jobs;
-   const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
-     while (true) {
-       try {
-         // Pre-flight check before claiming work
-         const { quickCheck } = require('../utils/preflight');
-         const health = quickCheck(dbClient);
-         if (!health.ready) {
-           logger.warn('JobWorker unhealthy', { issues: health.issues });
-           await new Promise(r => setTimeout(r, 5000));
-           continue;
-         }
+function startJobWorker() {
+  const initState = dbClient.getInitState ? dbClient.getInitState() : null;
+  if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
+    logger.warn('Job worker not started: database not initialized', { initState });
+    return;
+  }
 
-         const job = await dbClient.claimNextJob();
-         if (!job) { await new Promise(r=>setTimeout(r, 750)); continue; }
-         const jobId = job.id;
-         await dbClient.appendJobEvent(jobId, 'started', {});
-         const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
-         try {
-           if (job.type === 'research') {
-             // Reuse conductResearch flow but stream events via job events
-             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
-             // Validate query parameter before execution - fail fast with clear error
-             if (!params?.query || typeof params.query !== 'string' || params.query.trim() === '') {
-               logger.error('Job missing query parameter', { jobId, params: JSON.stringify(params).substring(0, 200) });
-               throw new Error(`Job ${jobId} missing required query parameter`);
-             }
-             // Minimal bridge: send progress chunks into job events
-             const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
-             const resultText = await require('./tools').conductResearch(params, exchange, jobId);
-             await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
-             await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
+  workerStopped = false;
+  logger.info('Starting job worker', { concurrency: require('../../config').jobs.concurrency });
+
+  const { concurrency, heartbeatMs } = require('../../config').jobs;
+  const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
+    while (!workerStopped) {
+      try {
+        // Pre-flight check before claiming work
+        const { quickCheck } = require('../utils/preflight');
+        const health = quickCheck(dbClient);
+        if (!health.ready) {
+          // Debounce health warnings - only log once per minute per unique issue set
+          const issueKey = JSON.stringify(health.issues);
+          const now = Date.now();
+          if (issueKey !== lastHealthIssues || now - lastHealthWarningTime > HEALTH_WARNING_DEBOUNCE_MS) {
+            logger.warn('JobWorker unhealthy', { issues: health.issues, nextLogIn: '60s' });
+            lastHealthWarningTime = now;
+            lastHealthIssues = issueKey;
+          }
+          await new Promise(r => setTimeout(r, 5000));
+          continue;
+        }
+
+        const job = await dbClient.claimNextJob();
+        if (!job) { 
+          if (workerStopped) break;
+          await new Promise(r=>setTimeout(r, 750)); 
+          continue; 
+        }
+        const jobId = job.id;
+        await dbClient.appendJobEvent(jobId, 'started', {});
+        const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
+        activeHeartbeats.add(hb);
+        try {
+          if (job.type === 'research') {
+            // Reuse conductResearch flow but stream events via job events
+            const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+            // Validate query parameter before execution - fail fast with clear error
+            if (!params?.query || typeof params.query !== 'string' || params.query.trim() === '') {
+              logger.error('Job missing query parameter', { jobId, params: JSON.stringify(params).substring(0, 200) });
+              throw new Error(`Job ${jobId} missing required query parameter`);
+            }
+            // Minimal bridge: send progress chunks into job events
+            const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
+            const resultText = await require('./tools').conductResearch(params, exchange, jobId);
+            await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
+            await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
             // Optional webhook notification
             try {
               if (params?.notify) {
@@ -2012,9 +2463,9 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
                 }).catch(()=>{});
               }
             } catch (_) {}
-           } else {
-             await dbClient.setJobStatus(jobId, 'failed', { result: { error: 'Unknown job type' }, finished: true });
-             await dbClient.appendJobEvent(jobId, 'error', { message: 'Unknown job type' });
+          } else {
+            await dbClient.setJobStatus(jobId, 'failed', { result: { error: 'Unknown job type' }, finished: true });
+            await dbClient.appendJobEvent(jobId, 'error', { message: 'Unknown job type' });
             // Notify if requested
             try {
               const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
@@ -2026,62 +2477,72 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
                 }).catch(()=>{});
               }
             } catch (_) {}
-           }
-         } catch (e) {
-           // Wrap error with full context for detailed diagnosis
-           const { wrapError, formatErrorForLog } = require('../utils/errors');
-           const wrapped = wrapError(e, `Job ${jobId} failed`, { requestId: jobId });
+          }
+        } catch (e) {
+          // Wrap error with full context for detailed diagnosis
+          const { wrapError, formatErrorForLog } = require('../utils/errors');
+          const wrapped = wrapError(e, `Job ${jobId} failed`, { requestId: jobId });
 
-           logger.error('Job failed', formatErrorForLog(wrapped, jobId));
+          logger.error('Job failed', formatErrorForLog(wrapped, jobId));
 
-           await dbClient.setJobStatus(jobId, 'failed', {
-             result: {
-               error: wrapped.message,
-               category: wrapped.category,
-               code: wrapped.code,
-               isRetryable: wrapped.isRetryable,
-               originalError: e.message,
-               stack: e.stack?.split('\n').slice(0, 5).join('\n')
-             },
-             finished: true
-           });
-           await dbClient.appendJobEvent(jobId, 'error', {
-             message: wrapped.message,
-             category: wrapped.category,
-             code: wrapped.code,
-             isRetryable: wrapped.isRetryable,
-             originalError: e.message
-           });
+          await dbClient.setJobStatus(jobId, 'failed', {
+            result: {
+              error: wrapped.message,
+              category: wrapped.category,
+              code: wrapped.code,
+              isRetryable: wrapped.isRetryable,
+              originalError: e.message,
+              stack: e.stack?.split('\n').slice(0, 5).join('\n')
+            },
+            finished: true
+          });
+          await dbClient.appendJobEvent(jobId, 'error', {
+            message: wrapped.message,
+            category: wrapped.category,
+            code: wrapped.code,
+            isRetryable: wrapped.isRetryable,
+            originalError: e.message
+          });
           try {
             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
             if (params?.notify) {
               await nodeFetch(params.notify, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_id: jobId, status: 'failed', error: e.message })
+                body: JSON.stringify({ job_id: jobId, status: 'failed', error: wrapped.message })
               }).catch(()=>{});
             }
           } catch (_) {}
-         } finally {
-           clearInterval(hb);
-         }
-       } catch (loopError) {
-         // Log worker loop errors with full context instead of swallowing
-         const { formatErrorForLog } = require('../utils/errors');
-         logger.error('JobWorker loop error', formatErrorForLog(loopError));
+        } finally {
+          clearInterval(hb);
+          activeHeartbeats.delete(hb);
+        }
+      } catch (loopError) {
+        // Log worker loop errors with full context instead of swallowing
+        const { formatErrorForLog } = require('../utils/errors');
+        logger.error('JobWorker loop error', formatErrorForLog(loopError));
 
-         // Distinguish transient vs fatal errors for backoff
-         const isFatal = loopError.message?.includes('database') ||
-                        loopError.message?.includes('connection') ||
-                        loopError.message?.includes('ECONNREFUSED');
-         await new Promise(r => setTimeout(r, isFatal ? 5000 : 1000));
-       }
-     }
-   })());
-   Promise.allSettled(runners).catch(err => {
-     logger.error('Job worker runners failed', { error: err.message });
-   });
- }
+        // Distinguish transient vs fatal errors for backoff
+        const isFatal = loopError.message?.includes('database') ||
+                       loopError.message?.includes('connection') ||
+                       loopError.message?.includes('ECONNREFUSED');
+        if (!workerStopped) await new Promise(r => setTimeout(r, isFatal ? 5000 : 1000));
+      }
+    }
+  })());
+  Promise.allSettled(runners).catch(err => {
+    logger.error('Job worker runners failed', { error: err.message });
+  });
+}
+
+function stopJobWorker() {
+  workerStopped = true;
+  for (const hb of activeHeartbeats) {
+    clearInterval(hb);
+  }
+  activeHeartbeats.clear();
+  logger.info('Job worker stop signal sent');
+}
 
  /**
   * Main server startup sequence
@@ -2118,6 +2579,16 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
      }
    }
 
+   // Seed default providers for multi-provider integration (OpenCode + Claude Code)
+   try {
+     if (typeof dbClient.seedProviders === 'function') {
+       const seededCount = await dbClient.seedProviders();
+       logger.info('Providers seeded', { count: seededCount });
+     }
+   } catch (seedError) {
+     logger.warn('Provider seeding failed (non-fatal)', { error: seedError.message });
+   }
+
    logger.info('Phase 2/4: Initializing embedder...');
    try {
      // Initialize embedder (non-blocking - vector search is optional)
@@ -2148,10 +2619,15 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
    });
  }
 
- // Single entry point with proper error handling
- startServer().catch(error => {
-   logger.error('FATAL: Server startup failed', { error: error.message, stack: error.stack });
-   process.exit(1);
- });
+  // Single entry point with proper error handling
+  if (require.main === module) {
+    startServer().catch(error => {
+      logger.error('FATAL: Server startup failed', { error: error.message, stack: error.stack });
+      process.exit(1);
+    });
+  }
+
+  module.exports.stopJobWorker = stopJobWorker;
+  module.exports.startServer = startServer;
 
 } // Close else block for --setup-claude check

@@ -22,13 +22,38 @@ const GLOBAL_ALIASES = {
 
 /**
  * Tool-specific aliases
+ *
+ * Design principle: Each domain has ONE canonical form
+ * - Job domain: canonical = 'job_id' (all task_* tools use job aliases)
+ * - Report domain: canonical = 'reportId'
+ * - Graph domain: canonical = 'startNode'
+ * - Session domain: canonical = 'sessionId'
  */
 const TOOL_ALIASES = {
-  job: { job_id: 'id', jobId: 'id' },
-  report: { reportId: 'id', report_id: 'id' },
-  graph: { startNode: 'node', start_node: 'node' },
-  session: { sessionId: 'id', session_id: 'id' },
-  task: { taskId: 'id', task_id: 'id' }
+  // Job domain: canonical = job_id
+  // Accepts: job_id, jobId, id, taskId, task_id (for MCP Task Protocol compat)
+  job: {
+    jobId: 'job_id',
+    id: 'job_id',
+    taskId: 'job_id',   // MCP Task Protocol alias (backward compat)
+    task_id: 'job_id'   // MCP Task Protocol alias (backward compat)
+  },
+  // Report domain: canonical = reportId
+  report: {
+    report_id: 'reportId',
+    id: 'reportId'
+  },
+  // Graph domain: canonical = startNode
+  graph: {
+    start_node: 'startNode',
+    node: 'startNode'
+  },
+  // Session domain: canonical = sessionId
+  session: {
+    session_id: 'sessionId',
+    id: 'sessionId'
+  }
+  // Note: 'task' category removed - task_* tools use 'job' aliases via getToolCategory
 };
 
 /**
@@ -95,27 +120,36 @@ function normalize(tool, params) {
 
 /**
  * Get tool category for alias/default lookup
+ *
+ * Note: task_* tools map to 'job' category because MCP Task Protocol
+ * is implemented on top of our job system. This allows taskId to be
+ * normalized to job_id for backward compatibility.
  */
 function getToolCategory(tool) {
   const categories = {
+    // Job tools (including MCP Task Protocol tools)
     job_status: 'job',
     get_job_status: 'job',
     cancel_job: 'job',
-    task_get: 'task',
-    task_result: 'task',
-    task_cancel: 'task',
-    task_list: 'task',
+    task_get: 'job',      // Maps to job for taskId -> job_id normalization
+    task_result: 'job',   // Maps to job for taskId -> job_id normalization
+    task_cancel: 'job',   // Maps to job for taskId -> job_id normalization
+    task_list: 'job',     // Maps to job for consistency
+    // Report tools
     get_report: 'report',
+    // Graph tools
     graph_traverse: 'graph',
     graph_path: 'graph',
     graph_clusters: 'graph',
     graph_pagerank: 'graph',
     graph_patterns: 'graph',
     graph_stats: 'graph',
+    // Session tools
     session_state: 'session',
     fork_session: 'session',
     time_travel: 'session',
     checkpoint: 'session',
+    // Research tools
     batch_research: 'batch',
     conduct_research: 'research',
     research_follow_up: 'research'
@@ -126,6 +160,10 @@ function getToolCategory(tool) {
 
 /**
  * Validate required parameters exist
+ *
+ * @param {Object} params - Parameters to validate
+ * @param {Array<string>} required - List of required parameter names
+ * @throws {Error} If any required parameter is missing
  */
 function validateRequired(params, required) {
   const missing = required.filter(key => !(key in params) || params[key] === undefined);
@@ -135,7 +173,150 @@ function validateRequired(params, required) {
 }
 
 /**
- * Coerce types based on schema expectations
+ * Validation rules for required parameters by operation.
+ *
+ * Each rule can specify:
+ * - required: Array of required field names
+ * - aliases: Alternative names to check for the field
+ * - message: Custom error message
+ */
+const PARAM_RULES = {
+  search: {
+    required: ['query'],
+    message: 'query is required for search'
+  },
+  sql: {
+    required: ['sql'],
+    message: 'sql is required'
+  },
+  query: {
+    required: ['sql'],
+    message: 'sql parameter is required'
+  },
+  report: {
+    required: ['reportId'],
+    aliases: { reportId: ['id', 'report_id'] },
+    message: 'reportId is required'
+  },
+  get_report: {
+    required: ['reportId'],
+    aliases: { reportId: ['id', 'report_id'] },
+    message: 'reportId is required'
+  },
+  traverse: {
+    required: ['startNode'],
+    aliases: { startNode: ['node', 'start_node'] },
+    message: 'startNode is required for traversal'
+  },
+  graph_traverse: {
+    required: ['startNode'],
+    aliases: { startNode: ['node', 'start_node'] },
+    message: 'startNode is required for traversal'
+  },
+  path: {
+    required: ['from', 'to'],
+    message: 'Both from and to parameters are required'
+  },
+  graph_path: {
+    required: ['from', 'to'],
+    message: 'Both from and to parameters are required'
+  },
+  time_travel: {
+    required: ['timestamp'],
+    message: 'timestamp is required for time travel'
+  },
+  checkpoint: {
+    required: ['name'],
+    message: 'name is required for checkpoint'
+  },
+  job_status: {
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'jobId', 'taskId', 'task_id'] },
+    message: 'job_id is required'
+  },
+  // MCP Task Protocol tools use job_id as canonical (taskId accepted for backward compat)
+  task_get: {
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'taskId', 'task_id', 'jobId'] },
+    message: 'job_id is required (taskId is accepted for backward compatibility)'
+  },
+  task_result: {
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'taskId', 'task_id', 'jobId'] },
+    message: 'job_id is required (taskId is accepted for backward compatibility)'
+  },
+  task_cancel: {
+    required: ['job_id'],
+    aliases: { job_id: ['id', 'taskId', 'task_id', 'jobId'] },
+    message: 'job_id is required (taskId is accepted for backward compatibility)'
+  },
+  calc: {
+    required: ['expr'],
+    message: 'expr parameter is required'
+  },
+  research_follow_up: {
+    required: ['originalQuery', 'followUpQuestion'],
+    message: 'originalQuery and followUpQuestion are required'
+  }
+};
+
+/**
+ * Validate parameters against operation-specific rules.
+ *
+ * Checks if required parameters are present, accounting for aliases.
+ *
+ * @param {string} operation - Operation name to validate for
+ * @param {Object} params - Parameters to validate
+ * @returns {Object} Validated parameters (unchanged)
+ * @throws {Error} If required parameters are missing
+ *
+ * @example
+ * validateParams('search', { query: 'test' }); // OK
+ * validateParams('search', {}); // throws "query is required for search"
+ */
+function validateParams(operation, params) {
+  const rule = PARAM_RULES[operation];
+  if (!rule) return params;
+
+  for (const field of rule.required) {
+    // Build list of names to check (canonical + aliases)
+    const namesToCheck = [field];
+    if (rule.aliases?.[field]) {
+      namesToCheck.push(...rule.aliases[field]);
+    }
+
+    // Check if any name has a value
+    const hasValue = namesToCheck.some(name =>
+      params[name] != null && params[name] !== ''
+    );
+
+    if (!hasValue) {
+      throw new Error(rule.message || `${field} is required`);
+    }
+  }
+
+  return params;
+}
+
+/**
+ * Coerce types based on schema expectations.
+ * Automatically converts string values to their expected types based on schema.
+ * Useful for normalizing HTTP query params or CLI args before validation.
+ *
+ * @param {Object} params - Input parameters with potentially mismatched types
+ * @param {Object} schema - Schema mapping keys to type specs
+ * @param {string|{type:string}} schema[key] - Type spec: 'number', 'boolean', 'string' or {type: '...'}
+ * @returns {Object} New object with coerced types (original unchanged)
+ *
+ * @example
+ * // Schema can use shorthand or object notation
+ * const schema = { limit: 'number', verbose: { type: 'boolean' }, name: 'string' };
+ *
+ * coerceTypes({ limit: '10', verbose: 'true', name: 42 }, schema);
+ * // => { limit: 10, verbose: true, name: '42' }
+ *
+ * coerceTypes({ limit: 'abc', verbose: '0' }, schema);
+ * // => { limit: 'abc', verbose: false } // 'abc' not coerced (NaN), '0' becomes false
  */
 function coerceTypes(params, schema) {
   if (!schema) return params;
@@ -165,9 +346,11 @@ module.exports = {
   normalize,
   applyAliases,
   validateRequired,
+  validateParams,
   coerceTypes,
   getToolCategory,
   GLOBAL_ALIASES,
   TOOL_ALIASES,
-  DEFAULTS
+  DEFAULTS,
+  PARAM_RULES
 };

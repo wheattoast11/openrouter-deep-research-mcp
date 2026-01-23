@@ -9,10 +9,18 @@ backups/
 
 # Environment variables
 .env
+.env.zero
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Private & Proprietary
+private/
+src/cli/
+bin/zero
+tests/unit/auth.test.js
+examples/auth-integration.js
 
 # SpecStory artifacts
 .specstory/
@@ -48,3 +56,13 @@ researchAgentDB/
 .cache/
 .temp/
 .tmp/
+
+# Research outputs (generated artifacts)
+research_outputs/
+
+# Local binaries
+cloudflared/
+
+# Browser experiments (WIP)
+src/browser/
+cloudflared

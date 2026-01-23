@@ -39,5 +39,5 @@ async function testMcpServer() {
 
 testMcpServer().catch(err => {
   console.error('Unhandled error in test:', err);
-  process.exit(1);
+    process.exitCode = 1;
 });

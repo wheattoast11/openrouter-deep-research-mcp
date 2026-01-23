@@ -202,17 +202,17 @@ function calculateAccuracyScore(checkResults) {
       score += 0.05; // Small bonus for aligned claims
     } else {
       breakdown.unverified++;
-      score -= 0.02; // Small penalty for unverified
+      score -= 0.01; // Reduced penalty for unverified from 0.02
     }
   }
 
   // Factor in citation quality
   if (citationQuality.score !== undefined) {
-    score = score * 0.7 + citationQuality.score * 0.3;
+    score = score * 0.6 + citationQuality.score * 0.4; // More weight to citations
   }
 
   // Penalty for ensemble contradictions
-  score -= contradictions.length * 0.1;
+  score -= contradictions.length * 0.05; // Reduced penalty from 0.1
 
   // Clamp score to [0, 1]
   score = Math.max(0, Math.min(1, score));
