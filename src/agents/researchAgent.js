@@ -1,5 +1,6 @@
 // src/agents/researchAgent.js
 const config = require('../../config');
+const { ROUTING } = require('../config/constants');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import the new parser
 const modelCatalog = require('../utils/modelCatalog'); // Dynamic model catalog
 const logger = require('../utils/logger').child('ResearchAgent');
@@ -11,6 +12,7 @@ const { StreamingConsensus, ConsensusState } = require('../core/rail/consensus')
 const providerTelemetry = require('../utils/providerTelemetry');
 const providerManager = require('../core/providers'); // Now CognitiveRouter
 const { Interaction, InteractionType } = require('../core/interactions/types');
+const { getEmbeddingRouter } = require('../routing/embeddingRouter'); // Embedding-based routing (v1.15.0)
 const parallelism = require('../../config').models.parallelism || 4;
 
 const DOMAINS = ["general", "technical", "reasoning", "search", "creative"];
@@ -148,25 +150,58 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
   }
 
   // Ensure options parameter is accepted
-  async classifyQueryDomain(query, options = {}) { 
+  async classifyQueryDomain(query, options = {}) {
+    const requestId = options?.requestId || 'unknown-req';
+
+    // Try embedding-based classification first (fast, local, free)
+    if (ROUTING.EMBEDDING_ROUTING_ENABLED) {
+      try {
+        const router = await getEmbeddingRouter();
+        if (router.isReady()) {
+          const result = await router.classifyDomain(query);
+
+          // Use embedding result if confidence is high enough
+          if (result.confidence >= ROUTING.MIN_CONFIDENCE_THRESHOLD) {
+            logger.debug('Domain classified via embeddings', {
+              requestId,
+              query: query.substring(0, 50),
+              domain: result.domain,
+              confidence: result.confidence.toFixed(3)
+            });
+            return result.domain;
+          }
+
+          // Low confidence - fall through to LLM if enabled
+          if (!ROUTING.LLM_FALLBACK_ENABLED) {
+            return result.domain; // Use embedding result anyway
+          }
+          logger.debug('Embedding confidence low, using LLM fallback', {
+            requestId,
+            confidence: result.confidence.toFixed(3)
+          });
+        }
+      } catch (err) {
+        logger.warn('Embedding routing failed, using LLM fallback', { error: err.message });
+      }
+    }
+
+    // LLM-based classification (fallback)
     const systemPrompt = `Classify the primary domain of the following research query. Respond with ONLY one domain from this list: ${DOMAINS.join(', ')}.`;
     const messages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: query }
     ];
-    // Assuming requestId is passed down or generated if needed
-    const requestId = options?.requestId || 'unknown-req'; 
+
     try {
       const response = await providerManager.chat(this.classificationModel, messages, {
-        temperature: 0.1, // Low temp for consistent classification
-        max_tokens: 64 // Ensure well above OpenRouter minimum of 16
+        temperature: 0.1,
+        max_tokens: 64
       });
       let domain = response.choices[0].message.content.trim().toLowerCase();
-      // Basic cleanup if model adds punctuation etc.
-      domain = domain.replace(/[^a-z]/g, ''); 
-      
+      domain = domain.replace(/[^a-z]/g, '');
+
       if (DOMAINS.includes(domain)) {
-        logger.debug('Classified query domain', { requestId, query: query.substring(0, 50), domain });
+        logger.debug('Classified query domain via LLM', { requestId, query: query.substring(0, 50), domain });
         return domain;
       } else {
         logger.warn('Invalid domain classification, defaulting to general', { requestId, query: query.substring(0, 50), invalidDomain: domain });
@@ -179,31 +214,67 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
   }
 
   async assessQueryComplexity(query, options = {}) {
-     const requestId = options?.requestId || 'unknown-req';
-     // Simple heuristic: short queries might be simple
-     if (query.split(' ').length <= SIMPLE_QUERY_MAX_LENGTH) {
-        logger.debug('Query assessed as potentially simple based on length', { requestId, query: query.substring(0, 50) });
-        // Optionally add LLM call for more nuanced assessment
-        const systemPrompt = `Assess the complexity of the following research query. Is it likely answerable with a concise factual statement or does it require deep analysis? Respond with ONLY one complexity level: ${COMPLEXITY_LEVELS.join(', ')}.`;
-        const messages = [ { role: 'system', content: systemPrompt }, { role: 'user', content: query } ];
-        try {
-           const response = await providerManager.chat(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
-           let complexity = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
-           if (COMPLEXITY_LEVELS.includes(complexity)) {
-              logger.debug('Classified query complexity', { requestId, query: query.substring(0, 50), complexity });
-              return complexity;
-           } else {
-              logger.warn('Invalid complexity classification, defaulting to moderate', { requestId, invalidLevel: complexity });
-              return 'moderate';
-           }
-        } catch (error) {
-           logger.error('Error classifying query complexity', { requestId, query: query.substring(0, 50), error });
-           return 'moderate'; // Default to moderate on error
+    const requestId = options?.requestId || 'unknown-req';
+
+    // Try embedding-based complexity assessment first (fast, local, free)
+    if (ROUTING.EMBEDDING_ROUTING_ENABLED) {
+      try {
+        const router = await getEmbeddingRouter();
+        if (router.isReady()) {
+          const result = await router.assessComplexity(query);
+
+          // Use embedding result if confidence is high enough
+          if (result.confidence >= ROUTING.MIN_CONFIDENCE_THRESHOLD) {
+            logger.debug('Complexity assessed via embeddings', {
+              requestId,
+              query: query.substring(0, 50),
+              complexity: result.complexity,
+              confidence: result.confidence.toFixed(3)
+            });
+            return result.complexity;
+          }
+
+          // Low confidence - fall through to LLM if enabled
+          if (!ROUTING.LLM_FALLBACK_ENABLED) {
+            return result.complexity;
+          }
+          logger.debug('Embedding complexity confidence low, using LLM fallback', {
+            requestId,
+            confidence: result.confidence.toFixed(3)
+          });
         }
-     }
-     // Longer queries default to moderate/complex
-     logger.debug('Query assessed as moderate/complex based on length', { requestId, query: query.substring(0, 50) });
-     return 'moderate';
+      } catch (err) {
+        logger.warn('Embedding complexity assessment failed, using LLM fallback', { error: err.message });
+      }
+    }
+
+    // Simple heuristic: short queries might be simple
+    if (query.split(' ').length <= SIMPLE_QUERY_MAX_LENGTH) {
+      logger.debug('Query assessed as potentially simple based on length', { requestId, query: query.substring(0, 50) });
+
+      // LLM fallback for nuanced assessment
+      const systemPrompt = `Assess the complexity of the following research query. Is it likely answerable with a concise factual statement or does it require deep analysis? Respond with ONLY one complexity level: ${COMPLEXITY_LEVELS.join(', ')}.`;
+      const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: query }];
+
+      try {
+        const response = await providerManager.chat(this.classificationModel, messages, { temperature: 0.1, max_tokens: 64 });
+        let complexity = response.choices[0].message.content.trim().toLowerCase().replace(/[^a-z]/g, '');
+        if (COMPLEXITY_LEVELS.includes(complexity)) {
+          logger.debug('Classified query complexity via LLM', { requestId, query: query.substring(0, 50), complexity });
+          return complexity;
+        } else {
+          logger.warn('Invalid complexity classification, defaulting to moderate', { requestId, invalidLevel: complexity });
+          return 'moderate';
+        }
+      } catch (error) {
+        logger.error('Error classifying query complexity', { requestId, query: query.substring(0, 50), error });
+        return 'moderate';
+      }
+    }
+
+    // Longer queries default to moderate/complex
+    logger.debug('Query assessed as moderate/complex based on length', { requestId, query: query.substring(0, 50) });
+    return 'moderate';
   }
 
 

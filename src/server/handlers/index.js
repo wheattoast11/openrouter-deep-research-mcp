@@ -16,10 +16,14 @@ const session = require('./session');
 const graph = require('./graph');
 const kb = require('./kb');
 const rail = require('./rail');
+const dispatcher = require('./dispatcher');
 const { SemanticRouter, createRouter } = require('../../core/router');
+const signalRouter = require('../../core/routing/signalRouter');
 const config = require('../../../config');
+const { ROUTING } = require('../../config/constants');
+const logger = require('../../utils/logger').child('Handlers');
 
-// Singleton semantic router for query classification
+// Singleton semantic router for query classification (model selection)
 const semanticRouter = createRouter({
   costPreference: config.core?.rail?.routing?.costPreference || 'balanced'
 });
@@ -103,14 +107,34 @@ async function routeToHandler(toolName, params, context = {}) {
  * - forkCount: number - Number of parallel forks (default 3)
  */
 async function handleZeroTool(params, context = {}) {
-  const intent = params.intent || 'research';
+  let intent = params.intent;
   const query = params.query || params.q;
 
   if (!query && intent !== 'batch') {
     throw new Error('Query required for zero tool (use "query" or "q" parameter)');
   }
 
-  // Route semantic classification through router
+  // Use SignalRouter for intent classification if enabled and intent not explicit
+  if (!intent && query && ROUTING.EMBEDDING_ROUTING_ENABLED) {
+    try {
+      const intentDecision = await signalRouter.route(query);
+      if (intentDecision.confidence >= ROUTING.MIN_CONFIDENCE_THRESHOLD) {
+        intent = intentDecision.selectedAttractor; // 'chat', 'research', or 'action'
+        logger.debug('SignalRouter intent classification', {
+          query: query.slice(0, 50),
+          intent,
+          confidence: intentDecision.confidence.toFixed(3)
+        });
+      }
+    } catch (err) {
+      logger.debug('SignalRouter fallback', { error: err.message });
+    }
+  }
+
+  // Default to research if no intent determined
+  intent = intent || 'research';
+
+  // Route semantic classification through router (for model selection)
   const routeDecision = await semanticRouter.route({
     query: query || (params.queries?.[0] || ''),
     costPreference: params.costPreference || params.cost || 'low',
@@ -175,6 +199,11 @@ async function handleZeroTool(params, context = {}) {
     case 'chat':
       const zeroHandler = require('./zero');
       return zeroHandler.handleZero('zero_chat', params, enrichedContext);
+
+    case 'action':
+      // Action intent routes to chat handler (handles tool execution, coding tasks)
+      const actionHandler = require('./zero');
+      return actionHandler.handleZero('zero_chat', { ...params, _isAction: true }, enrichedContext);
 
     case 'research':
       return handleResearchTool('conduct_research', params, enrichedContext);
@@ -296,6 +325,7 @@ module.exports = {
   // Semantic router access
   semanticRouter,
   SemanticRouter,
+  signalRouter,
 
   // Domain handlers
   handleUtil: util.handleUtil,
@@ -348,5 +378,12 @@ module.exports = {
   listRoutes: rail.listRoutes,
   getRoute: rail.getRoute,
   listTunnels: rail.listTunnels,
-  listConsensus: rail.listConsensus
+  listConsensus: rail.listConsensus,
+
+  // Dispatcher exports (CLI unification)
+  dispatch: dispatcher.dispatch,
+  dispatchLegacy: dispatcher.dispatchLegacy,
+  createCLIDispatcher: dispatcher.createCLIDispatcher,
+  getCLIDispatcher: dispatcher.getCLIDispatcher,
+  isHandlersEnabled: dispatcher.isHandlersEnabled
 };

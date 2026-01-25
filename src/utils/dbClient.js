@@ -35,7 +35,10 @@ const isNodeEnv = typeof process !== 'undefined' && process.versions && process.
 const isBrowserEnv = typeof window !== 'undefined';
 const nodeMajor = isNodeEnv ? parseInt(process.versions.node.split('.')[0], 10) : null;
 const isDarwin = isNodeEnv ? process.platform === 'darwin' : false;
-const autoHealEnabled = isNodeEnv && isDarwin && nodeMajor >= 25 && process.env.DB_AUTO_HEAL !== 'false';
+// Node 25/macOS: mutex error on shutdown is cosmetic, data persists fine
+// DB_AUTO_HEAL=true forces in-memory mode (no persistence)
+// DB_AUTO_HEAL=false (default) uses persistent storage with cosmetic shutdown error
+const autoHealEnabled = isNodeEnv && isDarwin && nodeMajor >= 25 && process.env.DB_AUTO_HEAL === 'true';
 
 // Variables for filesystem access
 let fs;
@@ -46,7 +49,6 @@ if (isNodeEnv) {
 let db = null;
 let isEmbedderReady = false;
 let embeddingProvider = null;
-let transformerPipeline = null;
 let dbInitialized = false;
 let usingInMemoryFallback = false;
 let dbPathInfo = 'Not Initialized';
@@ -79,7 +81,7 @@ const MAX_RETRIES = config.database?.maxRetryAttempts || 3;
 const BASE_RETRY_DELAY = config.database?.retryDelayBaseMs || 200;
 
 // ============================================================================
-// EMBEDDER INITIALIZATION
+// EMBEDDER INITIALIZATION - Uses @terminals-tech/embeddings package
 // ============================================================================
 
 let embedderInitPromise = null;
@@ -90,106 +92,32 @@ async function initializeEmbedder() {
 
   embedderInitPromise = (async () => {
     try {
-      // DUMMY IMPLEMENTATION for @terminals-tech/embeddings
-      // const { EmbeddingProviderFactory, MockEmbeddingProvider } = await import('@terminals-tech/embeddings');
-      const MockEmbeddingProvider = class {
-        constructor() { this.dimensions = 384; }
-        embed(text) { return { values: new Float32Array(384).fill(0.1), dimensions: 384, normalized: true }; }
-        embedBatch(texts) { return texts.map(() => ({ values: new Float32Array(384).fill(0.1), dimensions: 384, normalized: true })); }
-        similarity(a, b) { return 0.5; }
-        dispose() {}
-      };
-      const EmbeddingProviderFactory = {
-        createBest: async () => new MockEmbeddingProvider()
-      };
-      
-      logger.info('Initializing @terminals-tech/embeddings (DUMMY)');
+      // Use @terminals-tech/embeddings package - handles transformers → mock fallback
+      const { EmbeddingProviderFactory, MockEmbeddingProvider } = require('@terminals-tech/embeddings');
 
-      const deviceConfig = {
+      logger.info('Initializing @terminals-tech/embeddings provider');
+
+      const providerConfig = {
+        preferredProvider: 'transformers',
         cache: true,
-        quantizeCache: true,
-        device: process.env.EMBEDDINGS_DEVICE || 'auto',
-        dtype: process.env.EMBEDDINGS_DTYPE || 'q8'
+        cacheSize: 1000,
+        quantizeCache: true
       };
 
-      let directInitSuccess = false;
-      try {
-        const { pipeline } = await import('@huggingface/transformers');
-        const modelId = 'Xenova/all-MiniLM-L6-v2';
+      // createBest tries TransformersEmbeddingProvider, falls back to MockEmbeddingProvider
+      embeddingProvider = await EmbeddingProviderFactory.createBest(providerConfig);
 
-        let actualDevice = 'cpu';
-        let dtypeConfig = deviceConfig.dtype;
-
-        if (deviceConfig.device === 'cuda' || deviceConfig.device === 'gpu') {
-          actualDevice = 'cuda';
-        }
-
-        if (actualDevice === 'cpu' && !['q8', 'q4', 'fp32'].includes(dtypeConfig)) {
-          dtypeConfig = 'q8';
-        }
-
-        logger.info('Initializing transformers pipeline', { device: actualDevice, dtype: dtypeConfig });
-
-        transformerPipeline = await pipeline('feature-extraction', modelId, {
-          device: actualDevice,
-          dtype: dtypeConfig
-        });
-
-        const extractor = transformerPipeline;
-
-        embeddingProvider = {
-          _ready: true,
-          _deviceConfigured: true,
-          _directInit: true,
-          dimensions: 384,
-          embed: async (text) => {
-            const output = await extractor(text, { pooling: 'mean', normalize: true });
-            return { values: new Float32Array(output.data), dimensions: 384, normalized: true };
-          },
-          embedBatch: async (texts) => {
-            const results = [];
-            const batchSize = 16;
-            for (let i = 0; i < texts.length; i += batchSize) {
-              const batch = texts.slice(i, i + batchSize);
-              for (const text of batch) {
-                const output = await extractor(text, { pooling: 'mean', normalize: true });
-                results.push({ values: new Float32Array(output.data), dimensions: 384, normalized: true });
-              }
-            }
-            return results;
-          },
-          similarity: (a, b) => {
-            const vecA = a.values || a;
-            const vecB = b.values || b;
-            let dot = 0, normA = 0, normB = 0;
-            for (let i = 0; i < vecA.length; i++) {
-              dot += vecA[i] * vecB[i];
-              normA += vecA[i] * vecA[i];
-              normB += vecB[i] * vecB[i];
-            }
-            return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-          }
-        };
-        directInitSuccess = true;
-        logger.info('Optimized embeddings initialized', { device: actualDevice, dtype: dtypeConfig });
-      } catch (directErr) {
-        logger.warn('Direct transformers init failed, falling back to factory', { error: directErr.message });
-      }
-
-      if (!directInitSuccess) {
-        embeddingProvider = await EmbeddingProviderFactory.createBest(deviceConfig);
-      }
-
-      embedderIsMock = embeddingProvider.constructor.name === 'MockEmbeddingProvider' ||
-                       (MockEmbeddingProvider && embeddingProvider instanceof MockEmbeddingProvider);
+      // Check if we got the mock (transformers unavailable)
+      embedderIsMock = embeddingProvider instanceof MockEmbeddingProvider ||
+                       embeddingProvider.constructor.name === 'MockEmbeddingProvider';
 
       if (embedderIsMock) {
         logger.warn('Using MockEmbeddingProvider - vector search quality will be degraded');
+      } else {
+        logger.info('TransformersEmbeddingProvider initialized successfully');
       }
 
       isEmbedderReady = true;
-      logger.info(`@terminals-tech/embeddings initialized successfully${embedderIsMock ? ' (MOCK MODE)' : ''}`);
-
       return { ready: true, isMock: embedderIsMock };
     } catch (err) {
       logger.error('Failed to initialize @terminals-tech/embeddings', { error: err });
@@ -222,10 +150,19 @@ async function generateEmbedding(text) {
   }
   try {
     const embedding = await embeddingProvider.embed(text);
+    let result;
     if (embedding && embedding.values) {
-      return Array.from(embedding.values);
+      result = Array.from(embedding.values);
+    } else {
+      result = Array.isArray(embedding) ? embedding : Array.from(embedding);
     }
-    return Array.isArray(embedding) ? embedding : Array.from(embedding);
+    // Validate: replace NaN/Infinity with 0 to prevent PGLite vector errors
+    for (let i = 0; i < result.length; i++) {
+      if (!Number.isFinite(result[i])) {
+        result[i] = 0;
+      }
+    }
+    return result;
   } catch (error) {
     logger.error('Error generating embedding', { error });
     return null;
@@ -239,8 +176,19 @@ async function generateEmbeddingBatch(texts) {
   try {
     const embeddings = await embeddingProvider.embedBatch(texts);
     return embeddings.map(e => {
-      if (e && e.values) return Array.from(e.values);
-      return Array.isArray(e) ? e : Array.from(e);
+      let result;
+      if (e && e.values) {
+        result = Array.from(e.values);
+      } else {
+        result = Array.isArray(e) ? e : Array.from(e);
+      }
+      // Validate: replace NaN/Infinity with 0 to prevent PGLite vector errors
+      for (let i = 0; i < result.length; i++) {
+        if (!Number.isFinite(result[i])) {
+          result[i] = 0;
+        }
+      }
+      return result;
     });
   } catch (error) {
     logger.error('Error in batch embedding', { error });
@@ -1432,15 +1380,7 @@ async function close() {
       // Wait for operations
       await waitForIdle(2000);
 
-      // Cleanup embedder
-      if (transformerPipeline) {
-        try {
-          if (transformerPipeline.model?.session?.close) {
-            await transformerPipeline.model.session.close();
-          }
-        } catch (_) {}
-        transformerPipeline = null;
-      }
+      // Cleanup embedder - provider.dispose() handles internal resource cleanup
       if (embeddingProvider?.dispose) {
         try { await embeddingProvider.dispose(); } catch (_) {}
         embeddingProvider = null;
@@ -1477,19 +1417,39 @@ async function close() {
 /**
  * Proactive Worker Pool Draining (Node 25/macOS Mutex Fix)
  * Ensures all WASM threads are terminated before process exit.
+ * The mutex error is cosmetic - data is already persisted by this point.
  */
 async function drainWorkerPool() {
   if (db && db.query) {
     try {
-      // Force checkpoint to flush WAL
+      // Force checkpoint to flush WAL - ensures all data is persisted
       await db.query('CHECKPOINT');
       logger.debug('Database checkpointed');
+
+      // Force vacuum to release file handles
+      await db.query('PRAGMA wal_checkpoint(TRUNCATE)').catch(() => {});
+      logger.debug('WAL truncated');
     } catch (e) {
       logger.warn('Failed to checkpoint during drain', { error: e.message });
     }
   }
   // Allow pending async operations to settle
-  await new Promise(resolve => setTimeout(resolve, 100));
+  // 200ms gives WASM workers more time to clean up
+  await new Promise(resolve => setTimeout(resolve, 200));
+}
+
+/**
+ * Emergency checkpoint - call before any risky operation
+ * Ensures data is persisted even if process crashes
+ */
+async function emergencyCheckpoint() {
+  if (!db || !dbInitialized) return;
+  try {
+    await db.query('CHECKPOINT');
+    logger.debug('Emergency checkpoint completed');
+  } catch (e) {
+    // Ignore - best effort
+  }
 }
 
 // ============================================================================
@@ -1527,6 +1487,7 @@ module.exports = {
   waitForInit,
   waitForIdle,
   close,
+  emergencyCheckpoint,
   
   // State queries
   getInitState: () => initState,

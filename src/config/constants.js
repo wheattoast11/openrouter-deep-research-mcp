@@ -113,7 +113,29 @@ const CORE = {
   REQUEST_TRACKER_TIMEOUT_MS: 60000,
   CONSENSUS_MIN_AGREEMENT: 0.6,
   CRYSTALLIZATION_POSITIVE_WEIGHT: 0.2,
-  CRYSTALLIZATION_NEGATIVE_WEIGHT: 0.1
+  CRYSTALLIZATION_NEGATIVE_WEIGHT: 0.1,
+  // Handler system (CLI unification v1.15.0)
+  HANDLERS_ENABLED: true,  // Use handlers/dispatcher instead of tools.js
+  USE_QUADRATURE: true,    // Enable phase-lock consensus detection
+  MAX_PARALLEL_MODELS: 4   // Default parallel model executions
+};
+
+/**
+ * Embedding-based routing configuration (v1.15.0)
+ * Uses @terminals-tech/embeddings for local, fast model selection
+ */
+const ROUTING = {
+  // Master switch for embedding-based routing
+  EMBEDDING_ROUTING_ENABLED: true,
+  // Minimum confidence to skip LLM fallback
+  MIN_CONFIDENCE_THRESHOLD: 0.6,
+  // Use LLM classification as fallback for low-confidence routing
+  LLM_FALLBACK_ENABLED: true,
+  // Thermodynamic router settings
+  BOLTZMANN_TEMPERATURE: 0.3,
+  MAX_ENERGY_THRESHOLD: 0.8,
+  // Model profile seed phrases for semantic matching
+  USE_MODEL_PROFILES: true
 };
 
 /**
@@ -198,6 +220,7 @@ module.exports = {
   CACHING,
   COST_THRESHOLDS,
   CORE,
+  ROUTING,
   TOOL_RECURSION,
   LOGGING,
   MCP_SPEC,

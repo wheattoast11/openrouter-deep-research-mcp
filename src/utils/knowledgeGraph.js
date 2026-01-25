@@ -11,29 +11,15 @@ let graphInitialized = false;
 async function initGraphModule() {
   if (graphInitialized) return true;
   try {
-    // DUMMY IMPLEMENTATION for @terminals-tech/graph
-    // const graphModule = await import('@terminals-tech/graph');
-    
-    GraphProcessor = class {
-      addEvent() {}
-      getSubgraph() { return { nodes: [], edges: [] }; }
-      findPath() { return []; }
-      findClusters() { return []; }
-      calculatePageRank() { return {}; }
-    };
-    
-    TextGraph = class {
-      extractRelations() { return []; }
-    };
-    
-    PatternMatcher = class {
-      extractPatterns() { return []; }
-      detectAnomalies() { return []; }
-      predictNext() { return []; }
-    };
+    // Import from @terminals-tech/graph package
+    const graphModule = require('@terminals-tech/graph');
+
+    GraphProcessor = graphModule.GraphProcessor;
+    TextGraph = graphModule.TextGraph;
+    PatternMatcher = graphModule.PatternMatcher;
 
     graphInitialized = true;
-    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/graph initialized successfully (DUMMY).\n`);
+    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/graph initialized successfully.\n`);
     return true;
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Failed to initialize @terminals-tech/graph:`, err);

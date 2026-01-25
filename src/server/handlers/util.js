@@ -127,17 +127,17 @@ function tokenize(expr) {
       continue;
     }
 
+    // Handle ** for exponentiation (check BEFORE single * to avoid dead code)
+    if (char === '*' && normalized[i + 1] === '*') {
+      tokens.push({ type: 'operator', value: '**' });
+      i += 2;
+      continue;
+    }
+
     // Operators and parentheses
     if ('+-*/%()'.includes(char)) {
       tokens.push({ type: 'operator', value: char });
       i++;
-      continue;
-    }
-
-    // Handle ** for exponentiation
-    if (char === '*' && normalized[i + 1] === '*') {
-      tokens.push({ type: 'operator', value: '**' });
-      i += 2;
       continue;
     }
 
