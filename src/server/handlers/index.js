@@ -16,6 +16,7 @@ const session = require('./session');
 const graph = require('./graph');
 const kb = require('./kb');
 const rail = require('./rail');
+const swarm = require('./swarm');
 const dispatcher = require('./dispatcher');
 const { SemanticRouter, createRouter } = require('../../core/router');
 const signalRouter = require('../../core/routing/signalRouter');
@@ -92,6 +93,12 @@ async function routeToHandler(toolName, params, context = {}) {
   if (rail.isRailTool(toolName)) {
     const op = rail.getRailOp(toolName);
     return rail.handleRail(op, params, context);
+  }
+
+  // Swarm orchestration tools
+  if (swarm.isSwarmTool(toolName)) {
+    const op = swarm.getSwarmOp(toolName);
+    return swarm.handleSwarm(op, params, context);
   }
 
   throw new Error(`Unknown tool: ${toolName}. Use list_tools to see available tools.`);
@@ -385,5 +392,14 @@ module.exports = {
   dispatchLegacy: dispatcher.dispatchLegacy,
   createCLIDispatcher: dispatcher.createCLIDispatcher,
   getCLIDispatcher: dispatcher.getCLIDispatcher,
-  isHandlersEnabled: dispatcher.isHandlersEnabled
+  isHandlersEnabled: dispatcher.isHandlersEnabled,
+
+  // Swarm orchestration exports
+  handleSwarm: swarm.handleSwarm,
+  swarmPlan: swarm.swarmPlan,
+  swarmExecute: swarm.swarmExecute,
+  swarmValidate: swarm.swarmValidate,
+  swarmStatus: swarm.swarmStatus,
+  isSwarmTool: swarm.isSwarmTool,
+  getSwarmOp: swarm.getSwarmOp
 };

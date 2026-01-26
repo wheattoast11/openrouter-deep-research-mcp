@@ -20,9 +20,12 @@ claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdi
 
 ## What's New (v1.15.0)
 
+- **Persistent storage by default** - Research reports, jobs, and knowledge graph now persist across sessions
 - **Provider telemetry** - Model-level health, latency, error categories, fallback tracking
 - **Graceful degradation** - Key rotation cooldowns + streaming fallback on failures
 - **Provider health tool** - `get_provider_health` + provider summary in `get_server_status`
+
+> **macOS/Node 25 Note**: A cosmetic `libc++abi: mutex lock failed` message may appear on shutdown. This is harmless - data is checkpointed before shutdown. Set `DB_AUTO_HEAL=true` for in-memory mode (no persistence, no message).
 
 [Full Changelog](docs/CHANGELOG.md) | [Extensions Guide](docs/EXTENSIONS.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 

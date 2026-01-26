@@ -4,7 +4,8 @@
   "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
   "bin": {
-    "openrouter-agents": "src/server/mcpServer.js"
+    "openrouter-agents": "src/server/mcpServer.js",
+    "zero": "bin/zero"
   },
   "scripts": {
     "start": "node src/server/mcpServer.js",
@@ -58,11 +59,18 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.14",
+    "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.21.1",
     "@terminals-tech/core": "^0.1.1",
     "@terminals-tech/embeddings": "^0.1.0",
     "@terminals-tech/graph": "^0.1.0",
     "axios": "^1.6.2",
+    "chalk-animation": "^2.0.3",
+    "gradient-string": "^3.0.0",
+    "ink": "^5.1.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1",
     "csv-parse": "^5.6.0",
     "date-fns": "^4.1.0",
     "dotenv": "^16.3.1",

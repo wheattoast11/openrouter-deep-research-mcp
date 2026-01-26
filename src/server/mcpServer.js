@@ -729,6 +729,9 @@ function normalizeParamsForTool(toolName, params) {
           out.query = out.query || (parsed._raw ? parsed._raw : s);
         }
         if (out.k !== undefined) out.k = toNumberOr(out.k, 10);
+        // Fix type coercion for boolean flags
+        if (out.rerank !== undefined) out.rerank = toBoolean(out.rerank);
+        if (out.explain !== undefined) out.explain = toBoolean(out.explain);
         return out;
       }
 
@@ -740,6 +743,9 @@ function normalizeParamsForTool(toolName, params) {
         if (out.q && !out.query) out.query = out.q;
         if (out.cost && !out.costPreference) out.costPreference = out.cost;
         if (out.async !== undefined) out.async = toBoolean(out.async, true);
+        // Fix type coercion for boolean flags
+        if (out.includeSources !== undefined) out.includeSources = toBoolean(out.includeSources, true);
+        if (out.detailed !== undefined) out.detailed = toBoolean(out.detailed, false);
         return out;
       }
       return s ? { query: s } : {};
@@ -750,9 +756,13 @@ function normalizeParamsForTool(toolName, params) {
       return s ? { query: s } : {};
 
     case 'search':
-      // Accept either 'q' or 'query' parameter
-      if (parsed && (parsed.q || parsed.query)) return parsed;
-      return s ? { q: s } : {};
+      {
+        // Accept either 'q' or 'query' parameter
+        const out = (parsed && (parsed.q || parsed.query)) ? { ...parsed } : (s ? { q: s } : {});
+        // Fix type coercion for boolean flags
+        if (out.rerank !== undefined) out.rerank = toBoolean(out.rerank);
+        return out;
+      }
 
     // Note: 'retrieve' case is handled above at line 503-518
 
@@ -1285,6 +1295,29 @@ register(
     try { const text = await getServerStatus({}, exchange, `req-${Date.now()}`); return { content: [{ type: 'text', text }] }; }
     catch (e) { return { content: [{ type: 'text', text: `Error get_server_status: ${e.message}` }], isError: true }; }
   }
+);
+
+// New Tool: get_consensus_history
+const getConsensusHistorySchema = z.object({
+  limit: z.number().int().positive().optional().default(10).describe("Number of consensus log entries to retrieve")
+});
+
+async function getConsensusHistoryTool(params) {
+  const limit = params.limit || 10;
+  // Use dbClient directly
+  try {
+    const rows = await dbClient.executeQuery("SELECT * FROM consensus_log ORDER BY id DESC LIMIT $1", [limit]);
+    return JSON.stringify(rows, null, 2);
+  } catch (e) {
+    // Graceful fallback if table missing (dev environment)
+    return JSON.stringify({ error: e.message, hint: "consensus_log table may not exist in this environment" });
+  }
+}
+
+register(
+  "get_consensus_history",
+  getConsensusHistorySchema,
+  wrapWithHandler("get_consensus_history", getConsensusHistoryTool)
 );
 
 // Semantic aliases - provide clearer names for common operations

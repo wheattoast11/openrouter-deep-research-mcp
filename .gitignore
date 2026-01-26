@@ -10,6 +10,7 @@ backups/
 # Environment variables
 .env
 .env.zero
+.env.bak
 .env.local
 .env.development.local
 .env.test.local

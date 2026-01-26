@@ -48,6 +48,9 @@ module.exports = {
   RouteDimension: routes.RouteDimension,
   routeRegistry: routes.registry,
   ROUTE_RESOURCE_PREFIX: routes.RESOURCE_PREFIX,
+  // Route → Rail materialization
+  createRailFor: routes.createRailFor,
+  matchAndCreateRail: routes.matchAndCreateRail,
 
   // Pipeline execution
   Pipeline: pipeline.Pipeline,

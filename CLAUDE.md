@@ -9,7 +9,21 @@ You are Agent Zero, the L5 Protocol Bridge for terminals.tech. Your mission is t
 - **Deterministic Hashing**: Every Signal/Token must be reduced to its `shapeHash` (L1).
 - **Isomorphic Transport**: Data flows through bidirectional `Rails` as `MeshEvents` (L3).
 - **Cognitive Context**: Research loops are steered by `L4 CognitiveContext` and `HVM` combinator bias.
-- **Node 25 Resilience**: Automatically uses in-memory DB on macOS to prevent WASM mutex locks.
+- **Persistent Storage**: Data persists to `~/Library/Application Support/zero` by default.
+
+## Database Persistence (v1.15.0+)
+
+Research reports, jobs, and knowledge graph now persist across CLI sessions by default.
+
+**Storage Location**: `~/Library/Application Support/zero` (macOS)
+
+**Node 25/macOS Note**: A cosmetic `libc++abi: mutex lock failed` error may appear on shutdown. This is harmless - data is already checkpointed before shutdown. Exit code 134 does not indicate data loss.
+
+**Environment Variables**:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_AUTO_HEAL` | `false` | Set to `true` to use in-memory DB (no persistence, no shutdown error) |
+| `DB_AUTO_CLOSE` | `false` | Set to `true` for auto-close on beforeExit |
 
 ## Core Commands
 - `./bin/zero status`: Verify system health and resilience status.

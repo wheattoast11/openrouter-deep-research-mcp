@@ -62,10 +62,11 @@ class StreamingConsensus {
     this._intervalId = null;
 
     // IQ Quadrature settings
-    this._useQuadrature = false;
+    this._useQuadrature = options.useQuadrature ?? true; // ENABLED by default
     this._phaseLockThreshold = options.phaseLockThreshold ?? 0.1;
     this._referenceModel = options.referenceModel ?? 'anthropic/claude-sonnet-4.5';
     this._iqDecomposition = null;
+    this._phaseAccumulator = new Map(); // Track phase per model
 
     // Initialize IQ decomposition if available
     this._initQuadrature();
@@ -73,6 +74,12 @@ class StreamingConsensus {
 
   /**
    * Get phase offset based on provider
+   * Providers are assigned quadrant phases for IQ decomposition:
+   * - Anthropic: 0° (In-phase reference)
+   * - OpenAI: 90° (Quadrature)
+   * - Google: 180° (Anti-phase)
+   * - Others: 270° (Negative quadrature)
+   *
    * @private
    * @param {string} source - Model source string
    * @returns {number} Phase in radians
@@ -80,20 +87,63 @@ class StreamingConsensus {
   _getProviderPhase(source) {
     if (!source) return 4.71; // Others (3*PI/2)
     const lower = source.toLowerCase();
-    
+
     if (lower.startsWith('anthropic')) return 0;       // 0 degrees
-    if (lower.startsWith('openai')) return 1.57;       // 90 degrees
-    if (lower.startsWith('google')) return 3.14;       // 180 degrees
-    
-    return 4.71; // Others (270 degrees)
+    if (lower.startsWith('openai')) return 1.57;       // 90 degrees (π/2)
+    if (lower.startsWith('google')) return 3.14;       // 180 degrees (π)
+    if (lower.startsWith('deepseek')) return 0.79;     // 45 degrees (π/4)
+    if (lower.startsWith('qwen')) return 2.36;         // 135 degrees (3π/4)
+
+    return 4.71; // Others (270 degrees, 3π/2)
   }
 
   /**
    * Initialize IQ quadrature module if available
+   * Uses a lightweight phase-based consensus model when full quadrature unavailable.
    * @private
    */
   _initQuadrature() {
-    // Disabled
+    if (!this._useQuadrature) return;
+
+    // Try to load quadrature module
+    const quadMod = getQuadratureModule();
+    if (quadMod) {
+      this._iqDecomposition = new quadMod.IQDecomposition({
+        referenceModel: this._referenceModel,
+        phaseLockThreshold: this._phaseLockThreshold
+      });
+    } else {
+      // Use lightweight phase tracking
+      this._phaseAccumulator = new Map();
+    }
+  }
+
+  /**
+   * Check for phase-lock convergence across signals
+   * Returns true if phase variance is below threshold
+   * @private
+   * @returns {boolean}
+   */
+  _checkPhaseLock() {
+    if (!this._useQuadrature || this._signals.length < 2) return false;
+
+    // Calculate phase for each signal
+    const phases = [];
+    for (const sig of this._signals) {
+      const basePhase = this._getProviderPhase(sig.source);
+      // Modulate by confidence
+      const modulatedPhase = basePhase + (1 - sig.confidence) * 0.3;
+      phases.push(modulatedPhase);
+    }
+
+    // Calculate phase variance
+    const mean = phases.reduce((a, b) => a + b, 0) / phases.length;
+    const variance = phases.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / phases.length;
+    const stdDev = Math.sqrt(variance);
+
+    // Phase-lock detected if standard deviation is below threshold
+    // (all providers converging to similar phase = agreement)
+    return stdDev < this._phaseLockThreshold;
   }
 
   /**
@@ -135,6 +185,14 @@ class StreamingConsensus {
 
     // Check for convergence (vote-based)
     const current = this.calculate();
+
+    // Check for phase-lock convergence (fast path)
+    if (this._useQuadrature && this._checkPhaseLock() && this._signals.length >= 2) {
+      this._state = ConsensusState.PHASE_LOCKED;
+      this._emitUpdate();
+      this.stop();
+      return;
+    }
 
     // Vote-based convergence (traditional path)
     if (current.agreement >= this.minAgreement && this._signals.length >= 2) {

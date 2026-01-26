@@ -20,6 +20,7 @@ const { EventEmitter } = require('events');
 // Lazy-loaded modules
 let _resonanceModule = null;
 let _stabilizationModule = null;
+let _meceModule = null;
 
 function getResonanceModule() {
   if (!_resonanceModule) {
@@ -41,6 +42,17 @@ function getStabilizationModule() {
     }
   }
   return _stabilizationModule;
+}
+
+function getMECEModule() {
+  if (!_meceModule) {
+    try {
+      _meceModule = require('./mece');
+    } catch (e) {
+      _meceModule = null;
+    }
+  }
+  return _meceModule;
 }
 
 /**
@@ -746,6 +758,162 @@ class InteractionDAG extends EventEmitter {
     };
   }
 
+  // ===========================================================================
+  // MECE Validation Methods
+  // ===========================================================================
+
+  /**
+   * Validate that all node scopes are mutually exclusive
+   *
+   * MECE (Mutually Exclusive, Collectively Exhaustive) validation ensures
+   * no two nodes write to the same files, preventing execution conflicts.
+   *
+   * @param {object} [options] - Validation options
+   * @param {boolean} [options.strictMode=true] - Fail on first conflict
+   * @param {boolean} [options.checkResources=true] - Also check resource exclusivity
+   * @returns {{ isMECE: boolean, conflicts: Array, taskCount: number }}
+   */
+  validateMECE(options = {}) {
+    const mece = getMECEModule();
+    if (!mece) {
+      // MECE module not available, skip validation
+      return { isMECE: true, conflicts: [], taskCount: this.nodes.size, moduleAvailable: false };
+    }
+
+    // Extract scopes from nodes
+    const scopes = [];
+    for (const node of this.nodes.values()) {
+      // Check if node is an IdempotentTask with scope
+      if (node.scope && typeof node.scope.getWriteFiles === 'function') {
+        scopes.push(node.scope);
+      } else if (node.data?.scope) {
+        // Legacy: scope in node data
+        scopes.push({
+          taskId: node.id,
+          files: Array.isArray(node.data.scope) ? node.data.scope : [node.data.scope],
+          reads: node.data.reads || [],
+          resources: node.data.resources || []
+        });
+      }
+    }
+
+    if (scopes.length === 0) {
+      // No scopes to validate
+      return { isMECE: true, conflicts: [], taskCount: this.nodes.size, noScopes: true };
+    }
+
+    const result = mece.validateMECE(scopes, options);
+    return {
+      ...result,
+      moduleAvailable: true
+    };
+  }
+
+  /**
+   * Validate that all required files are covered by task scopes
+   *
+   * @param {Array<string>} requiredFiles - Files that must be covered
+   * @param {object} [options] - Validation options
+   * @returns {{ isExhaustive: boolean, gaps: Array, coverageRatio: number }}
+   */
+  validateExhaustiveness(requiredFiles, options = {}) {
+    const mece = getMECEModule();
+    if (!mece) {
+      // MECE module not available, skip validation
+      return { isExhaustive: true, gaps: [], coverageRatio: 1, moduleAvailable: false };
+    }
+
+    // Extract scopes from nodes
+    const scopes = [];
+    for (const node of this.nodes.values()) {
+      if (node.scope && typeof node.scope.getWriteFiles === 'function') {
+        scopes.push(node.scope);
+      } else if (node.data?.scope) {
+        scopes.push({
+          taskId: node.id,
+          files: Array.isArray(node.data.scope) ? node.data.scope : [node.data.scope],
+          reads: node.data.reads || [],
+          resources: node.data.resources || []
+        });
+      }
+    }
+
+    const result = mece.checkExhaustiveness(scopes, requiredFiles, options);
+    return {
+      ...result,
+      moduleAvailable: true
+    };
+  }
+
+  /**
+   * Full MECE validation (mutual exclusivity + exhaustiveness)
+   *
+   * @param {object} [options] - Validation options
+   * @param {Array<string>} [options.requiredFiles] - Files that must be covered
+   * @param {boolean} [options.strictMode=true] - Fail on first conflict
+   * @param {boolean} [options.throwOnInvalid=false] - Throw error if invalid
+   * @returns {object} Full validation result
+   */
+  validateDecomposition(options = {}) {
+    const meceResult = this.validateMECE({
+      strictMode: options.strictMode ?? true,
+      checkResources: options.checkResources ?? true
+    });
+
+    let exhaustivenessResult = { isExhaustive: true, gaps: [], coverageRatio: 1 };
+    if (options.requiredFiles && options.requiredFiles.length > 0) {
+      exhaustivenessResult = this.validateExhaustiveness(options.requiredFiles, {
+        allowExtra: options.allowExtra ?? true
+      });
+    }
+
+    const isValid = meceResult.isMECE && exhaustivenessResult.isExhaustive;
+
+    const result = {
+      isValid,
+      isMECE: meceResult.isMECE,
+      isExhaustive: exhaustivenessResult.isExhaustive,
+      mutualExclusivity: meceResult,
+      collectiveExhaustiveness: exhaustivenessResult,
+      nodeCount: this.nodes.size,
+      summary: isValid
+        ? 'DAG decomposition is valid (MECE)'
+        : `DAG decomposition invalid: ${!meceResult.isMECE ? 'scope conflicts detected' : ''}${!meceResult.isMECE && !exhaustivenessResult.isExhaustive ? ', ' : ''}${!exhaustivenessResult.isExhaustive ? 'coverage gaps found' : ''}`
+    };
+
+    if (options.throwOnInvalid && !isValid) {
+      const error = new Error(result.summary);
+      error.validation = result;
+      throw error;
+    }
+
+    return result;
+  }
+
+  /**
+   * Check if DAG has valid MECE decomposition
+   *
+   * @returns {boolean}
+   */
+  isMECE() {
+    const result = this.validateMECE({ strictMode: true });
+    return result.isMECE;
+  }
+
+  /**
+   * Get scope conflicts between nodes
+   *
+   * @returns {Array<object>} Array of conflict objects
+   */
+  getScopeConflicts() {
+    const result = this.validateMECE({ strictMode: false });
+    return result.conflicts || [];
+  }
+
+  // ===========================================================================
+  // End MECE Validation Methods
+  // ===========================================================================
+
   /**
    * Get execution statistics
    *
@@ -831,6 +999,78 @@ class InteractionDAG extends EventEmitter {
   clear() {
     this.nodes.clear();
     this._executionOrder = null;
+  }
+
+  // ===========================================================================
+  // Factory Methods
+  // ===========================================================================
+
+  /**
+   * Create DAG from IdempotentTask array
+   *
+   * Factory method that builds a DAG from an array of tasks with dependencies.
+   * Each task should have: id, description, scope, and optional dependencies.
+   *
+   * @param {Array<object>} tasks - Array of task objects
+   * @param {string} tasks[].id - Unique task identifier
+   * @param {string} [tasks[].description] - Task description
+   * @param {object} [tasks[].scope] - Task scope (files, reads, resources)
+   * @param {Array<string>} [tasks[].dependencies] - IDs of tasks this depends on
+   * @param {number} [tasks[].complexity] - Task complexity (1-3)
+   * @param {string} [tasks[].validation] - Acceptance criteria
+   * @returns {InteractionDAG} Configured DAG ready for execution
+   */
+  static fromTasks(tasks) {
+    const dag = new InteractionDAG();
+
+    // First pass: create all nodes
+    for (const task of tasks) {
+      const node = dag.createNode(task.id, {
+        name: task.name || task.description?.slice(0, 30) || task.id.slice(0, 8),
+        operation: task.operation,
+        data: {
+          description: task.description,
+          scope: task.scope?.files || task.scope,
+          reads: task.scope?.reads,
+          resources: task.scope?.resources,
+          complexity: task.complexity || 2,
+          validation: task.validation,
+          estimatedTime: task.estimatedTime
+        }
+      });
+
+      // Copy scope reference if it's a TaskScope object
+      if (task.scope && typeof task.scope.getWriteFiles === 'function') {
+        node.scope = task.scope;
+      }
+
+      // Copy task properties for MECE validation
+      node.description = task.description;
+      node.complexity = task.complexity || 2;
+      node.validation = task.validation;
+    }
+
+    // Second pass: add dependency edges
+    // Note: edge direction is from dependency TO dependent (dependency must complete first)
+    for (const task of tasks) {
+      const deps = task.dependencies instanceof Set
+        ? [...task.dependencies]
+        : Array.isArray(task.dependencies)
+          ? task.dependencies
+          : [];
+
+      for (const depId of deps) {
+        // Edge from depId -> task.id means depId must complete before task.id
+        dag.addEdge(task.id, depId);
+      }
+    }
+
+    // Validate the DAG
+    if (!dag.isValid()) {
+      throw new Error('Task dependencies contain cycles - cannot create valid DAG');
+    }
+
+    return dag;
   }
 }
 

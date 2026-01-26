@@ -2,7 +2,12 @@
  * Core Abstractions
  *
  * Unified exports for all core modules.
+ * Now includes MECE validation, IQ Quadrature, and Verbosity modules.
+ *
+ * @module core
  */
+
+'use strict';
 
 const signal = require('./signal');
 const normalize = require('./normalize');
@@ -14,13 +19,71 @@ const validation = require('./middleware/validation');
 const responseEnvelope = require('./responseEnvelope');
 const router = require('./router');
 const rail = require('./rail');
+const zeroCombinator = require('./zeroCombinator');
 const embeddedClient = require('./embeddedClient');
 const heartbeat = require('./heartbeat');
 const resonance = require('./resonance');
-const quadrature = { 
-  getGlobalCalibrator: () => null, 
-  quickPhaseLock: () => null 
-}; // require('./math/quadrature');
+const dag = require('./dag');
+
+// IQ Quadrature module (now fully implemented)
+let quadrature = null;
+function getQuadrature() {
+  if (!quadrature) {
+    try {
+      quadrature = require('./math/quadrature');
+    } catch {
+      quadrature = {
+        IQDecomposition: null,
+        IQSample: null,
+        PhaseCalibrator: null,
+        getGlobalCalibrator: () => null,
+        quickPhaseLock: () => null,
+        getProviderPhase: () => 0,
+        ProviderPhases: {}
+      };
+    }
+  }
+  return quadrature;
+}
+
+// MECE validation module
+let mece = null;
+function getMECE() {
+  if (!mece) {
+    try {
+      mece = require('./mece');
+    } catch {
+      mece = null;
+    }
+  }
+  return mece;
+}
+
+// Verbosity module
+let verbosity = null;
+function getVerbosity() {
+  if (!verbosity) {
+    try {
+      verbosity = require('./verbosity');
+    } catch {
+      verbosity = null;
+    }
+  }
+  return verbosity;
+}
+
+// Stabilization module
+let stabilization = null;
+function getStabilization() {
+  if (!stabilization) {
+    try {
+      stabilization = require('./stabilization');
+    } catch {
+      stabilization = null;
+    }
+  }
+  return stabilization;
+}
 
 // Lazy-loaded modules for next-gen ensemble
 // let dialectic = null;
@@ -148,6 +211,13 @@ module.exports = {
   // Bridge Layer (lazy-loaded)
   getBridge,
 
+  // ZeroCombinator (Unified Signal+Rail+Consensus)
+  ZeroCombinator: zeroCombinator.ZeroCombinator,
+  CombinatorType: zeroCombinator.CombinatorType,
+  ExecutionState: zeroCombinator.ExecutionState,
+  createZeroCombinator: zeroCombinator.createZeroCombinator,
+  getDefaultCombinator: zeroCombinator.getDefaultCombinator,
+
   // Rail Protocol
   Rail: rail.Rail,
   Token: rail.Token,
@@ -182,15 +252,29 @@ module.exports = {
   // Resonance Detection
   ResonanceDetector: resonance.ResonanceDetector,
   ResonanceState: resonance.ResonanceState,
+  ResonanceEvent: resonance.ResonanceEvent,
   createResonanceDetector: resonance.createDetector,
   quickResonanceCheck: resonance.quickResonanceCheck,
+  getGlobalResonanceDetector: resonance.getGlobalDetector,
+  resetGlobalResonanceDetector: resonance.resetGlobalDetector,
 
-  // IQ Quadrature (Phase-Based Consensus)
-  // IQDecomposition: quadrature.IQDecomposition,
-  // IQSample: quadrature.IQSample,
-  // PhaseCalibrator: quadrature.PhaseCalibrator,
-  getGlobalCalibrator: quadrature.getGlobalCalibrator,
-  quickPhaseLock: quadrature.quickPhaseLock,
+  // IQ Quadrature (Phase-Based Consensus) - lazy-loaded
+  getQuadrature,
+
+  // DAG Execution Model
+  DAGNode: dag.DAGNode,
+  InteractionDAG: dag.InteractionDAG,
+  NodeStatus: dag.NodeStatus,
+  dagFromSpec: dag.dagFromSpec,
+
+  // MECE Validation (lazy-loaded)
+  getMECE,
+
+  // Verbosity Control (lazy-loaded)
+  getVerbosity,
+
+  // Stabilization Monitor (lazy-loaded)
+  getStabilization,
 
   // Next-Gen Ensemble (lazy-loaded)
   getDialectic,

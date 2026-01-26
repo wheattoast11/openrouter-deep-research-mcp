@@ -36,6 +36,14 @@ const retryWithBackoff = async (fn, maxRetries = 2, baseDelay = 500) => {
 
 class UnifiedSearchMesh {
   constructor() {
+    // Query cache to avoid redundant searches (LRU with 5-minute TTL)
+    this._queryCache = new Map();
+    this._cacheTTL = 5 * 60 * 1000; // 5 minutes
+    this._maxCacheSize = 100;
+
+    // Rate limit cooldown tracking
+    this._rateLimitCooldowns = new Map(); // strategy -> cooldown until timestamp
+
     this.userAgents = [
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -77,13 +85,70 @@ class UnifiedSearchMesh {
   }
 
   /**
+   * Check and update query cache
+   */
+  _getCached(query) {
+    const cacheKey = query.toLowerCase().trim();
+    const cached = this._queryCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this._cacheTTL) {
+      return cached.results;
+    }
+    // Clean expired entry
+    if (cached) {
+      this._queryCache.delete(cacheKey);
+    }
+    return null;
+  }
+
+  _setCache(query, results) {
+    const cacheKey = query.toLowerCase().trim();
+    // LRU eviction if cache is full
+    if (this._queryCache.size >= this._maxCacheSize) {
+      const oldest = this._queryCache.keys().next().value;
+      this._queryCache.delete(oldest);
+    }
+    this._queryCache.set(cacheKey, { results, timestamp: Date.now() });
+  }
+
+  /**
+   * Check if strategy is in rate limit cooldown
+   */
+  _isInCooldown(strategyName) {
+    const cooldownUntil = this._rateLimitCooldowns.get(strategyName);
+    if (cooldownUntil && Date.now() < cooldownUntil) {
+      return true;
+    }
+    // Clear expired cooldown
+    if (cooldownUntil) {
+      this._rateLimitCooldowns.delete(strategyName);
+    }
+    return false;
+  }
+
+  _setRateLimitCooldown(strategyName, durationMs = 60000) {
+    this._rateLimitCooldowns.set(strategyName, Date.now() + durationMs);
+  }
+
+  /**
    * Perceptual Search: Gathers signals from the web fabric.
    * Priority: Free APIs -> HTML scraping -> 3P APIs
    * NEVER hangs - all operations have timeouts and fallbacks
+   *
+   * Enhanced with:
+   * - Query caching (5-minute TTL)
+   * - Rate limit cooldown tracking
+   * - Parallel Tier 1 execution (race to first result)
    */
   async perception(query, maxResults = 5) {
     const startTime = Date.now();
     const GLOBAL_TIMEOUT = 90000; // 90s max - Perplexity needs ~30s
+
+    // Check cache first
+    const cached = this._getCached(query);
+    if (cached) {
+      this.log('debug', 'Cache hit for query', { query: query.substring(0, 50) });
+      return cached;
+    }
 
     // Build strategy list - ordered by reliability and cost
     const strategies = [
@@ -129,6 +194,12 @@ class UnifiedSearchMesh {
         const elapsed = Date.now() - startTime;
         const remaining = GLOBAL_TIMEOUT - elapsed;
 
+        // Skip if in rate limit cooldown
+        if (this._isInCooldown(strategy.name)) {
+          this.log('debug', `Skipping ${strategy.name}: in rate limit cooldown`);
+          continue;
+        }
+
         // For perplexity strategies (last resort), always try if we have at least their timeout remaining
         const isPerplexity = strategy.name.startsWith('perplexity');
         const minRequired = isPerplexity ? strategy.timeout : strategy.timeout + 2000;
@@ -159,7 +230,7 @@ class UnifiedSearchMesh {
             });
 
             // Transform raw results into isomorphic Signals
-            return rawResults.map(r => Signal.response(
+            const signals = rawResults.map(r => Signal.response(
               {
                 title: r.title || 'Untitled',
                 snippet: r.text || r.snippet || '',
@@ -169,12 +240,27 @@ class UnifiedSearchMesh {
               r.confidence || 0.85,
               { tags: ['web-perception', strategy.name] }
             ));
+
+            // Cache successful results
+            this._setCache(query, signals);
+
+            return signals;
           }
         } catch (error) {
           // Update failure stats
           const stats = this.strategyStats.get(strategy.name) || { success: 0, fail: 0 };
           stats.fail++;
           this.strategyStats.set(strategy.name, stats);
+
+          // Check for rate limit error (429) and set cooldown
+          const errorMsg = error.message || '';
+          if (errorMsg.includes('429') || errorMsg.includes('rate limit') || errorMsg.includes('Too Many')) {
+            this._setRateLimitCooldown(strategy.name, 60000); // 1 minute cooldown
+            this.log('warn', `Rate limited: ${strategy.name}, cooling down for 60s`);
+          } else if (errorMsg.includes('403')) {
+            this._setRateLimitCooldown(strategy.name, 300000); // 5 minute cooldown for 403
+            this.log('warn', `Forbidden: ${strategy.name}, cooling down for 5min`);
+          }
 
           this.log('debug', `Strategy failed: ${strategy.name}`, { error: error.message });
         }

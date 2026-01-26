@@ -208,6 +208,30 @@ function formatVectorForPgLite(vectorArray) {
 function getDatabaseUrl() {
   dbPathInfo = 'Determining...';
 
+  // Zero CLI Mode: Enforce strict local isolation (~/.zero/db)
+  // This ensures the CLI uses a private PGLite instance separate from any running server
+  if (process.env.ZERO_CLI_MODE === 'true' && isNodeEnv) {
+    try {
+      const home = process.env.HOME || process.env.USERPROFILE;
+      // Default to ~/.zero/db but allow override via ZERO_DB_PATH
+      const zeroDbPath = process.env.ZERO_DB_PATH || path.join(home, '.zero', 'db');
+      
+      if (fs) {
+        if (!fs.existsSync(zeroDbPath)) {
+          fs.mkdirSync(zeroDbPath, { recursive: true });
+        }
+        // Verify write access
+        fs.accessSync(zeroDbPath, fs.constants.W_OK);
+        
+        dbPathInfo = `Zero CLI (${zeroDbPath})`;
+        return `file://${zeroDbPath}`;
+      }
+    } catch (err) {
+      logger.warn('Failed to initialize Zero CLI local DB, falling back to in-memory', { error: err.message });
+      // Fall through to standard logic (which handles in-memory fallback)
+    }
+  }
+
   if (autoHealEnabled) {
     dbPathInfo = 'In-Memory (Node25 macOS auto-heal)';
     return null;
@@ -489,7 +513,12 @@ async function _doInitDB() {
             parameters JSONB,
             final_report TEXT NOT NULL,
             research_metadata JSONB,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            feedback_entries JSONB DEFAULT '[]',
+            accuracy_score REAL DEFAULT NULL,
+            fact_check_results JSONB DEFAULT NULL,
+            ensemble_signals JSONB DEFAULT '[]'::jsonb
           );
         `);
         await db.query(`
@@ -503,8 +532,98 @@ async function _doInitDB() {
             events JSONB DEFAULT '[]'::jsonb,
             canceled BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMPTZ,
+            finished_at TIMESTAMPTZ,
+            heartbeat_at TIMESTAMPTZ
           );
+        `);
+        // Add missing tables for full functionality in fallback mode
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS job_events (
+            id SERIAL PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            ts TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            event_type TEXT NOT NULL,
+            payload JSONB,
+            shape_hash TEXT
+          );
+          CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);
+        `);
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS hvm_reductions (
+            id SERIAL PRIMARY KEY,
+            term_hash TEXT UNIQUE NOT NULL,
+            normal_form JSONB,
+            reduction_count INTEGER DEFAULT 0,
+            parallel_groups INTEGER DEFAULT 0,
+            duration_ms INTEGER,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS usage_counters (
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            uses INTEGER NOT NULL DEFAULT 0,
+            last_used_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_type, entity_id)
+          );
+        `);
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS tool_observations (
+            id SERIAL PRIMARY KEY,
+            tool_name TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            output_hash TEXT,
+            success BOOLEAN NOT NULL,
+            latency_ms INTEGER,
+            error_category TEXT,
+            error_code TEXT,
+            request_id TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_tool_obs_name ON tool_observations (tool_name);
+        `);
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS providers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            capabilities JSONB,
+            config_path TEXT,
+            last_active_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+        // Graph Tables (normally in knowledgeGraph.js but required here for fallback consistency)
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS graph_nodes (
+            id TEXT PRIMARY KEY,
+            node_type TEXT NOT NULL,
+            source_id TEXT,
+            title TEXT,
+            description TEXT,
+            metadata JSONB,
+            provider_id TEXT,
+            lineage JSONB DEFAULT '[]',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_graph_nodes_provider ON graph_nodes(provider_id);
+        `);
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS graph_edges (
+            id SERIAL PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            edge_type TEXT NOT NULL,
+            weight FLOAT DEFAULT 1.0,
+            metadata JSONB,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(source_id, target_id, edge_type)
+          );
+          CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
+          CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
         `);
 
         initState = InitState.INITIALIZED;

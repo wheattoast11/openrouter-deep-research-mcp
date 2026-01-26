@@ -858,6 +858,91 @@ class Rail {
     });
     return rail;
   }
+
+  /**
+   * Create a Rail from a Route configuration
+   *
+   * Materializes abstract routing rules into a concrete execution channel.
+   * The rail inherits the route's models, failover strategy, and metadata.
+   *
+   * @param {object} route - Route object with name, models, fallback
+   * @param {object} [options] - Additional rail options
+   * @returns {Rail}
+   */
+  static fromRoute(route, options = {}) {
+    const rail = new Rail({
+      maxBuffer: options.maxBuffer ?? 100,
+      ...options
+    });
+
+    // Attach route metadata
+    rail._route = {
+      id: route.id,
+      name: route.name,
+      models: route.models || [],
+      fallback: route.fallback,
+      priority: route.priority ?? 0
+    };
+
+    // Add failover capability if route has fallback
+    if (route.fallback && route.fallback !== 'default') {
+      rail._fallbackRoute = route.fallback;
+    }
+
+    return rail;
+  }
+
+  /**
+   * Wrap a rail with automatic failover capability
+   *
+   * When the primary rail fails (closed or saturated), automatically
+   * routes tokens to the fallback rail.
+   *
+   * @param {Rail} fallbackRail - Rail to use on failure
+   * @param {object} [options] - Failover options
+   * @param {number} [options.maxRetries=3] - Max retries before fallback
+   * @param {number} [options.retryDelayMs=100] - Delay between retries
+   * @returns {Rail} Rail with failover capability
+   */
+  withFailover(fallbackRail, options = {}) {
+    const maxRetries = options.maxRetries ?? 3;
+    const retryDelayMs = options.retryDelayMs ?? 100;
+    const self = this;
+
+    // Override send with failover logic
+    const originalSend = this.send.bind(this);
+
+    this.send = async (token) => {
+      let retries = 0;
+      let result = originalSend(token);
+
+      // Retry on backpressure
+      while (!result.ok && result.error instanceof BackpressureError && retries < maxRetries) {
+        await new Promise(r => setTimeout(r, retryDelayMs));
+        retries++;
+        result = originalSend(token);
+      }
+
+      // Fall back if still failing
+      if (!result.ok && fallbackRail) {
+        self._stats.dropped--; // Don't count as dropped if fallback succeeds
+        return fallbackRail.send(token);
+      }
+
+      return result;
+    };
+
+    this._fallbackRail = fallbackRail;
+    return this;
+  }
+
+  /**
+   * Get the route this rail was created from (if any)
+   * @returns {object|null}
+   */
+  getRoute() {
+    return this._route || null;
+  }
 }
 
 // =============================================================================

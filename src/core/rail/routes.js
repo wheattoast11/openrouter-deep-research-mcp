@@ -267,6 +267,38 @@ class RouteRegistry {
 const registry = new RouteRegistry();
 
 /**
+ * Create a Rail from a route name
+ *
+ * Convenience method that looks up a route and materializes a Rail from it.
+ *
+ * @param {string} routeName - Name of the route to materialize
+ * @param {object} [options] - Additional rail options
+ * @returns {object|null} Rail or null if route not found
+ */
+function createRailFor(routeName, options = {}) {
+  const route = registry.get(routeName);
+  if (!route) return null;
+
+  // Lazy-load rail module to avoid circular deps
+  const { Rail } = require('../rail');
+  return Rail.fromRoute(route, options);
+}
+
+/**
+ * Match context and create a Rail in one step
+ *
+ * @param {object} context - Query context to match
+ * @param {object} [options] - Additional rail options
+ * @returns {{ route: Route, rail: object }}
+ */
+function matchAndCreateRail(context, options = {}) {
+  const route = registry.match(context);
+  const { Rail } = require('../rail');
+  const rail = Rail.fromRoute(route, options);
+  return { route, rail };
+}
+
+/**
  * Hierarchical route using ltree for path-based routing
  * Example: research.technical.ai.vision -> matches research.technical.*
  */
@@ -299,6 +331,9 @@ module.exports = {
   RouteOperator,
   RouteDimension,
   registry,
+  // Rail materialization
+  createRailFor,
+  matchAndCreateRail,
   // MCP resource prefix
   RESOURCE_PREFIX: 'rail://routes/'
 };
