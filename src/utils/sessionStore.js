@@ -7,17 +7,30 @@ const config = require('../../config');
 let EventStore;
 let coreInitialized = false;
 
-// Lazy load @terminals-tech/core
+// Lazy load @terminals-tech/core EventStore directly from core module
+// This avoids importing the React adapter which has peer dependency on react
 async function initCoreModule() {
   if (coreInitialized) return true;
   try {
-    const coreModule = await import('@terminals-tech/core');
-    EventStore = coreModule.EventStore;
+    // Import directly from core module to avoid React adapter dependency
+    const { EventStore: ES } = await import('@terminals-tech/core/dist/core/EventStore.js');
+    EventStore = ES;
     coreInitialized = true;
-    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/core initialized successfully.\n`);
+    process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/core EventStore initialized successfully.\n`);
     return true;
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Failed to initialize @terminals-tech/core:`, err);
+    // Fallback: try main module if direct import fails
+    try {
+      const coreModule = await import('@terminals-tech/core');
+      EventStore = coreModule.default?.EventStore || coreModule.EventStore;
+      if (EventStore) {
+        coreInitialized = true;
+        process.stderr.write(`[${new Date().toISOString()}] @terminals-tech/core initialized via fallback.\n`);
+        return true;
+      }
+    } catch (fallbackErr) {
+      console.error(`[${new Date().toISOString()}] Failed to initialize @terminals-tech/core:`, err.message);
+    }
     return false;
   }
 }
@@ -31,6 +44,7 @@ const EventTypes = {
   TOOL_EXECUTED: 'TOOL_EXECUTED',
   SESSION_FORKED: 'SESSION_FORKED',
   CHECKPOINT_CREATED: 'CHECKPOINT_CREATED',
+  RESPONSE_RECEIVED: 'RESPONSE_RECEIVED',
   // Job lifecycle events for batch research tracking
   JOBS_DISPATCHED: 'JOBS_DISPATCHED',
   JOBS_COMPLETED: 'JOBS_COMPLETED'
@@ -56,8 +70,18 @@ const sessionReducer = (state, event) => {
   const newState = { ...state };
   newState.metadata = { ...state.metadata, lastActivityAt: new Date().toISOString() };
 
+  // Initialize history if missing
+  if (!newState.history) newState.history = [];
+
   switch (event.type) {
     case EventTypes.QUERY_SUBMITTED:
+      const queryItem = {
+        id: event.payload.queryId,
+        role: 'user',
+        content: event.payload.query,
+        timestamp: event.payload.timestamp || new Date().toISOString(),
+        metadata: event.payload.parameters
+      };
       return {
         ...newState,
         queries: [...state.queries, {
@@ -65,7 +89,21 @@ const sessionReducer = (state, event) => {
           query: event.payload.query,
           timestamp: event.payload.timestamp || new Date().toISOString(),
           parameters: event.payload.parameters
-        }]
+        }],
+        history: [...(state.history || []), queryItem]
+      };
+
+    case EventTypes.RESPONSE_RECEIVED:
+      const responseItem = {
+        id: event.payload.responseId,
+        role: 'assistant',
+        content: event.payload.content,
+        timestamp: event.payload.timestamp || new Date().toISOString(),
+        metadata: event.payload.metadata
+      };
+      return {
+        ...newState,
+        history: [...(state.history || []), responseItem]
       };
 
     case EventTypes.REPORT_SAVED:
@@ -180,10 +218,10 @@ class SessionManager {
   }
 
   async ensureSchema() {
-    if (!this.dbClient?.executeQuery) return;
+    if (!this.dbClient?.executeDDL) return;
 
     try {
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         CREATE TABLE IF NOT EXISTS session_events (
           id SERIAL PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -195,11 +233,11 @@ class SessionManager {
         );
       `, []);
 
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id);
       `, []);
 
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         CREATE TABLE IF NOT EXISTS sessions (
           id TEXT PRIMARY KEY,
           parent_session_id TEXT,
@@ -207,6 +245,19 @@ class SessionManager {
           last_activity_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
           metadata JSONB
         );
+      `, []);
+
+      await this.dbClient.executeDDL(`
+        CREATE TABLE IF NOT EXISTS session_snapshots (
+          id SERIAL PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          state JSONB NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+      `, []);
+
+      await this.dbClient.executeDDL(`
+        CREATE INDEX IF NOT EXISTS idx_session_snapshots_session ON session_snapshots(session_id);
       `, []);
 
       process.stderr.write(`[${new Date().toISOString()}] Session store schema created/verified.\n`);
@@ -242,7 +293,7 @@ class SessionManager {
     this.sessions.set(sessionId, store);
 
     // Register session in database
-    await this.dbClient.executeQuery(`
+    await this.dbClient.executeDDL(`
       INSERT INTO sessions (id, metadata)
       VALUES ($1, $2)
       ON CONFLICT (id) DO UPDATE SET last_activity_at = CURRENT_TIMESTAMP
@@ -252,12 +303,12 @@ class SessionManager {
   }
 
   async persistEvents(sessionId, events) {
-    if (!this.dbClient?.executeQuery) return;
+    if (!this.dbClient?.executeDDL) return;
 
     for (let i = 0; i < events.length; i++) {
       const event = events[i];
       try {
-        await this.dbClient.executeQuery(`
+        await this.dbClient.executeDDL(`
           INSERT INTO session_events (session_id, event_index, event_type, payload)
           VALUES ($1, $2, $3, $4)
           ON CONFLICT (session_id, event_index) DO NOTHING
@@ -299,11 +350,38 @@ class SessionManager {
     store.append({ type: eventType, payload });
 
     // Update last activity
-    await this.dbClient.executeQuery(`
+    await this.dbClient.executeDDL(`
       UPDATE sessions SET last_activity_at = CURRENT_TIMESTAMP WHERE id = $1
     `, [sessionId]);
 
     return store.project();
+  }
+
+  /**
+   * Query session state at a specific point in time using temporal sampling
+   * @param {string} sessionId
+   * @param {Date} timestamp
+   * @returns {Promise<Object>}
+   */
+  async getSessionStateAtTime(sessionId, timestamp) {
+    if (!this.dbClient?.executeQuery) return null;
+    
+    // Use tsm_system_time for efficient temporal queries if enabled
+    const useTemporal = config.database?.extensions?.tsm_system_time?.enabled !== false;
+    
+    try {
+      const sql = useTemporal 
+        ? `SELECT state FROM session_snapshots TABLESAMPLE tsm_system_time($1) WHERE session_id = $2 ORDER BY created_at DESC LIMIT 1`
+        : `SELECT state FROM session_snapshots WHERE session_id = $1 AND created_at <= $2 ORDER BY created_at DESC LIMIT 1`;
+      
+      const params = useTemporal ? [timestamp.getTime(), sessionId] : [sessionId, timestamp.toISOString()];
+      const result = await this.dbClient.executeQuery(sql, params);
+      
+      return result.rows?.[0]?.state || null;
+    } catch (err) {
+      console.error('[SessionStore] Error in getSessionStateAtTime:', err);
+      return null;
+    }
   }
 
   /**
@@ -358,7 +436,7 @@ class SessionManager {
       this.sessions.set(newSessionId, forkedStore);
 
       // Record fork relationship in database
-      await this.dbClient.executeQuery(`
+      await this.dbClient.executeDDL(`
         INSERT INTO sessions (id, parent_session_id, metadata)
         VALUES ($1, $2, $3)
       `, [newSessionId, sessionId, JSON.stringify({ forkedAt: new Date().toISOString() })]);
@@ -436,6 +514,48 @@ class SessionManager {
       canUndo: store.canUndo ? store.canUndo() : false,
       canRedo: store.canRedo ? store.canRedo() : false
     };
+  }
+
+  /**
+   * Check if session can undo (adapter for handler interface)
+   */
+  async canUndo(sessionId) {
+    const state = await this.getState(sessionId);
+    return state?.canUndo || false;
+  }
+
+  /**
+   * Check if session can redo (adapter for handler interface)
+   */
+  async canRedo(sessionId) {
+    const state = await this.getState(sessionId);
+    return state?.canRedo || false;
+  }
+
+  /**
+   * Create checkpoint (alias for handler interface)
+   */
+  async checkpoint(sessionId, name) {
+    return this.createCheckpoint(sessionId, name);
+  }
+
+  /**
+   * Fork session (alias for handler interface)
+   */
+  async fork(sourceId, targetId) {
+    return this.forkSession(sourceId, targetId);
+  }
+
+  /**
+   * Add a message to a session (compatibility layer for tools.js)
+   */
+  async addMessage(sessionId, role, content, metadata = {}) {
+    const eventType = role === 'assistant' ? EventTypes.RESPONSE_RECEIVED : EventTypes.QUERY_SUBMITTED;
+    const payload = role === 'assistant' 
+      ? { responseId: `resp_${Date.now()}`, content, timestamp: new Date().toISOString(), metadata }
+      : { queryId: `q_${Date.now()}`, query: content, timestamp: new Date().toISOString(), parameters: metadata };
+    
+    return this.dispatch(sessionId, eventType, payload);
   }
 
   /**

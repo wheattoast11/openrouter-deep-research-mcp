@@ -171,5 +171,5 @@ async function runNewTools() {
   const ok = await runTests();
   await runNewTools();
   console.log("\nExtended tests completed.");
-  process.exit(ok ? 0 : 1);
+process.exitCode = ok ? 0 : 1;
 })();

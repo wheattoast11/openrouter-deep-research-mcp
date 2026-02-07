@@ -2,22 +2,34 @@
   "query": "Model Context Protocol",
   "results": [
     {
-      "title": "Model Context Protocol",
-      "text": "The Model Context Protocol is an open standard, open-source framework introduced by Anthropic in November 2024 to standardize the way artificial intelligence systems like large language models integrate and share data with external tools, systems, and data sources. MCP provides a universal interface for reading files, executing functions, and handling contextual prompts. Following its announcement, the protocol was adopted by major AI providers, including OpenAI and Google DeepMind.",
-      "url": "https://en.wikipedia.org/wiki/Model_Context_Protocol",
-      "source": "ddg"
+      "title": "Official site",
+      "text": "Model Context Protocol",
+      "url": "//duckduckgo.com/l/?uddg=https%3A%2F%2Fmodelcontextprotocol.io&rut=a04737478d6626343fd65a966bfd9a553ba759f1c06c3f90a5fb32e3be44bb90",
+      "source": "ddg_html"
     },
     {
-      "title": "Open standards",
-      "text": "Open standards",
-      "url": "https://duckduckgo.com/c/Open_standards",
-      "source": "ddg"
+      "title": "What is the Model Context Protocol (MCP)?",
+      "text": "MCP (Model Context Protocol) is an open-source standard for connecting AI applications to external systems. Using MCP, AI applications like Claude or ChatGPT can connect to data sources (e.g. local files, databases), tools (e.g. search engines, calculators) and workflows (e.g. specialized prompts)—enabling them to access key information and perform tasks. Think of MCP like a USB-C port for ...",
+      "url": "//duckduckgo.com/l/?uddg=https%3A%2F%2Fmodelcontextprotocol.io%2Fdocs%2Fgetting%2Dstarted%2Fintro&rut=5a6994979d88f0857897b87e6b31f6c078ae0cb95e7f06005a21068ddf27f137",
+      "source": "ddg_html"
     },
     {
-      "title": "Application layer protocols",
-      "text": "Application layer protocols",
-      "url": "https://duckduckgo.com/c/Application_layer_protocols",
-      "source": "ddg"
+      "title": "Model Context Protocol - Wikipedia",
+      "text": "The Model Context Protocol (MCP) is an open standard and open-source framework introduced by Anthropic in November 2024 to standardize the way artificial intelligence (AI) systems like large language models (LLMs) integrate and share data with external tools, systems, and data sources. [1]",
+      "url": "//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FModel_Context_Protocol&rut=c7b92031b556f56f312e898dad709fcf3632cae44231c69b95015f9ab113db82",
+      "source": "ddg_html"
+    },
+    {
+      "title": "MCP Docs - Model Context Protocol （MCP）",
+      "text": "Welcome to the Model Context Protocol documentation! MCP is a standardized protocol designed to enhance the interaction between Large Language Models (LLMs) and applications by providing structured context management.",
+      "url": "//duckduckgo.com/l/?uddg=https%3A%2F%2Fmodelcontextprotocol.info%2Fdocs%2F&rut=830cd2fb714cef7687acb710cba63eb83161978bd8db9c3382a36646127562d5",
+      "source": "ddg_html"
+    },
+    {
+      "title": "Introducing the Model Context Protocol \\ Anthropic",
+      "text": "The Model Context Protocol (MCP) enables developers to build secure, two-way connections between their data sources and AI-powered tools. It simplifies and scales the process of connecting AI systems with data, improving their context awareness and relevance.",
+      "url": "//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.anthropic.com%2Fnews%2Fmodel%2Dcontext%2Dprotocol&rut=ad5af75cee3bc9816469b0fcd18085a854015998cd2bd33a5dd1800efafc4dab",
+      "source": "ddg_html"
     }
   ]
 }

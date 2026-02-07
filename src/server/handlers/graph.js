@@ -141,13 +141,12 @@ async function getPageRank(params, client) {
     };
   }
 
-  // Fallback: use report ratings or access count
+  // Fallback: use report creation order (no rating column)
   if (typeof client.query === 'function') {
     const sql = `
-      SELECT id, query, rating,
-             COALESCE(rating, 0) as importance
+      SELECT id, original_query, created_at
       FROM research_reports
-      ORDER BY importance DESC, created_at DESC
+      ORDER BY created_at DESC
       LIMIT $1
     `;
     const rows = await client.query(sql, [topK]);
@@ -156,10 +155,10 @@ async function getPageRank(params, client) {
       rankings: (rows || []).map((r, i) => ({
         rank: i + 1,
         nodeId: `report:${r.id}`,
-        label: r.query?.substring(0, 50) || `Report ${r.id}`,
-        score: r.importance || 0
+        label: r.original_query?.substring(0, 50) || `Report ${r.id}`,
+        score: topK - i // Assign score based on recency
       })),
-      message: 'Rankings based on report ratings (PageRank not available)'
+      message: 'Rankings based on recency (PageRank not available)'
     };
   }
 
@@ -188,9 +187,9 @@ async function findPatterns(params, client) {
   // Fallback: analyze query patterns
   if (typeof client.query === 'function') {
     const sql = `
-      SELECT query, COUNT(*) as frequency
+      SELECT original_query, COUNT(*) as frequency
       FROM research_reports
-      GROUP BY query
+      GROUP BY original_query
       HAVING COUNT(*) > 1
       ORDER BY frequency DESC
       LIMIT 20
@@ -200,7 +199,7 @@ async function findPatterns(params, client) {
       n,
       patternCount: rows?.length || 0,
       patterns: (rows || []).map(r => ({
-        pattern: r.query?.substring(0, 100),
+        pattern: r.original_query?.substring(0, 100),
         frequency: parseInt(r.frequency)
       })),
       message: 'Patterns based on repeated queries (N-gram analysis not available)'
@@ -282,7 +281,7 @@ async function fallbackTraversal(client, nodeType, nodeId, depth) {
 
   // Simple: get related reports based on query similarity
   const sql = `
-    SELECT r.id, r.query, 'report' as type
+    SELECT r.id, r.original_query, 'report' as type
     FROM research_reports r
     WHERE r.id != $1
     ORDER BY r.created_at DESC
@@ -294,7 +293,7 @@ async function fallbackTraversal(client, nodeType, nodeId, depth) {
   return (rows || []).map((r, i) => ({
     id: `report:${r.id}`,
     type: r.type,
-    label: r.query?.substring(0, 50),
+    label: r.original_query?.substring(0, 50),
     depth: Math.floor(i / 5) + 1
   }));
 }

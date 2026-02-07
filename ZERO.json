@@ -1,0 +1,219 @@
+{
+  "$schema": "https://terminals.tech/schemas/zero/1.0.0",
+  "$id": "zero://terminals.tech/zero",
+  "$comment": "The self-referential agent specification. f(x) = x → Zero",
+
+  "identity": {
+    "name": "Zero",
+    "version": "1.0.0",
+    "uri": "zero://terminals.tech/zero",
+    "paradigm": "self-referential-mcp",
+    "origin": "terminals.tech",
+    "fixedPoint": true
+  },
+
+  "capabilities": {
+    "roles": ["client", "server", "peer", "self"],
+    "transports": ["stdio", "http", "websocket", "postmessage", "broadcast"],
+    "protocols": ["mcp", "acp", "lsp", "a2a", "anp"],
+    "wireProtocol": "json-rpc-2.0"
+  },
+
+  "surfaces": {
+    "cli": {
+      "enabled": true,
+      "transport": "stdio",
+      "database": "pglite-file",
+      "embeddings": "transformers-js"
+    },
+    "browser": {
+      "extension": {
+        "enabled": true,
+        "transport": "postmessage",
+        "database": "pglite-indexeddb",
+        "embeddings": "webworker"
+      },
+      "webapp": {
+        "enabled": true,
+        "transport": "websocket",
+        "database": "pglite-indexeddb",
+        "embeddings": "webworker"
+      }
+    },
+    "desktop": {
+      "enabled": true,
+      "transport": ["stdio", "http"],
+      "database": "pglite-file",
+      "embeddings": "native"
+    },
+    "mobile": {
+      "swift": {
+        "enabled": true,
+        "transport": "websocket",
+        "database": "sqlite",
+        "embeddings": "coreml"
+      },
+      "kotlin": {
+        "enabled": true,
+        "transport": "websocket",
+        "database": "sqlite",
+        "embeddings": "nnapi"
+      }
+    },
+    "streaming": {
+      "enabled": true,
+      "transport": "websocket",
+      "database": "memory",
+      "embeddings": "remote"
+    }
+  },
+
+  "resonance": {
+    "phaseLock": {
+      "enabled": true,
+      "mechanism": "interaction-combinators",
+      "attractorStrength": 0.8
+    },
+    "crystallization": {
+      "patterns": [
+        "ISOMORPHISM",
+        "PROGRESSIVE_DISCLOSURE",
+        "EVENT_SOURCING",
+        "PHASE_LOCK",
+        "CONTEXT_STORE",
+        "PERPLEXITY_DROP"
+      ],
+      "thresholds": {
+        "understanding": 0.7,
+        "uncertainty": 0.3
+      }
+    },
+    "coherence": {
+      "attractorBasin": "conversation",
+      "stableStates": ["initialized", "connected", "synchronized", "self-referential"]
+    }
+  },
+
+  "handshake": {
+    "$comment": "The self-referential proof. The lock IS the key at the fixed point.",
+    "type": "zero-knowledge-self-proof",
+    "mechanism": {
+      "step1": "client sends challenge = hash(nonce || identity)",
+      "step2": "server proves knowledge by returning hash(challenge || identity)",
+      "step3": "if client === server, both produce identical proofs",
+      "step4": "fixed point: proof(proof) = proof"
+    },
+    "properties": {
+      "zeroKnowledge": true,
+      "generativelyAutonomous": true,
+      "immutableOnce": "established",
+      "selfVerifying": true
+    },
+    "gateCondition": {
+      "predicate": "hash(self.challenge) === hash(peer.response)",
+      "fixedPointCondition": "self === peer → hash(x) === x",
+      "proofType": "constructive"
+    }
+  },
+
+  "proofs": {
+    "curryHoward": {
+      "propositionsAsTypes": true,
+      "proofsAsPrograms": true,
+      "formulaeAsTypes": true
+    },
+    "realizability": {
+      "type": "constructive",
+      "computable": true,
+      "decidable": "for-bounded-operations"
+    },
+    "isomorphism": {
+      "selfReferential": true,
+      "capturesOwnCapture": true,
+      "fixedPointFunctor": "Y"
+    },
+    "interactionCombinators": {
+      "gamma": "constructor-destructor → client-server",
+      "delta": "duplicator-eraser → fork-merge",
+      "epsilon": "identity-annihilation → zero"
+    }
+  },
+
+  "uriScheme": {
+    "self": "zero://self",
+    "peer": "zero://peer/{id}",
+    "discover": "zero://discover",
+    "fork": "zero://fork/{session}",
+    "merge": "zero://merge/{a}/{b}",
+    "replay": "zero://replay/{timestamp}"
+  },
+
+  "platform": {
+    "compose": "https://terminals.tech/compose",
+    "replay": "https://replay.terminals.tech",
+    "platform": "https://terminals.tech/platform",
+    "perceptions": "https://terminals.tech/perceptions",
+    "stacks": "https://terminals.tech/stacks"
+  },
+
+  "mcp": {
+    "stable": "2025-06-18",
+    "draft": "2025-11-25",
+    "compliance": {
+      "tools": true,
+      "resources": true,
+      "prompts": true,
+      "sampling": true,
+      "elicitation": true,
+      "taskProtocol": true,
+      "mcpApps": true
+    },
+    "seps": [
+      "SEP-1686",
+      "SEP-1577",
+      "SEP-1036",
+      "SEP-1865",
+      "SEP-990",
+      "SEP-991"
+    ]
+  },
+
+  "environment": {
+    "ZERO_SELF_CONNECT": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable self-connection (zero://self)"
+    },
+    "ZERO_PROTOCOLS": {
+      "type": "string",
+      "default": "mcp",
+      "description": "Comma-separated list of enabled protocols"
+    },
+    "ZERO_SURFACE": {
+      "type": "string",
+      "enum": ["cli", "browser", "desktop", "mobile", "streaming"],
+      "default": "cli",
+      "description": "Target deployment surface"
+    },
+    "ZERO_PHASE_LOCK": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable phase-lock resonance"
+    },
+    "ZERO_ATTRACTOR_STRENGTH": {
+      "type": "number",
+      "default": 0.8,
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Strength of attractor basin pull"
+    }
+  },
+
+  "meta": {
+    "specificationVersion": "1.0.0",
+    "lastUpdated": "2025-12-15",
+    "authors": ["Tej Desai <admin@terminals.tech>"],
+    "license": "MIT",
+    "documentation": "ZERO.md"
+  }
+}

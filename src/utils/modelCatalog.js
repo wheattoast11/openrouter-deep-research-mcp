@@ -1,5 +1,10 @@
-const openRouterClient = require('./openRouterClient');
 const NodeCache = require('node-cache');
+const fs = require('fs');
+const path = require('path');
+const providerManager = require('../core/providers');
+
+// Cache file path
+const CACHE_FILE = path.join(process.cwd(), '.model_cache.json');
 
 // Cache model catalog for 30 minutes by default
 const catalogCache = new NodeCache({ stdTTL: 1800, checkperiod: 120 });
@@ -14,8 +19,12 @@ function normalizeModelEntry(entry) {
   const supportsTools = !!(capabilities.tools || capabilities.functions || /tool|function/i.test(JSON.stringify(entry)));
   const contextWindow = entry.context_length || entry.context_window || null;
   const pricing = entry.pricing || entry.price || null;
+  const architecture = entry.architecture || null;
+  const topProvider = entry.top_provider || null;
+  
   const releaseDateMatch = /(?:\b|[^0-9])(20\d{6})(?:\b|[^0-9])/.exec(id); // e.g., 20250725 in id
   const releaseDate = releaseDateMatch ? releaseDateMatch[1] : (entry.release_date || null);
+  
   return {
     id,
     provider,
@@ -27,6 +36,8 @@ function normalizeModelEntry(entry) {
     },
     modalities: Array.isArray(modalities) ? modalities : [],
     pricing,
+    architecture,
+    topProvider,
     releaseDate,
     tags: entry.tags || []
   };
@@ -46,20 +57,55 @@ function hashCatalog(models) {
 }
 
 async function refresh() {
-  const data = await openRouterClient.getModels();
+  const data = await providerManager.getModels();
   const models = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.models) ? data.models : []);
   const normalized = models.map(normalizeModelEntry);
   const newHash = hashCatalog(normalized);
-  const oldHash = catalogCache.get('catalog_hash');
+  
   catalogCache.set('catalog', normalized);
   catalogCache.set('catalog_hash', newHash);
   catalogCache.set('last_refreshed_at', Date.now());
+  
+  // Persist to file
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify({
+      timestamp: Date.now(),
+      hash: newHash,
+      data: normalized
+    }));
+  } catch (err) {
+    console.error('Failed to write model cache file:', err.message);
+  }
+  
   return normalized;
+}
+
+function loadFromFile() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const content = fs.readFileSync(CACHE_FILE, 'utf8');
+      const cached = JSON.parse(content);
+      // Valid for 24 hours if loaded from file (relaxed for CLI/TUI startup)
+      if (Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) {
+        catalogCache.set('catalog', cached.data);
+        catalogCache.set('catalog_hash', cached.hash);
+        catalogCache.set('last_refreshed_at', cached.timestamp);
+        return cached.data;
+      }
+    }
+  } catch (err) {
+    // Ignore read errors
+  }
+  return null;
 }
 
 async function getCatalog() {
   const cached = catalogCache.get('catalog');
   if (cached) return cached;
+  
+  const fileCached = loadFromFile();
+  if (fileCached) return fileCached;
+  
   return refresh();
 }
 

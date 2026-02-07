@@ -1,5 +1,5 @@
 // src/agents/planningAgent.js
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const config = require('../../config');
 const logger = require('../utils/logger').child('PlanningAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
@@ -43,7 +43,7 @@ class PlanningAgent {
     // Ensure options exists before accessing requestId
     const requestId = (options && options.requestId) ? options.requestId : 'unknown-req'; 
     try {
-      const response = await openRouterClient.chatCompletion(this.classificationModel, messages, {
+      const response = await providerManager.chat(this.classificationModel, messages, {
         temperature: 0.1,
         max_tokens: 64 // Ensure well above OpenRouter minimum of 16
       });
@@ -150,7 +150,7 @@ Refinement Guidelines:
       const lineup = [this.model, ...this.candidates.filter(m => m !== this.model)];
       for (const m of lineup) {
         try {
-          response = await openRouterClient.chatCompletion(m, messages, {
+          response = await providerManager.chat(m, messages, {
             temperature: previousResults ? 0.5 : 0.7, // Slightly lower temp for refinement
             max_tokens: 2000
           });
@@ -186,7 +186,11 @@ Refinement Guidelines:
     const relevantReports = (pastReports || []).filter(r => {
       const score = r.similarityScore ?? 0;
       if (score < MIN_SIMILARITY_FOR_CONTEXT) {
-        console.error(`[PlanningAgent] Excluding low-similarity report: "${r.query?.substring(0, 40)}..." (score: ${score.toFixed(3)} < ${MIN_SIMILARITY_FOR_CONTEXT})`);
+        logger.debug('Excluding low-similarity report', {
+          query: r.query?.substring(0, 40),
+          score: score.toFixed(3),
+          threshold: MIN_SIMILARITY_FOR_CONTEXT
+        });
         return false;
       }
       return true;
@@ -200,7 +204,10 @@ ${relevantReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateStri
 ---
 `;
     } else if (pastReports && pastReports.length > 0) {
-      console.error(`[PlanningAgent] All ${pastReports.length} past reports filtered out due to low similarity scores`);
+      logger.debug('All past reports filtered out due to low similarity', {
+        reportCount: pastReports.length,
+        threshold: MIN_SIMILARITY_FOR_CONTEXT
+      });
     }
 
     let clientContextText = '';
@@ -296,18 +303,28 @@ ${relevantReports.map(r => `Date Found: ${new Date(r.createdAt).toLocaleDateStri
     let finalPrompt = `${basePrompt}\n\n${specificInstructions}\n\n${dimensions}\n\n`;
 
     finalPrompt += `
+CRITICAL: Each sub-query MUST include the original topic "${query}" explicitly. Never output generic dimension names alone.
+
 For each distinct aspect, create an XML tag with format:
-<agent_1>First research question focusing on [specific aspect; include verification if needed]</agent_1>
-<agent_2>Second research question focusing on [specific aspect]</agent_2>
+<agent_1>Complete research question that includes the topic and focuses on [specific aspect]</agent_1>
+<agent_2>Complete research question that includes the topic and focuses on [specific aspect]</agent_2>
+
+CORRECT examples for query "What is JSON-RPC 2.0?":
+<agent_1>What are the core concepts and fundamental definitions of JSON-RPC 2.0?</agent_1>
+<agent_2>What is the historical context and evolution of JSON-RPC 2.0?</agent_2>
+
+WRONG examples (DO NOT output these):
+<agent_1>Core concepts and definitions</agent_1>  <!-- Missing topic! -->
+<agent_2>Historical context and evolution</agent_2>  <!-- Missing topic! -->
 
 Ensure each question is:
-- Self-contained and specific
+- Self-contained and specific (can be understood without seeing the original query)
+- MUST explicitly mention the topic "${query.substring(0, 50)}" or its core subject
 - Phrased to elicit verifiable facts with sources
 - Focused on a distinct aspect with minimal overlap
-- Appropriate for query complexity
 - Optimized for web/evidence retrieval (names, dates, identifiers)
 
-OUTPUT ONLY THE XML TAGS (e.g., <agent_1>...</agent_1>, <agent_2>...</agent_2>).`;
+OUTPUT ONLY THE XML TAGS with complete, topic-contextualized questions.`;
 
     return finalPrompt;
   }

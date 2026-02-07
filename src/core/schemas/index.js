@@ -115,10 +115,10 @@ const KB = {
 const Job = {
   status: z.object({
     job_id: z.string().min(1),
-    format: z.enum(['summary', 'full', 'events']).default('summary'),
+    format: z.enum(['summary', 'full', 'events', 'compact']).default('summary'),
     max_events: z.number().int().positive().default(50),
     since_event_id: z.number().int().optional()
-  }).describe('Get job status'),
+  }).describe('Get job status. Use format="compact" for token-efficient LLM polling (~15 tokens)'),
 
   cancel: z.object({
     job_id: z.string().min(1)

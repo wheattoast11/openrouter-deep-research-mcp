@@ -1,5 +1,23 @@
 require('dotenv').config();
+const path = require('path');
 const pkg = require('./package.json');
+
+const normalizedOpenRouterKeys = [];
+if (process.env.OPENROUTER_API_KEY) {
+  const key = process.env.OPENROUTER_API_KEY.trim();
+  if (key) normalizedOpenRouterKeys.push(key);
+}
+if (process.env.OPENROUTER_API_KEYS) {
+  const extraKeys = String(process.env.OPENROUTER_API_KEYS)
+    .split(',')
+    .map(k => k.trim())
+    .filter(Boolean);
+  for (const key of extraKeys) {
+    if (!normalizedOpenRouterKeys.includes(key)) {
+      normalizedOpenRouterKeys.push(key);
+    }
+  }
+}
 
 const config = {
   server: {
@@ -13,16 +31,20 @@ const config = {
     publicUrl: process.env.PUBLIC_URL || `${process.env.REQUIRE_HTTPS === 'true' ? 'https' : 'http'}://localhost:${process.env.SERVER_PORT || process.env.PORT || 3002}`,
     // Server startup behavior
     allowStartWithoutDb: process.env.ALLOW_START_WITHOUT_DB === 'true',
-    startupTimeoutMs: parseInt(process.env.STARTUP_TIMEOUT_MS, 10) || 30000
+    startupTimeoutMs: parseInt(process.env.STARTUP_TIMEOUT_MS, 10) || 60000
   },
   openrouter: {
-    apiKey: process.env.OPENROUTER_API_KEY,
-    baseUrl: "https://openrouter.ai/api/v1"
+    apiKey: normalizedOpenRouterKeys[0],
+    apiKeys: normalizedOpenRouterKeys,
+    baseUrl: "https://openrouter.ai/api/v1",
+    timeout: parseInt(process.env.OPENROUTER_TIMEOUT_MS, 10) || 180000,
+    retries: parseInt(process.env.OPENROUTER_RETRIES, 10) || 3,
+    retryDelayMs: parseInt(process.env.OPENROUTER_RETRY_DELAY_MS, 10) || 1000
   },
   models: {
     // Allow overriding planning model; provide a generally-available safe default
-    planning: process.env.PLANNING_MODEL || "google/gemini-2.5-pro", // Default planning/synthesis model
-    planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5-chat,google/gemini-2.5-pro,anthropic/claude-sonnet-4")
+    planning: process.env.PLANNING_MODEL || "google/gemini-3-flash-preview", // Default planning/synthesis model
+    planningCandidates: (process.env.PLANNING_CANDIDATES || "openai/gpt-5.2-chat,google/gemini-3-pro-preview,anthropic/claude-sonnet-4.5,google/gemini-3-flash-preview")
       .split(',').map(s=>s.trim()).filter(Boolean),
     useDynamicCatalog: process.env.USE_DYNAMIC_CATALOG === 'true',
     // Define models with domain strengths
@@ -36,12 +58,11 @@ const config = {
         // CSV fallback -> wrap ids as objects without explicit domains
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.HIGH_COST_MODELS) : [
-        { name: "x-ai/grok-4", domains: ["reasoning", "technical", "general", "creative"] },
-        { name: "openai/gpt-5-chat", domains: ["reasoning", "technical", "general"] },
-        { name: "google/gemini-2.5-pro", domains: ["reasoning", "technical", "general"] },
-        { name: "anthropic/claude-sonnet-4", domains: ["reasoning", "technical", "general"] },
-        { name: "qwen/qwen3-coder", domains: ["coding", "editing", "technical"] },
-        { name: "qwen/qwen3-235b-a22b-2507", domains: ["general", "reasoning", "technical", "coding"] }
+        { name: "anthropic/claude-sonnet-4.5", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "openai/gpt-5.2-chat", domains: ["reasoning", "technical", "general"] },
+        { name: "google/gemini-3-pro-preview", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "perplexity/sonar-pro-search", domains: ["reasoning", "technical", "general", "creative"] },
+        { name: "google/gemini-3-flash-preview", domains: ["reasoning", "technical", "general", "creative"] }
       ],
     lowCost: process.env.LOW_COST_MODELS ? 
       (function parseLowCost(val){
@@ -51,13 +72,12 @@ const config = {
         } catch(_) {}
         return String(val).split(',').map(s=>s.trim()).filter(Boolean).map(name=>({ name, domains: ["general"] }));
       })(process.env.LOW_COST_MODELS) : [
-        { name: "deepseek/deepseek-chat-v3.1", domains: ["general", "reasoning", "technical", "coding"] },
-        { name: "z-ai/glm-4.5v", domains: ["general", "multimodal", "vision", "reasoning"] },
-        { name: "z-ai/glm-4.5-air", domains: ["coding", "technical", "reasoning"] },
+        { name: "google/gemini-3-flash-preview", domains: ["general", "reasoning", "technical", "coding"] },
+        { name: "anthropic/claude-haiku-4.5", domains: ["general", "technical", "reasoning"] },
+        { name: "z-ai/glm-4.7", domains: ["general", "multimodal", "vision", "reasoning"] },
         { name: "openai/gpt-oss-120b", domains: ["general", "reasoning", "search"] },
-        { name: "inception/mercury", domains: ["general", "creative", "technical"] },
-        { name: "baidu/ernie-4.5-vl-424b-a47b", domains: ["general", "creative"] },
-        { name: "google/gemini-2.5-flash", domains: ["coding", "editing", "technical"] }
+        { name: "moonshotai/kimi-k2-thinking", domains: ["general", "creative", "technical"] },
+        { name: "baidu/ernie-4.5-vl-424b-a47b", domains: ["general", "creative"] }
       ],
     // Define a tier for potentially simpler tasks (adjust models as needed)
     veryLowCost: process.env.VERY_LOW_COST_MODELS ?
@@ -71,7 +91,7 @@ const config = {
          { name: "openai/gpt-5-nano", domains: ["general", "reasoning", "creative"] }
        ],
      // Add a model specifically for classification tasks if needed, or reuse planning model
-     classification: process.env.CLASSIFICATION_MODEL || "openai/gpt-5-mini",
+     classification: process.env.CLASSIFICATION_MODEL || "openai/gpt-5-nano",
      // Default ensemble size for research agent model ensembles
      ensembleSize: parseInt(process.env.ENSEMBLE_SIZE, 10) || 2,
      // Max research iterations (initial + refinements)
@@ -100,7 +120,23 @@ const config = {
   },
   // Database configuration for knowledge base using PGLite
   database: {
-    dataDirectory: process.env.PGLITE_DATA_DIR || "./researchAgentDB",
+    // Smart default paths: XDG_DATA_HOME > TMPDIR (AppImage) > ~/.local/share > ./
+    dataDirectory: process.env.PGLITE_DATA_DIR || (() => {
+      // XDG Base Directory compliance (Linux/macOS)
+      if (process.env.XDG_DATA_HOME) {
+        return path.join(process.env.XDG_DATA_HOME, 'openrouter-agents', 'db');
+      }
+      // AppImage environments set TMPDIR to writable location within sandbox
+      if (process.env.APPIMAGE && process.env.TMPDIR) {
+        return path.join(process.env.TMPDIR, 'openrouter-agents-db');
+      }
+      // Standard user data location
+      if (process.env.HOME) {
+        return path.join(process.env.HOME, '.local', 'share', 'openrouter-agents', 'db');
+      }
+      // Fallback to current directory (legacy behavior)
+      return './researchAgentDB';
+    })(),
     vectorDimension: 384, // Dimension for the embeddings from all-MiniLM-L6-v2
     cacheTTL: parseInt(process.env.CACHE_TTL_SECONDS, 10) || 3600, // 1 hour in seconds
     // Enhanced PGLite configuration
@@ -109,9 +145,33 @@ const config = {
     maxRetryAttempts: parseInt(process.env.PGLITE_MAX_RETRY_ATTEMPTS, 10) || 3,
     retryDelayBaseMs: parseInt(process.env.PGLITE_RETRY_DELAY_BASE_MS, 10) || 200,
     // Initialization behavior
-    initTimeoutMs: parseInt(process.env.PGLITE_INIT_TIMEOUT_MS, 10) || 30000,
+    initTimeoutMs: parseInt(process.env.PGLITE_INIT_TIMEOUT_MS, 10) || 60000,
     retryOnFailure: process.env.PGLITE_RETRY_ON_FAILURE === 'true',
-    allowInMemoryFallback: process.env.PGLITE_ALLOW_IN_MEMORY_FALLBACK !== 'false' // Default true for backwards compat
+    allowInMemoryFallback: process.env.PGLITE_ALLOW_IN_MEMORY_FALLBACK !== 'false', // Default true for backwards compat
+    // Database extensions configuration
+    extensions: {
+      bloom: {
+        enabled: process.env.DB_BLOOM_ENABLED !== 'false',
+        indexFalsePositiveRate: parseFloat(process.env.BLOOM_FALSE_POSITIVE_RATE) || 0.01
+      },
+      cube: {
+        enabled: process.env.DB_CUBE_ENABLED !== 'false',
+        maxDimensions: parseInt(process.env.CUBE_MAX_DIMENSIONS, 10) || 10
+      },
+      seg: {
+        enabled: process.env.DB_SEG_ENABLED !== 'false'
+      },
+      tcn: {
+        enabled: process.env.DB_TCN_ENABLED !== 'false',
+        channels: ['research_reports_changed', 'jobs_changed']
+      },
+      tsm_system_time: {
+        enabled: process.env.DB_TEMPORAL_ENABLED !== 'false'
+      },
+      pgtap: {
+        enabled: process.env.NODE_ENV === 'test'
+      }
+    }
   },
   // Local indexing/search configuration (opt-in by default)
   indexer: {
@@ -213,10 +273,10 @@ config.caching = {
   },
   // Cost optimization strategies
   optimization: {
-    preferredLowCostModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder', 'z-ai/glm-4.5v'],
-    visionModels: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash', 'openai/gpt-5-nano'],
-    codingModels: ['qwen/qwen3-coder', 'z-ai/glm-4.5-air', 'deepseek/deepseek-chat-v3.1'],
-    complexReasoningModels: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-235b-a22b-2507', 'nousresearch/deephermes-3-mistral-24b-preview'],
+    preferredLowCostModels: ['google/gemini-3-flash-preview', 'anthropic/claude-haiku-4.5', 'openai/gpt-5-nano', 'deepcogito/cogito-v2.1-671b'],
+    visionModels: ['anthropic/claude-opus-4.5', 'google/gemini-3-flash-preview', 'google/gemini-3-pro-preview', 'anthropic/claude-sonnet-4.5', 'openai/gpt-5.2'],
+    codingModels: ['google/gemini-3-flash-preview', 'google/gemini-3-pro-preview', 'openai/gpt-5.2-chat', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-haiku-4.5', 'deepcogito/cogito-v2.1-671b'],
+    complexReasoningModels: ['perplexity/sonar-pro-search', 'google/gemini-3-pro-preview', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.5', 'openai/gpt-5.2-chat'],
     costThresholds: {
       simple: 0.0000005, // Max cost per token for simple queries
       moderate: 0.000002, // Max cost per token for moderate queries  
@@ -225,27 +285,144 @@ config.caching = {
   }
 };
 
+// Payload optimization
+config.payload = {
+  compressionEnabled: process.env.PAYLOAD_COMPRESSION !== 'false',
+  compressionFormat: process.env.PAYLOAD_COMPRESSION_FORMAT || 'gzip', // gzip | brotli | none
+  compressionThreshold: parseInt(process.env.PAYLOAD_COMPRESSION_THRESHOLD, 10) || 50000, // bytes
+  referenceThreshold: parseInt(process.env.PAYLOAD_REFERENCE_THRESHOLD, 10) || 100000 // bytes
+};
+
 // Core abstractions (Convergence Plan v2.0)
 config.core = {
-  // Enable new consolidated handlers (gradual migration)
+  // Enable new consolidated handlers (enabled by default since v1.9.0)
   handlers: {
-    enabled: process.env.CORE_HANDLERS_ENABLED === 'true',
+    enabled: process.env.CORE_HANDLERS_ENABLED !== 'false',
     // Which domains use new handlers (others fall back to tools.js)
     domains: (process.env.CORE_HANDLER_DOMAINS || '').split(',').filter(Boolean)
   },
-  // Signal protocol configuration
+  // Signal protocol configuration (enabled by default since v1.9.0)
   signal: {
-    enabled: process.env.SIGNAL_PROTOCOL_ENABLED === 'true',
+    enabled: process.env.SIGNAL_PROTOCOL_ENABLED !== 'false',
     maxHistorySize: parseInt(process.env.SIGNAL_MAX_HISTORY, 10) || 1000
   },
-  // RoleShift bidirectional protocol
+  // RoleShift bidirectional protocol (enabled by default since v1.9.0)
   roleShift: {
-    enabled: process.env.ROLESHIFT_ENABLED === 'true',
+    enabled: process.env.ROLESHIFT_ENABLED !== 'false',
     timeout: parseInt(process.env.ROLESHIFT_TIMEOUT_MS, 10) || 60000
+  },
+  // MCP features (resources, prompts, streamable HTTP)
+  mcp: {
+    features: {
+      resources: process.env.MCP_RESOURCES_ENABLED !== 'false',
+      prompts: process.env.MCP_PROMPTS_ENABLED !== 'false'
+    }
   },
   // Schema registry options
   schemas: {
     strictValidation: process.env.STRICT_SCHEMA_VALIDATION === 'true'
+  },
+  // Rail Protocol configuration (v1.9.2)
+  rail: {
+    enabled: process.env.RAIL_ENABLED !== 'false',
+    version: '0.1.0',
+    // Token tracking
+    tokens: {
+      countEnabled: process.env.RAIL_TOKEN_COUNT !== 'false',
+      budgetEnabled: process.env.RAIL_TOKEN_BUDGET === 'true',
+      budgetLimit: parseInt(process.env.RAIL_TOKEN_BUDGET_LIMIT, 10) || 100000
+    },
+    // Caching
+    cache: {
+      enabled: process.env.RAIL_CACHE !== 'false',
+      ttlSeconds: parseInt(process.env.RAIL_CACHE_TTL, 10) || 3600,
+      semanticThreshold: parseFloat(process.env.RAIL_CACHE_THRESHOLD) || 0.85
+    },
+    // Rate limiting
+    rateLimit: {
+      enabled: process.env.RAIL_RATE_LIMIT !== 'false',
+      requestsPerMinute: parseInt(process.env.RAIL_RATE_LIMIT_RPM, 10) || 60
+    },
+    // Circuit breaker
+    circuitBreaker: {
+      enabled: process.env.RAIL_CIRCUIT_BREAKER !== 'false',
+      failureThreshold: parseInt(process.env.RAIL_CIRCUIT_THRESHOLD, 10) || 5,
+      resetTimeoutMs: parseInt(process.env.RAIL_CIRCUIT_RESET_MS, 10) || 120000 // 2 minutes for recovery
+    },
+    // Routing strategy
+    routing: {
+      strategy: process.env.RAIL_ROUTING_STRATEGY || 'auto',
+      costPreference: process.env.RAIL_COST_PREFERENCE || 'balanced'
+    },
+    // Tunnels (agent-to-agent)
+    tunnels: {
+      enabled: process.env.RAIL_TUNNELS !== 'false',
+      defaultTtlMs: parseInt(process.env.RAIL_TUNNEL_TTL_MS, 10) || 600000, // 10 minutes - research can be slow
+      requireAck: process.env.RAIL_TUNNEL_REQUIRE_ACK === 'true'
+    },
+    // Streaming consensus
+    consensus: {
+      enabled: process.env.RAIL_CONSENSUS !== 'false',
+      minAgreement: parseFloat(process.env.RAIL_CONSENSUS_MIN) || 0.6,
+      timeoutMs: parseInt(process.env.RAIL_CONSENSUS_TIMEOUT_MS, 10) || 300000, // 5 minutes - models can be slow
+      updateIntervalMs: parseInt(process.env.RAIL_CONSENSUS_UPDATE_MS, 10) || 500
+    },
+    // Observability
+    debug: process.env.RAIL_DEBUG === 'true',
+    debugRails: (process.env.RAIL_DEBUG_RAILS || '').split(',').filter(Boolean)
+  },
+
+  // HVM Integration (v1.15.0 - Superintelligence Stream A)
+  hvm: {
+    enabled: process.env.HVM_ENABLED !== 'false',
+    interpreter: process.env.HVM_INTERPRETER || 'js', // 'js' | 'wasm' (wasm not yet available)
+    maxReductions: parseInt(process.env.HVM_MAX_REDUCTIONS, 10) || 100000,
+    // Parallel reduction settings
+    parallelization: {
+      enabled: process.env.HVM_PARALLEL !== 'false',
+      maxWorkers: parseInt(process.env.HVM_MAX_WORKERS, 10) || 4,
+      strategy: process.env.HVM_PARALLEL_STRATEGY || 'label-analysis' // label-analysis | greedy | conservative
+    },
+    // Crystallization-aware termination
+    crystallization: {
+      earlyExitThreshold: parseFloat(process.env.HVM_CRYSTALLIZATION_THRESHOLD) || 0.7,
+      checkIntervalMs: parseInt(process.env.HVM_CHECK_INTERVAL_MS, 10) || 100
+    },
+    // Observability
+    debug: process.env.HVM_DEBUG === 'true',
+    visualize: process.env.HVM_VISUALIZE === 'true'
+  },
+
+  // Mathematical Foundations (v1.15.0 - Superintelligence Stream C)
+  math: {
+    // P-adic Numbers (provider lineage distance)
+    padic: {
+      enabled: process.env.PADIC_ENABLED !== 'false',
+      prime: parseInt(process.env.PADIC_PRIME, 10) || 2,
+      cacheEnabled: process.env.PADIC_CACHE !== 'false',
+      cacheTTL: parseInt(process.env.PADIC_CACHE_TTL, 10) || 3600
+    },
+    // IQ Quadrature (phase-based consensus)
+    quadrature: {
+      enabled: process.env.QUADRATURE_ENABLED !== 'false',
+      phaseLockThreshold: parseFloat(process.env.QUADRATURE_PHASE_LOCK_THRESHOLD) || 0.1,
+      referenceModel: process.env.QUADRATURE_REFERENCE_MODEL || 'anthropic/claude-sonnet-4.5'
+    },
+    // Semantic Manifolds (curvature-aware embedding)
+    manifold: {
+      enabled: process.env.MANIFOLD_ENABLED !== 'false',
+      curvatureThreshold: parseFloat(process.env.MANIFOLD_CURVATURE_THRESHOLD) || 0.5,
+      neighborhoodSize: parseInt(process.env.MANIFOLD_NEIGHBORHOOD_SIZE, 10) || 10,
+      precomputeOnIndex: process.env.MANIFOLD_PRECOMPUTE === 'true'
+    },
+    // Procedural Rewards (Stream D)
+    rewards: {
+      enabled: process.env.REWARDS_ENABLED !== 'false',
+      crystallizationWeight: parseFloat(process.env.REWARDS_CRYSTALLIZATION_WEIGHT) || 0.5,
+      uncertaintyPenalty: parseFloat(process.env.REWARDS_UNCERTAINTY_PENALTY) || 0.3,
+      traceBonus: parseFloat(process.env.REWARDS_TRACE_BONUS) || 0.2,
+      tracePersistence: process.env.REWARDS_PERSIST_TRACE !== 'false'
+    }
   }
 };
 
@@ -254,7 +431,16 @@ config.version = pkg.version;
 config.mcpSpec = {
   stable: '2025-06-18',
   draft: '2025-11-25',
-  features: ['SEP-1686', 'SEP-1577', 'SEP-1036', 'SEP-1865']
+  // All 8 SEPs from MCP 2025-11-25 draft + RoleShift
+  features: [
+    'SEP-1686',  // Task Protocol
+    'SEP-1577',  // Sampling with Tools
+    'SEP-1036',  // URL Mode Elicitation
+    'SEP-1865',  // MCP Apps (UI Resources)
+    'SEP-990',   // Enterprise Auth (ID-JAG, Token Exchange)
+    'SEP-991',   // Client Metadata (CIMD)
+    'SEP-1649'   // Server Discovery (.well-known/mcp-server)
+  ]
 };
 
 module.exports = config;

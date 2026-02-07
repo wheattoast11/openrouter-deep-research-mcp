@@ -203,9 +203,13 @@ class ElicitationHandler {
 
     process.stderr.write(`[${new Date().toISOString()}] Elicitation: ${elicitationId} completed externally\n`);
 
-    // Schedule cleanup
+    // Schedule cleanup - check if still exists and is completed before deleting
+    // This prevents race condition with cleanupExpired() interval
     setTimeout(() => {
-      this.pendingElicitations.delete(elicitationId);
+      const elicit = this.pendingElicitations.get(elicitationId);
+      if (elicit && elicit.completedAt) {
+        this.pendingElicitations.delete(elicitationId);
+      }
     }, 3600000); // Keep for 1 hour for retrieval
 
     return { success: true, elicitationId };

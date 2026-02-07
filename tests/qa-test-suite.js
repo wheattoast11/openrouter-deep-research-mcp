@@ -156,5 +156,5 @@ runTests()
   })
   .catch(err => {
     console.error('Error running test suite:', err);
-    process.exit(1);
+    process.exitCode = 1;
   });

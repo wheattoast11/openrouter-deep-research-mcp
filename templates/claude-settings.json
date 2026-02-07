@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "openrouter-research": {
+      "command": "npx",
+      "args": ["@terminals-tech/openrouter-agents", "--stdio"],
+      "env": {
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+        "LOG_LEVEL": "info",
+        "MODE": "ALL"
+      }
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm:*)",
+      "Bash(node:*)",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(mkdir:*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(sudo:*)",
+      "Bash(chmod 777:*)"
+    ]
+  },
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": ["echo", "Session started at $(date)"]
+    },
+    {
+      "event": "PostToolUse",
+      "tools": ["research", "conduct_research"],
+      "command": ["echo", "Research completed"]
+    }
+  ]
+}
