@@ -158,9 +158,8 @@ const LOGGING = {
  * MCP protocol versions
  */
 const MCP_SPEC = {
-  STABLE: '2025-06-18',
-  DRAFT: '2025-11-25',
-  FEATURES: ['SEP-1686', 'SEP-1577', 'SEP-1036', 'SEP-1865']
+  STABLE: '2025-11-25',
+  FEATURES: ['SEP-1686', 'SEP-1577', 'SEP-1036', 'SEP-1865', 'SEP-990', 'SEP-991']
 };
 
 /**
@@ -169,7 +168,9 @@ const MCP_SPEC = {
 const DEFAULT_MODELS = {
   HIGH_COST: [
     { name: 'anthropic/claude-sonnet-4.5', domains: ['reasoning', 'technical', 'general', 'creative'] },
+    { name: 'anthropic/claude-opus-4.6', domains: ['reasoning', 'technical', 'general', 'creative'] },
     { name: 'openai/gpt-5.2-chat', domains: ['reasoning', 'technical', 'general'] },
+    { name: 'openai/gpt-5.3-codex', domains: ['coding', 'technical', 'reasoning'] },
     { name: 'google/gemini-3-pro-preview', domains: ['reasoning', 'technical', 'general'] },
     { name: 'qwen/qwen3-coder', domains: ['coding', 'editing', 'technical'] },
     { name: 'qwen/qwen3-235b-a22b-2507', domains: ['general', 'reasoning', 'technical', 'coding'] }
@@ -181,7 +182,8 @@ const DEFAULT_MODELS = {
     { name: 'deepseek/deepseek-chat-v3.1', domains: ['general', 'reasoning', 'technical', 'coding'] },
     { name: 'openai/gpt-oss-120b', domains: ['general', 'reasoning', 'search'] },
     { name: 'inception/mercury', domains: ['general', 'creative', 'technical'] },
-    { name: 'baidu/ernie-4.5-vl-424b-a47b', domains: ['general', 'creative'] }
+    { name: 'baidu/ernie-4.5-vl-424b-a47b', domains: ['general', 'creative'] },
+    { name: 'deepseek/deepseek-v3.2', domains: ['general', 'reasoning', 'technical', 'coding'] }
   ],
   VERY_LOW_COST: [
     { name: 'openai/gpt-5-nano', domains: ['general', 'reasoning', 'creative'] }
@@ -194,9 +196,12 @@ const DEFAULT_MODELS = {
 const MODEL_WEIGHTS = {
   'anthropic/claude-sonnet-4.5': 1.0,
   'anthropic/claude-opus-4': 1.0,
+  'anthropic/claude-opus-4.6': 1.0,
   'openai/gpt-5-chat': 0.95,
+  'openai/gpt-5.3-codex': 0.97,
   'google/gemini-3-pro-preview': 0.90,
   'x-ai/grok-4': 0.85,
+  'deepseek/deepseek-v3.2': 0.77,
   'deepseek/deepseek-chat-v3.1': 0.75,
   'default': 0.5
 };
@@ -206,8 +211,8 @@ const MODEL_WEIGHTS = {
  */
 const PREFERRED_MODELS = {
   VISION: ['z-ai/glm-4.5v', 'google/gemini-3-flash-preview', 'openai/gpt-5-nano'],
-  CODING: ['qwen/qwen3-coder', 'z-ai/glm-4.5-air', 'deepseek/deepseek-chat-v3.1'],
-  COMPLEX_REASONING: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-235b-a22b-2507', 'nousresearch/deephermes-3-mistral-24b-preview']
+  CODING: ['openai/gpt-5.3-codex', 'qwen/qwen3-coder', 'z-ai/glm-4.5-air', 'deepseek/deepseek-chat-v3.1'],
+  COMPLEX_REASONING: ['anthropic/claude-opus-4.6', 'deepseek/deepseek-chat-v3.1', 'qwen/qwen3-235b-a22b-2507', 'nousresearch/deephermes-3-mistral-24b-preview']
 };
 
 module.exports = {

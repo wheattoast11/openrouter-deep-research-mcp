@@ -1,5 +1,63 @@
 # Changelog
 
+## v1.16.0 — 2026-02-06
+
+### SDK & Spec Updates
+- **MCP SDK 1.26.0** - Upgraded from 1.24.3; includes ReDoS fix in UriTemplate regex (v1.25.2), shared server/transport instance security fix (v1.26.0), and client credentials provider scope support
+- **MCP Spec 2025-11-25 stable** - Updated `MCP_SPEC.STABLE` from `2025-06-18` to `2025-11-25`; removed `DRAFT` field; added SEP-990 (Enterprise Auth) and SEP-991 (Client Metadata) to features list
+
+### Model Roster Refresh
+- **anthropic/claude-opus-4.6** - Added to HIGH_COST tier and COMPLEX_REASONING preferred models (weight: 1.0)
+- **openai/gpt-5.3-codex** - Added to HIGH_COST tier and CODING preferred models (weight: 0.97)
+- **deepseek/deepseek-v3.2** - Added to LOW_COST tier (weight: 0.77)
+
+### Codebase Cleanup
+- **Removed 80+ Finder duplicate artifacts** - Purged all `* 2` / `* 3` suffixed files across src/, tests/, docs/, and root
+- **Removed dead `thermodynamicRouter.ts`** - 614-line TypeScript file with no build process; canonical JS implementation at `src/routing/index.js`
+- **Added `.gitignore` patterns** - Prevents future macOS Finder duplicate artifacts (`* 2`, `* 3`, `* copy`)
+- **Simplified `package.json` files array** - Replaced individual doc file entries with `docs/` directory glob
+
+---
+
+## v1.15.0 — 2026-02-01
+
+### Embedding-Based Model Routing
+- **@terminals-tech/embeddings integration** - Local vector-based model selection without LLM API calls
+- **Thermodynamic router** - Boltzmann-inspired model selection with energy/temperature parameters
+- **Model profiles** - Semantic matching of queries to model capabilities via embedding similarity
+- **Configurable thresholds** - `MIN_CONFIDENCE_THRESHOLD`, `LLM_FALLBACK_ENABLED` for routing control
+
+### Handler/Dispatcher System
+- **Unified dispatcher** - `src/server/handlers/dispatcher.js` replaces direct tool registration
+- **Domain-organized handlers** - Research, KB, graph, session, utility handlers
+- **CORE_HANDLERS_ENABLED** default `true` — new handler system is now the primary path
+
+### Database & Persistence
+- **Persistent PGlite storage** - Reports, jobs, knowledge graph persist to `~/Library/Application Support/zero`
+- **DB auto-heal mode** - `DB_AUTO_HEAL=true` for in-memory fallback
+
+---
+
+## v1.14.1 — 2026-01-28
+
+### Semantic Error Taxonomy
+- **Deterministic error classification** - 13 error categories with automatic pattern matching
+- **Auto-learning** - Runtime pattern learning via `learnPattern()` with DB persistence
+- **Circuit breaker integration** - Trip decisions (trip/warn/ignore/escalate) per error category
+- **Error trace persistence** - Full trace history with suggested fixes in PGlite
+- **Self-improvement flow** - `exportTaxonomyState()` enables AI-assisted taxonomy refinement
+
+---
+
+## v1.13.0 — 2026-01-24
+
+### Security & API Hardening
+- **DB schema fixes** - Resolved migration edge cases for error_patterns and error_trace tables
+- **API type safety** - Stricter parameter validation across research and KB tools
+- **Security config** - Updated rate limiting and request size enforcement
+
+---
+
 ## v1.12.0 — 2026-01-20
 
 ### Resilience + Telemetry

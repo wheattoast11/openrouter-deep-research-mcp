@@ -1,6 +1,6 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
   "bin": {
@@ -34,10 +34,7 @@
     "CLAUDE.md",
     "README.md",
     "LICENSE",
-    "docs/CHANGELOG.md",
-    "docs/TOOL-PATTERNS.md",
-    "docs/ENV-REFERENCE.md",
-    "docs/EXTENSIONS.md"
+    "docs/"
   ],
   "publishConfig": {
     "access": "public"
@@ -60,7 +57,7 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.3.14",
     "@inkjs/ui": "^2.0.0",
-    "@modelcontextprotocol/sdk": "^1.21.1",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@terminals-tech/core": "^0.1.1",
     "@terminals-tech/embeddings": "^0.1.0",
     "@terminals-tech/graph": "^0.1.0",

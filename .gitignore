@@ -67,3 +67,11 @@ cloudflared/
 # Browser experiments (WIP)
 src/browser/
 cloudflared
+
+# macOS Finder duplicate artifacts
+*\ 2
+*\ 2.*
+*\ 3
+*\ 3.*
+*\ copy
+*\ copy.*
