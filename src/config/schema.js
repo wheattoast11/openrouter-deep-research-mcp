@@ -13,6 +13,12 @@ const { z } = require('zod');
 const constants = require('./constants');
 
 /**
+ * Zod 4 compatibility helper: .default({}) no longer re-parses through the schema.
+ * This helper ensures child defaults are resolved when parent defaults fire.
+ */
+const withDefault = (schema) => z.any().default({}).pipe(schema);
+
+/**
  * Coerce string to boolean, treating 'true', '1', 'yes' as true.
  */
 const booleanFromEnv = z.preprocess(
@@ -103,14 +109,14 @@ const IndexerSchema = z.object({
   autoIndexFetchedContent: booleanFromEnv.default(false),
   embedDocs: booleanFromEnv.default(true),
   maxDocLength: numberFromEnv(constants.INDEXER.MAX_DOC_LENGTH),
-  bm25: z.object({
+  bm25: withDefault(z.object({
     k1: floatFromEnv(constants.INDEXER.BM25_K1),
     b: floatFromEnv(constants.INDEXER.BM25_B)
-  }).default({}),
-  weights: z.object({
+  })),
+  weights: withDefault(z.object({
     bm25: floatFromEnv(constants.INDEXER.WEIGHT_BM25),
     vector: floatFromEnv(constants.INDEXER.WEIGHT_VECTOR)
-  }).default({}),
+  })),
   rerankEnabled: booleanFromEnv.default(false),
   rerankModel: z.string().nullable().optional()
 });
@@ -139,38 +145,38 @@ const LoggingSchema = z.object({
  * Caching configuration schema
  */
 const CachingSchema = z.object({
-  results: z.object({
+  results: withDefault(z.object({
     enabled: booleanFromEnv.default(true),
     ttlSeconds: numberFromEnv(constants.CACHING.RESULT_TTL_SECONDS),
     maxEntries: numberFromEnv(constants.CACHING.RESULT_MAX_ENTRIES),
     similarityThreshold: floatFromEnv(constants.CACHING.SIMILARITY_THRESHOLD)
-  }).default({}),
-  models: z.object({
+  })),
+  models: withDefault(z.object({
     enabled: booleanFromEnv.default(true),
     ttlSeconds: numberFromEnv(constants.CACHING.MODEL_TTL_SECONDS),
     maxEntries: numberFromEnv(constants.CACHING.MODEL_MAX_ENTRIES)
-  }).default({})
+  }))
 });
 
 /**
  * Core abstractions configuration schema
  */
 const CoreSchema = z.object({
-  handlers: z.object({
+  handlers: withDefault(z.object({
     enabled: booleanFromEnv.default(false),
     domains: z.array(z.string()).default([])
-  }).default({}),
-  signal: z.object({
+  })),
+  signal: withDefault(z.object({
     enabled: booleanFromEnv.default(false),
     maxHistorySize: numberFromEnv(constants.CORE.SIGNAL_MAX_HISTORY)
-  }).default({}),
-  roleShift: z.object({
+  })),
+  roleShift: withDefault(z.object({
     enabled: booleanFromEnv.default(false),
     timeout: numberFromEnv(constants.CORE.ROLESHIFT_TIMEOUT_MS)
-  }).default({}),
-  schemas: z.object({
+  })),
+  schemas: withDefault(z.object({
     strictValidation: booleanFromEnv.default(false)
-  }).default({})
+  }))
 });
 
 /**
@@ -178,21 +184,22 @@ const CoreSchema = z.object({
  */
 const MCPSchema = z.object({
   mode: z.enum(['AGENT', 'MANUAL', 'ALL']).default('ALL'),
-  features: z.object({
+  features: withDefault(z.object({
     prompts: booleanFromEnv.default(true),
     resources: booleanFromEnv.default(true),
-    sampling: z.object({
+    sampling: withDefault(z.object({
       enabled: booleanFromEnv.default(true),
       withTools: booleanFromEnv.default(true)
-    }).default({}),
-    elicitation: z.object({
+    })),
+    elicitation: withDefault(z.object({
       form: booleanFromEnv.default(true),
       url: booleanFromEnv.default(true)
-    }).default({})
-  }).default({}),
-  transport: z.object({
-    streamableHttpEnabled: booleanFromEnv.default(true)
-  }).default({})
+    }))
+  })),
+  transport: withDefault(z.object({
+    streamableHttpEnabled: booleanFromEnv.default(true),
+    legacySseEnabled: booleanFromEnv.default(true)
+  }))
 });
 
 /**
@@ -203,22 +210,22 @@ const RoutingSchema = z.object({
   minConfidenceThreshold: floatFromEnv(0.5),
   maxEnergyThreshold: floatFromEnv(0.8),
   intentDetectionEnabled: booleanFromEnv.default(true)
-}).default({});
+});
 
 /**
  * Full configuration schema
  */
 const ConfigSchema = z.object({
-  server: ServerSchema.default({}),
-  openrouter: OpenRouterSchema.default({}),
-  database: DatabaseSchema.default({}),
-  indexer: IndexerSchema.default({}),
-  jobs: JobsSchema.default({}),
-  logging: LoggingSchema.default({}),
-  caching: CachingSchema.default({}),
-  core: CoreSchema.default({}),
-  mcp: MCPSchema.default({}),
-  routing: RoutingSchema.default({})
+  server: withDefault(ServerSchema),
+  openrouter: withDefault(OpenRouterSchema),
+  database: withDefault(DatabaseSchema),
+  indexer: withDefault(IndexerSchema),
+  jobs: withDefault(JobsSchema),
+  logging: withDefault(LoggingSchema),
+  caching: withDefault(CachingSchema),
+  core: withDefault(CoreSchema),
+  mcp: withDefault(MCPSchema),
+  routing: withDefault(RoutingSchema)
 });
 
 /**

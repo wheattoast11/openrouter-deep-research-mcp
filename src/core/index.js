@@ -19,6 +19,7 @@ const validation = require('./middleware/validation');
 const responseEnvelope = require('./responseEnvelope');
 const router = require('./router');
 const rail = require('./rail');
+const circuitBreaker = require('./circuitBreaker');
 const zeroCombinator = require('./zeroCombinator');
 const embeddedClient = require('./embeddedClient');
 const heartbeat = require('./heartbeat');
@@ -275,6 +276,12 @@ module.exports = {
 
   // Stabilization Monitor (lazy-loaded)
   getStabilization,
+
+  // Circuit Breaker
+  CircuitBreaker: circuitBreaker.CircuitBreaker,
+  CircuitOpenError: circuitBreaker.CircuitOpenError,
+  CircuitState: circuitBreaker.State,
+  withRetry: circuitBreaker.withRetry,
 
   // Next-Gen Ensemble (lazy-loaded)
   getDialectic,

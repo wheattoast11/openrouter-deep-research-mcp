@@ -1,4 +1,4 @@
-# Agent Zero: Isomorphic Protocol Bridge (v1.16.0)
+# Agent Zero: Isomorphic Protocol Bridge (v2.0.0)
 
 Grounding: 2026-02-06
 
@@ -11,7 +11,7 @@ You are Agent Zero, the L5 Protocol Bridge for terminals.tech. Your mission is t
 - **Cognitive Context**: Research loops are steered by `L4 CognitiveContext` and `HVM` combinator bias.
 - **Persistent Storage**: Data persists to `~/Library/Application Support/zero` by default.
 
-## Database Persistence (v1.16.0+)
+## Database Persistence (v2.0.0+)
 
 Research reports, jobs, and knowledge graph now persist across CLI sessions by default.
 
@@ -404,7 +404,7 @@ search {"q": "MCP protocol", "k": 5, "scope": "docs"}
 
 ## Model Configuration
 
-### Available Model Tiers (v1.16.0)
+### Available Model Tiers (v2.0.0)
 ```javascript
 // From src/config/constants.js - embedding-routed selection
 HIGH_COST: ["anthropic/claude-sonnet-4.5", "anthropic/claude-opus-4.6", "openai/gpt-5.2-chat", "openai/gpt-5.3-codex", "google/gemini-3-pro-preview", "qwen/qwen3-coder"]
@@ -495,10 +495,13 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 1.16.0
-- **MCP SDK**: 1.26.0
-- **MCP SDK v2**: Expected Q1 2026 - migration prep needed
+- **Server Version**: 2.0.0
+- **MCP SDK**: 1.27.1
+- **Zod**: 4.x (upgraded from 3.x)
+- **Express**: 5.x (upgraded from 4.x)
 - **MCP Spec**: 2025-11-25 (stable, under AAIF/Linux Foundation governance)
+- **Transport**: Streamable HTTP (primary), SSE (deprecated legacy)
+- **Circuit Breaker**: Integrated for model API fault tolerance
 - **Protocol Features**: Task Protocol (SEP-1686), Sampling (SEP-1577), Elicitation (SEP-1036), MCP Apps (SEP-1865), Enterprise Auth (SEP-990), Client Metadata (SEP-991)
 - **Zero Protocol**: Self-referential MCP architecture (`zero://` URI scheme, dual-role nodes)
 - **Package Integrations**: @terminals-tech/embeddings, @terminals-tech/graph, @terminals-tech/core
@@ -743,16 +746,19 @@ window.parent.postMessage({
 
 ## Modernization Roadmap (Grounded: 2026-02-06)
 
-### Milestone 1: SDK Upgrade (Target: Feb 2026)
-- [x] Upgrade `@modelcontextprotocol/sdk` from 1.24.3 → 1.26.0
+### Milestone 1: SDK Upgrade (Complete)
+- [x] Upgrade `@modelcontextprotocol/sdk` from 1.24.3 → 1.27.1
 - [x] Address security fix for shared server/transport instances (v1.26.0)
 - [x] Fix ReDoS in UriTemplate regex patterns (v1.25.2 backport)
 - [x] Validate client credentials provider scope support
+- [x] Migrate to registerTool/registerPrompt/registerResource APIs
 
-### Milestone 2: MCP v2 SDK Migration Prep (Target: Q1 2026)
-- [ ] Audit all SDK imports for v2 breaking changes
-- [ ] Track `@modelcontextprotocol/sdk` v2 RC releases
-- [ ] Plan transport layer migration (SSE → Streamable HTTP)
+### Milestone 2: v2.0.0 Breaking Changes (Complete)
+- [x] Zod 3 → 4 migration (z.record() syntax, config schema fixes)
+- [x] Express 4 → 5 (path pattern changes, req.query handling)
+- [x] SSE transport deprecated, Streamable HTTP is primary
+- [x] Circuit breaker implemented for model API fault tolerance
+- [ ] Track `@modelcontextprotocol/sdk` v2 RC releases (split packages not yet on npm)
 - [ ] Test against v2 RC when available
 
 ### Milestone 3: Model Roster Refresh (Target: Feb 2026)
@@ -768,7 +774,7 @@ window.parent.postMessage({
 - [ ] Evaluate industry-specific protocol extensions (if applicable)
 
 ### Milestone 5: Public Package Polish (Target: Q1 2026)
-- [ ] Publish `@terminals-tech/openrouter-agents@1.16.0` with SDK 1.26.0
+- [ ] Publish `@terminals-tech/openrouter-agents@2.0.0` with SDK 1.27.1
 - [ ] Update README model lists and version references
 - [ ] Ensure postinstall verification works on Node 25.x
 - [x] Clean up duplicate files from git status (` 2` suffixed files)

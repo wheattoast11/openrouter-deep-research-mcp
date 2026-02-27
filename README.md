@@ -1,8 +1,7 @@
 # OpenRouter Agents MCP Server
 
 [![npm](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents)
-[![MCP Stable](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://spec.modelcontextprotocol.io/specification/2025-06-18/)
-[![MCP Draft](https://img.shields.io/badge/MCP-2025--11--25%20Draft-brightgreen)](docs/MCP-COMPLIANCE-REPORT.md)
+[![MCP Stable](https://img.shields.io/badge/MCP-2025--11--25%20Stable-blue)](https://spec.modelcontextprotocol.io/specification/2025-11-25/)
 [![GitHub](https://img.shields.io/github/stars/terminals-tech/openrouter-agents?style=social)](https://github.com/terminals-tech/openrouter-agents)
 
 Production MCP server for multi-agent AI research. Plan, parallelize, synthesize.
@@ -18,14 +17,17 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## What's New (v1.15.0)
+## What's New (v2.0.0)
 
-- **Persistent storage by default** - Research reports, jobs, and knowledge graph now persist across sessions
-- **Provider telemetry** - Model-level health, latency, error categories, fallback tracking
-- **Graceful degradation** - Key rotation cooldowns + streaming fallback on failures
-- **Provider health tool** - `get_provider_health` + provider summary in `get_server_status`
+- **MCP SDK 1.27.1** — registerTool/registerPrompt/registerResource APIs, security fixes
+- **Zod 4** — Upgraded from Zod 3; z.record() syntax, config schema fixes
+- **Express 5** — Upgraded from Express 4; modern path patterns, req.query handling
+- **Streamable HTTP** — Primary transport (SSE deprecated as legacy fallback)
+- **Circuit breaker** — Model API fault tolerance with configurable thresholds
+- **Embedding-based model routing** — Local vector similarity for model selection (no LLM call)
+- **Persistent storage** — Reports, jobs, knowledge graph persist across sessions by default
 
-> **macOS/Node 25 Note**: A cosmetic `libc++abi: mutex lock failed` message may appear on shutdown. This is harmless - data is checkpointed before shutdown. Set `DB_AUTO_HEAL=true` for in-memory mode (no persistence, no message).
+> **macOS/Node 25 Note**: A cosmetic `libc++abi: mutex lock failed` message may appear on shutdown. This is harmless — data is checkpointed before shutdown. Set `DB_AUTO_HEAL=true` for in-memory mode (no persistence, no message).
 
 [Full Changelog](docs/CHANGELOG.md) | [Extensions Guide](docs/EXTENSIONS.md) | [MCP Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 
@@ -40,7 +42,7 @@ Set `OPENROUTER_API_KEY` in your environment, then configure via `.env` or `.mcp
 | `OPENROUTER_KEY_COOLDOWN_MS` | `5000` | Base cooldown per key after failures |
 | `SERVER_PORT` | `3002` | HTTP server port |
 | `MODE` | `ALL` | `AGENT`, `MANUAL`, or `ALL` |
-| `PGLITE_DATA_DIR` | `./researchAgentDB` | Database location |
+| `EMBEDDING_ROUTING_ENABLED` | `true` | Enable embedding-based model routing |
 | `INDEXER_ENABLED` | `true` | Enable knowledge indexing |
 
 [Full ENV Reference](docs/ENV-REFERENCE.md)
@@ -73,7 +75,7 @@ Set `OPENROUTER_API_KEY` in your environment, then configure via `.env` or `.mcp
 | STDIO | (default) | MCP clients (Claude, Jan AI, Continue) |
 | HTTP | `--http` | Web apps, shared server |
 
-STDIO is the default transport per [MCP spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports). Use `--http` explicitly for HTTP mode.
+STDIO is the default transport per [MCP spec](https://spec.modelcontextprotocol.io/specification/2025-11-25/basic/transports). Use `--http` explicitly for HTTP mode.
 
 ### Client-Specific Setup
 
@@ -131,7 +133,31 @@ Standard MCP config - STDIO is default, no flags needed:
 | Core Research Tools | ✓ | ✓ |
 | Knowledge Base | ✓ | ✓ |
 | Session/Graph Tools | ✓ | ✓ |
+| Rail Protocol Tools | ✓ | ✓ |
 | Slash Commands | - | ✓ |
+
+## Models (v2.0.0)
+
+### High-Cost Tier
+| Model | Domains |
+|-------|---------|
+| `anthropic/claude-sonnet-4.5` | reasoning, technical, general, creative |
+| `anthropic/claude-opus-4.6` | reasoning, technical, general, creative |
+| `openai/gpt-5.2-chat` | reasoning, technical, general |
+| `openai/gpt-5.3-codex` | coding, technical, reasoning |
+| `google/gemini-3-pro-preview` | reasoning, technical, general |
+| `qwen/qwen3-coder` | coding, editing, technical |
+
+### Low-Cost Tier
+| Model | Domains |
+|-------|---------|
+| `google/gemini-3-flash-preview` | coding, editing, technical |
+| `anthropic/claude-haiku-4.5` | general, technical, reasoning |
+| `deepseek/deepseek-chat-v3.1` | general, reasoning, technical, coding |
+| `deepseek/deepseek-v3.2` | general, reasoning, technical, coding |
+| `openai/gpt-oss-120b` | general, reasoning, search |
+
+Models are selected via embedding-based routing — query embeddings are matched to model domain profiles without an LLM call.
 
 ## Tools
 
@@ -173,6 +199,18 @@ Standard MCP config - STDIO is default, no flags needed:
 </details>
 
 <details>
+<summary><strong>Rail Protocol</strong></summary>
+
+| Tool | Description |
+|------|-------------|
+| `list_rails` | List rails, tunnels, routes, consensus |
+| `explain_rail` | Detailed rail/tunnel config |
+| `list_routes` | All defined routes |
+| `list_tunnels` | Active agent-to-agent tunnels |
+| `list_consensus` | Streaming consensus sessions |
+</details>
+
+<details>
 <summary><strong>Utility</strong></summary>
 
 | Tool | Description |
@@ -187,16 +225,20 @@ Standard MCP config - STDIO is default, no flags needed:
 
 ## MCP Compliance
 
-| Feature | Spec | Status |
-|---------|------|--------|
+Compliant with [MCP Specification 2025-11-25](https://spec.modelcontextprotocol.io/specification/2025-11-25/) (stable, AAIF/Linux Foundation governance).
+
+| Feature | SEP | Status |
+|---------|-----|--------|
 | JSON-RPC 2.0 | Core | Compliant |
-| Tools/Resources/Prompts | 2025-06-18 | Compliant |
-| Task Protocol (SEP-1686) | Draft | Implemented |
-| Sampling (SEP-1577) | Draft | Implemented |
-| Elicitation (SEP-1036) | Draft | Implemented |
-| MCP Apps (SEP-1865) | Draft | Implemented |
-| Enterprise Auth (SEP-990) | Draft | Implemented |
-| Client Metadata (SEP-991) | Draft | Implemented |
+| Tools/Resources/Prompts | Core | Compliant |
+| Task Protocol | SEP-1686 | Compliant |
+| Sampling with Tools | SEP-1577 | Compliant |
+| Elicitation | SEP-1036 | Compliant |
+| MCP Apps | SEP-1865 | Compliant |
+| Enterprise Auth | SEP-990 | Compliant |
+| Client Metadata | SEP-991 | Compliant |
+
+[Full Compliance Report](docs/MCP-COMPLIANCE-REPORT.md)
 
 ## Architecture
 
@@ -205,42 +247,79 @@ User Query
     │
     ▼
 ┌─────────────────┐
-│  Planning Agent │ ─── Decomposes into sub-queries
+│  Planning Agent  │ ─── Decomposes into sub-queries
 └────────┬────────┘
          │
     ┌────┴────┐
     ▼         ▼
 ┌───────┐ ┌───────┐
-│Agent 1│ │Agent N│ ─── Parallel research
+│Agent 1│ │Agent N│ ─── Parallel research (embedding-routed models)
 └───┬───┘ └───┬───┘
     │         │
     ▼         ▼
 ┌─────────────────┐
-│   Synthesizer   │ ─── Consensus + citations
+│   Synthesizer   │ ─── Consensus + citations (Signal protocol)
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│  Knowledge Base │ ─── PGlite + pgvector
+│  Knowledge Base  │ ─── PGlite + pgvector (persistent)
 └─────────────────┘
 ```
+
+## Core Abstractions
+
+| Module | Purpose |
+|--------|---------|
+| **Signal Protocol** | Inter-agent communication with confidence scoring and consensus |
+| **Rail Protocol** | Bidirectional channels with backpressure, provenance, tunnels |
+| **Error Taxonomy** | Deterministic classification with auto-learning and circuit breakers |
+| **Circuit Breaker** | Model API fault tolerance with configurable thresholds and auto-recovery |
+| **Parameter Normalization** | Declarative alias system (`q`→`query`, `cost`→`costPreference`) |
+| **RoleShift Protocol** | Bidirectional server↔client via MCP sampling/elicitation |
+| **Embedding Router** | Local vector-based model selection via `@terminals-tech/embeddings` |
+
+### Circuit Breaker
+
+Protects against cascading model API failures. Configurable via environment:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RAIL_CIRCUIT_BREAKER` | `true` | Enable circuit breaker |
+| `RAIL_CIRCUIT_THRESHOLD` | `5` | Failures before tripping |
+| `RAIL_CIRCUIT_RESET_MS` | `120000` | Recovery timeout (ms) |
+
+States: **closed** (normal) -> **open** (failing, requests rejected) -> **half-open** (testing recovery).
+
+### Transport (v2.0.0)
+
+| Transport | Status | Use Case |
+|-----------|--------|----------|
+| Streamable HTTP | **Primary** | All new integrations |
+| SSE | Deprecated | Legacy compatibility only |
+| STDIO | Default | MCP clients (Claude, Jan AI, Continue) |
 
 ## Links
 
 - **Homepage:** [terminals.tech](https://terminals.tech)
 - **npm:** [@terminals-tech/openrouter-agents](https://www.npmjs.com/package/@terminals-tech/openrouter-agents)
 - **GitHub:** [terminals-tech/openrouter-agents](https://github.com/terminals-tech/openrouter-agents)
-- **Docs:** [CLAUDE.md](CLAUDE.md) | [Tool Patterns](docs/TOOL-PATTERNS.md)
+- **Docs:** [CLAUDE.md](CLAUDE.md) | [Tool Patterns](docs/TOOL-PATTERNS.md) | [Getting Started](docs/GETTING-STARTED.md)
 
-## Publishing
+## Releasing
 
+Releases are automated via [release-please](https://github.com/googleapis/release-please):
+
+1. Push conventional commits to `main` (e.g. `feat:`, `fix:`, `chore:`)
+2. release-please opens a version-bump PR
+3. Merge the PR → GitHub Release created automatically
+4. npm publish triggers on release via CI
+
+Manual publish:
 ```bash
-npm test                           # Run unit tests
-npm version minor                  # Bump version
-git push --follow-tags             # Push with tags
-npm publish --access public        # Publish to npm
+npm test && npm publish --access public
 ```
 
 ---
 
-**Version:** 1.15.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
+**Version:** 2.0.0 | **MCP SDK:** 1.27.1 | **MCP Spec:** 2025-11-25 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT

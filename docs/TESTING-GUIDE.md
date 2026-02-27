@@ -1,20 +1,20 @@
 # Testing Guide: OpenRouter Agents
 
 **Package:** @terminals-tech/openrouter-agents
-**Version:** 1.10.0
-**Date:** December 5, 2025
+**Version:** 2.0.0
+**Date:** February 6, 2026
 
 ---
 
 ## Current Features
 
 This release includes:
-- ✅ MCP SDK 1.21.1 (latest)
+- ✅ MCP SDK 1.26.0 (latest)
 - ✅ Server discovery endpoint (`/.well-known/mcp-server`)
 - ✅ Health monitoring endpoint (`/health`)
 - ✅ Rate limiting (100 req/min per IP)
 - ✅ Request size limits (10MB)
-- ✅ 100% MCP Specification 2025-06-18 compliance
+- ✅ 100% MCP Specification 2025-11-25 compliance
 - ✅ Knowledge Graph tools (traverse, path, clusters, pagerank)
 - ✅ Session time-travel (undo, redo, fork, checkpoint)
 - ✅ MCP Apps with UI resources (SEP-1865)
@@ -89,7 +89,7 @@ curl http://localhost:3002/.well-known/mcp-server | jq
 # {
 #   "name": "openrouter-agents",
 #   "version": "1.10.0",
-#   "specification": "2025-06-18",
+#   "specification": "2025-11-25",
 #   "specificationDraft": "2025-11-25",
 #   "capabilities": { ... },
 #   "transports": [ ... ],
@@ -509,4 +509,4 @@ kill $SERVER_PID
 
 **Happy Testing!** 🚀
 
-This beta release is production-ready and fully compliant with MCP Specification 2025-06-18, with forward compatibility for the November 2025 MCP release.
+This release is production-ready and fully compliant with MCP Specification 2025-11-25 (stable, AAIF/Linux Foundation governance).

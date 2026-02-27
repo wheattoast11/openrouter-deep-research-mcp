@@ -332,7 +332,7 @@ class ToolRegistryBridge extends EventEmitter {
         schema = z.array(itemSchema);
         break;
       case 'object':
-        schema = z.record(z.any());
+        schema = z.record(z.string(), z.any());
         break;
       default:
         schema = z.any();

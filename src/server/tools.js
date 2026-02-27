@@ -373,13 +373,13 @@ const researchSchema = researchSchemaBase
   .describe("Unified research tool. async=true (default) enqueues and returns {job_id}. async=false streams results synchronously like conduct_research. Example: {query: 'What is quantum computing?', costPreference: 'low', async: true}");
 
 // Simplified tools
-const searchSchema = {
+const searchSchema = z.object({
   q: z.string().min(1).optional().describe("Search query (alias for 'query')"),
   query: z.string().min(1).optional().describe("Search query"),
   k: z.number().int().positive().optional().default(10).describe("Number of results"),
   scope: z.enum(['both','reports','docs']).optional().default('both').describe("Search scope"),
   rerank: z.boolean().optional().describe("Enable reranking")
-};
+}).describe("Hybrid BM25+vector search across reports and documents");
 const querySchema = z.object({
   sql: z.string().min(1).describe("SELECT query, e.g. 'SELECT id, query FROM research_reports LIMIT 5'"),
   params: z.array(z.any()).optional().default([]).describe("Bound params, e.g. [1, 'topic'] for $1, $2 placeholders"),
@@ -1776,11 +1776,27 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
     const providerTelemetry = require('../utils/providerTelemetry');
     const providerHealth = providerTelemetry.getSnapshot({ includeModels: false, maxModels: 5 });
 
+    // Circuit breaker status (if wired from mcpServer)
+    let circuitStatus = null;
+    try {
+      const { circuits } = require('./mcpServer');
+      if (circuits) {
+        circuitStatus = {};
+        for (const [name, breaker] of Object.entries(circuits)) {
+          circuitStatus[name] = breaker.getStatus();
+        }
+      }
+    } catch (_) {
+      // circuits not yet exported or circular dep - skip
+    }
+
     const status = {
       providers: providerHealth.providers,
       database: { initialized: dbInitialized, dbPathInfo },
       embedder: { ready: embedderReady },
       jobs,
+      // Circuit breaker health
+      circuits: circuitStatus || { status: 'unavailable' },
       // Agent Zero Observation Loop - Convergence tracking
       convergence: convergence ? {
         windowHours: convergence.windowHours,
@@ -2341,7 +2357,7 @@ const agentSchema = z.object({
   // Tool chaining: execute multiple tools in sequence
   chain: z.array(z.object({
     tool: z.string(),
-    params: z.record(z.any()).optional()
+    params: z.record(z.string(), z.any()).optional()
   })).optional(),
   _requestId: z.string().optional()
 }).describe("Single entrypoint agent tool. Routes to research, follow_up, retrieve/query, or chain. Examples: {query:'AI safety'} for research, {action:'retrieve', query:'topic', k:5} for search, {chain:[{tool:'search',params:{q:'topic'}},{tool:'get_report',params:{reportId:'1'}}]} for chaining. Max depth: " + (parseInt(process.env.MAX_TOOL_DEPTH,10) ?? 3) + ".");

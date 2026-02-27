@@ -212,7 +212,8 @@ config.modes = {
 
 // MCP transport preferences
 config.mcp.transport = {
-  streamableHttpEnabled: process.env.MCP_STREAMABLE_HTTP_ENABLED === 'false' ? false : true
+  streamableHttpEnabled: true, // Always enabled — primary transport in v2.0.0
+  legacySseEnabled: process.env.MCP_LEGACY_SSE_ENABLED === 'false' ? false : true
 };
 
 // Prompt strategy configuration
@@ -429,9 +430,8 @@ config.core = {
 // Version information
 config.version = pkg.version;
 config.mcpSpec = {
-  stable: '2025-06-18',
-  draft: '2025-11-25',
-  // All 8 SEPs from MCP 2025-11-25 draft + RoleShift
+  stable: '2025-11-25',
+  // All SEPs from MCP 2025-11-25 stable (AAIF/Linux Foundation governance)
   features: [
     'SEP-1686',  // Task Protocol
     'SEP-1577',  // Sampling with Tools

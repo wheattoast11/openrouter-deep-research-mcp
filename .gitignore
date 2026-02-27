@@ -52,6 +52,7 @@ coverage/
 
 # Database
 researchAgentDB/
+.zero/
 
 # Misc
 .cache/

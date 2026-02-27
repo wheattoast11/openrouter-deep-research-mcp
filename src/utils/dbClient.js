@@ -547,9 +547,9 @@ async function _doInitDB() {
             event_type TEXT NOT NULL,
             payload JSONB,
             shape_hash TEXT
-          );
-          CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);
+          )
         `);
+        await db.query(`CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id)`);
         await db.query(`
           CREATE TABLE IF NOT EXISTS hvm_reductions (
             id SERIAL PRIMARY KEY,
@@ -582,9 +582,9 @@ async function _doInitDB() {
             error_code TEXT,
             request_id TEXT,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-          );
-          CREATE INDEX IF NOT EXISTS idx_tool_obs_name ON tool_observations (tool_name);
+          )
         `);
+        await db.query(`CREATE INDEX IF NOT EXISTS idx_tool_obs_name ON tool_observations (tool_name)`);
         await db.query(`
           CREATE TABLE IF NOT EXISTS providers (
             id TEXT PRIMARY KEY,
@@ -608,9 +608,9 @@ async function _doInitDB() {
             provider_id TEXT,
             lineage JSONB DEFAULT '[]',
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-          );
-          CREATE INDEX IF NOT EXISTS idx_graph_nodes_provider ON graph_nodes(provider_id);
+          )
         `);
+        await db.query(`CREATE INDEX IF NOT EXISTS idx_graph_nodes_provider ON graph_nodes(provider_id)`);
         await db.query(`
           CREATE TABLE IF NOT EXISTS graph_edges (
             id SERIAL PRIMARY KEY,
@@ -621,10 +621,10 @@ async function _doInitDB() {
             metadata JSONB,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(source_id, target_id, edge_type)
-          );
-          CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
-          CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
+          )
         `);
+        await db.query(`CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id)`);
+        await db.query(`CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id)`);
 
         initState = InitState.INITIALIZED;
         dbInitialized = true;

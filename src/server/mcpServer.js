@@ -19,6 +19,8 @@ else if (process.argv.includes('--setup-claude')) {
 
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+// Legacy SSE transport — kept for backward compatibility, deprecated in v2.0.0
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
@@ -138,6 +140,14 @@ const { getSessionManager, EventTypes } = require('../utils/sessionStore');
 // Zero Protocol - Self-referential MCP architecture
 const { DualRoleNode, ConnectionState, createZeroNode } = require('../core/dualRoleNode');
 const { ZeroUri, ZeroUriRouter, self: zeroSelf, parse: parseZeroUri, isZeroUri } = require('../core/zeroUri');
+
+// Circuit Breaker - production fail-fast for external services
+const { CircuitBreaker, withRetry } = require('../core/circuitBreaker');
+const circuits = {
+  openrouter: new CircuitBreaker({ name: 'openrouter', failureThreshold: 3, resetTimeoutMs: 60000 }),
+  database: new CircuitBreaker({ name: 'database', failureThreshold: 3, resetTimeoutMs: 30000 }),
+  embedder: new CircuitBreaker({ name: 'embedder', failureThreshold: 5, resetTimeoutMs: 45000 })
+};
 
 // Consolidated handlers (feature-flagged via CORE_HANDLERS_ENABLED)
 const handlers = config.core?.handlers?.enabled ? require('./handlers') : null;
@@ -506,10 +516,14 @@ function shouldExpose(name) {
 }
 function register(name, schema, handler) {
   if (shouldExpose(name)) {
-    // Use registerTool with config object to properly pass ZodEffects schemas
-    // The .tool() method only accepts ZodRawShape, not full Zod schemas with transforms
-    const description = schema?.description || schema?._def?.description || '';
-    server.registerTool(name, { inputSchema: schema, description }, handler);
+    // Ensure inputSchema is a ZodObject/ZodType for SDK v2 compatibility.
+    // Raw shapes like { key: z.string() } must be wrapped in z.object().
+    let inputSchema = schema;
+    if (schema && typeof schema === 'object' && !(schema instanceof z.ZodType)) {
+      inputSchema = z.object(schema);
+    }
+    const description = inputSchema?.description || inputSchema?._def?.description || '';
+    server.registerTool(name, { inputSchema, description }, handler);
   }
 }
 
@@ -775,87 +789,79 @@ function normalizeParamsForTool(toolName, params) {
   }
 }
 
-// Register prompts using latest MCP spec with proper protocol handlers
+// Register prompts using server.registerPrompt() (MCP SDK v2 pattern)
 if (config.mcp?.features?.prompts) {
-  const prompts = new Map([
-    ['planning_prompt', {
-      name: 'planning_prompt',
+  server.registerPrompt(
+    'planning_prompt',
+    {
       description: 'Generate sophisticated multi-agent research plan using advanced XML tagging and domain-aware query decomposition',
-      arguments: [
-        { name: 'query', description: 'Research query to decompose into specialized sub-queries', required: true },
-        { name: 'domain', description: 'Primary domain: general, technical, reasoning, search, creative', required: false },
-        { name: 'complexity', description: 'Query complexity: simple, moderate, complex', required: false },
-        { name: 'maxAgents', description: 'Maximum number of research agents (1-10)', required: false }
-      ]
-    }],
-    ['synthesis_prompt', {
-      name: 'synthesis_prompt', 
-      description: 'Synthesize ensemble research results with rigorous citation framework and confidence scoring',
-      arguments: [
-        { name: 'query', description: 'Original research query for synthesis context', required: true },
-        { name: 'results', description: 'JSON string of research results to synthesize', required: true },
-        { name: 'outputFormat', description: 'Output format: report, briefing, bullet_points', required: false },
-        { name: 'audienceLevel', description: 'Target audience: beginner, intermediate, expert', required: false }
-      ]
-    }],
-    ['research_workflow_prompt', {
-      name: 'research_workflow_prompt',
-      description: 'Complete research workflow: planning → parallel execution → synthesis with quality controls',
-      arguments: [
-        { name: 'topic', description: 'Research topic or question', required: true },
-        { name: 'costBudget', description: 'Cost preference: low, high', required: false },
-        { name: 'async', description: 'Use async job processing: true, false', required: false }
-      ]
-    }]
-  ]);
+      argsSchema: {
+        query: z.string().describe('Research query to decompose into specialized sub-queries'),
+        domain: z.string().optional().describe('Primary domain: general, technical, reasoning, search, creative'),
+        complexity: z.string().optional().describe('Query complexity: simple, moderate, complex'),
+        maxAgents: z.string().optional().describe('Maximum number of research agents (1-10)')
+      }
+    },
+    async ({ query, domain, complexity, maxAgents }) => {
+      if (!query) {
+        return {
+          messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Please provide a query parameter to generate a research plan.' }] }]
+        };
+      }
+      const p = require('../agents/planningAgent');
+      const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
+      return {
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: planResult }] }]
+      };
+    }
+  );
 
-  server.setPromptRequestHandlers({
-    list: async () => ({ prompts: Array.from(prompts.values()) }),
-    get: async (request) => {
-      const prompt = prompts.get(request.params.name);
-      if (!prompt) throw new Error(`Prompt not found: ${request.params.name}`);
-      
-      const { query, domain, complexity, maxAgents, results, outputFormat, audienceLevel, topic, costBudget, async } = request.params.arguments || {};
-      
-      switch (request.params.name) {
-        case 'planning_prompt':
-          if (!query) {
-            return {
-              description: prompt.description,
-              messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Please provide a query parameter to generate a research plan.' }] }]
-            };
-          }
-    const p = require('../agents/planningAgent');
-          const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
-          return { 
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: planResult }] }]
-          };
-          
-        case 'synthesis_prompt':
-    const c = require('../agents/contextAgent');
-          let parsedResults = [];
-          try {
-            parsedResults = results ? JSON.parse(results) : [];
-          } catch (e) {
-            parsedResults = [];
-          }
-          let synthesisResult = '';
-          for await (const ch of c.contextualizeResultsStream(query, parsedResults, [], { 
-            includeSources: true, 
-            outputFormat: outputFormat || 'report',
-            audienceLevel: audienceLevel || 'intermediate'
-          }, 'prompt')) {
-            if (ch.content) synthesisResult += ch.content;
-          }
-          return { 
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: synthesisResult }] }]
-          };
-          
-        case 'research_workflow_prompt':
-          const safeTopic = topic || '[your_topic]';
-          const workflowGuide = `
+  server.registerPrompt(
+    'synthesis_prompt',
+    {
+      description: 'Synthesize ensemble research results with rigorous citation framework and confidence scoring',
+      argsSchema: {
+        query: z.string().describe('Original research query for synthesis context'),
+        results: z.string().describe('JSON string of research results to synthesize'),
+        outputFormat: z.string().optional().describe('Output format: report, briefing, bullet_points'),
+        audienceLevel: z.string().optional().describe('Target audience: beginner, intermediate, expert')
+      }
+    },
+    async ({ query, results, outputFormat, audienceLevel }) => {
+      const c = require('../agents/contextAgent');
+      let parsedResults = [];
+      try {
+        parsedResults = results ? JSON.parse(results) : [];
+      } catch (e) {
+        parsedResults = [];
+      }
+      let synthesisResult = '';
+      for await (const ch of c.contextualizeResultsStream(query, parsedResults, [], {
+        includeSources: true,
+        outputFormat: outputFormat || 'report',
+        audienceLevel: audienceLevel || 'intermediate'
+      }, 'prompt')) {
+        if (ch.content) synthesisResult += ch.content;
+      }
+      return {
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: synthesisResult }] }]
+      };
+    }
+  );
+
+  server.registerPrompt(
+    'research_workflow_prompt',
+    {
+      description: 'Complete research workflow: planning → parallel execution → synthesis with quality controls',
+      argsSchema: {
+        topic: z.string().describe('Research topic or question'),
+        costBudget: z.string().optional().describe('Cost preference: low, high'),
+        async: z.string().optional().describe('Use async job processing: true, false')
+      }
+    },
+    async ({ topic, costBudget, async: useAsync }) => {
+      const safeTopic = topic || '[your_topic]';
+      const workflowGuide = `
 # Research Workflow for: ${safeTopic}
 
 ## 1. Planning Phase
@@ -864,7 +870,7 @@ planning_prompt { "query": "${safeTopic}", "domain": "auto-detect", "complexity"
 \`\`\`
 
 ## 2. Research Execution
-${async === 'true' ? `
+${useAsync === 'true' ? `
 \`\`\`mcp
 submit_research { "query": "${safeTopic}", "costPreference": "${costBudget || 'low'}" }
 get_job_status { "job_id": "[returned_job_id]" }
@@ -885,83 +891,17 @@ search { "q": "${safeTopic}", "scope": "reports" }
 \`\`\`mcp
 research_follow_up { "originalQuery": "${safeTopic}", "followUpQuestion": "[your_specific_question]" }
 \`\`\`
-          `;
-          return {
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: workflowGuide }] }]
-          };
-          
-        default:
-          throw new Error(`Unknown prompt: ${request.params.name}`);
-      }
+      `;
+      return {
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: workflowGuide }] }]
+      };
     }
-  });
+  );
 }
 
-// Register resources using latest MCP spec with proper protocol handlers and URI templates
+// Register resources using server.registerResource() (MCP SDK v2)
 // Includes MCP Apps (SEP-1865) ui:// resources for autonomous UI surfacing
 if (config.mcp?.features?.resources) {
-  const resources = new Map([
-    // === MCP Apps UI Resources (SEP-1865) ===
-    ['ui://research/viewer', {
-      uri: 'ui://research/viewer',
-      name: 'Research Report Viewer',
-      description: 'Interactive viewer for research reports with citation linking and markdown rendering',
-      mimeType: 'text/html+mcp',
-      linkedTools: ['research', 'get_report', 'research_follow_up']
-    }],
-    ['ui://knowledge/graph', {
-      uri: 'ui://knowledge/graph',
-      name: 'Knowledge Graph Explorer',
-      description: 'Force-directed visualization of the knowledge graph with traversal and clustering',
-      mimeType: 'text/html+mcp',
-      linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank']
-    }],
-    ['ui://timeline/session', {
-      uri: 'ui://timeline/session',
-      name: 'Session Timeline',
-      description: 'Time-travel interface showing session history with undo/redo controls',
-      mimeType: 'text/html+mcp',
-      linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state']
-    }],
-    // === Data Resources ===
-    ['mcp://specs/core', {
-      uri: 'mcp://specs/core',
-      name: 'MCP Core Specification',
-      description: 'Canonical Model Context Protocol specification links and references',
-      mimeType: 'application/json'
-    }],
-    ['mcp://tools/catalog', {
-      uri: 'mcp://tools/catalog',
-      name: 'Available Tools Catalog',
-      description: 'Live MCP tools catalog with lightweight params for client UIs',
-      mimeType: 'application/json'
-    }],
-    ['mcp://patterns/workflows', {
-      uri: 'mcp://patterns/workflows',
-      name: 'Research Workflow Patterns',
-      description: 'Sophisticated tool chaining patterns for multi-agent research orchestration',
-      mimeType: 'application/json'
-    }],
-    ['mcp://examples/multimodal', {
-      uri: 'mcp://examples/multimodal',
-      name: 'Multimodal Research Examples',
-      description: 'Advanced examples for vision-capable research with dynamic model routing',
-      mimeType: 'application/json'
-    }],
-    ['mcp://use-cases/domains', {
-      uri: 'mcp://use-cases/domains',
-      name: 'Domain-Specific Use Cases',
-      description: 'Comprehensive use cases across technical, creative, and analytical domains',
-      mimeType: 'application/json'
-    }],
-    ['mcp://optimization/caching', {
-      uri: 'mcp://optimization/caching',
-      name: 'Caching & Cost Optimization',
-      description: 'Advanced caching strategies and cost-effective model selection patterns',
-      mimeType: 'application/json'
-    }]
-  ]);
 
   // Helper function to generate domain-specific use cases
   const generateDomainUseCases = async () => {
@@ -978,7 +918,7 @@ if (config.mcp?.features?.resources) {
         expected_outcome: "Comprehensive technical analysis with authoritative citations"
       },
       business_intelligence: {
-        domain: "Market Research & Analysis", 
+        domain: "Market Research & Analysis",
         problem: "Gathering competitive intelligence and market trends",
         workflow: {
           step1: { tool: "search_web", params: { query: "AI market trends Q3 2025" } },
@@ -990,7 +930,7 @@ if (config.mcp?.features?.resources) {
       },
       creative_synthesis: {
         domain: "Creative Content & Strategy",
-        problem: "Developing innovative solutions and creative strategies",  
+        problem: "Developing innovative solutions and creative strategies",
         workflow: {
           step1: { tool: "conduct_research", params: { query: "innovative UX design patterns 2025", costPreference: "high" } },
           step2: { tool: "search", params: { q: "UX design", scope: "reports" } },
@@ -1001,182 +941,278 @@ if (config.mcp?.features?.resources) {
     };
   };
 
-  server.setResourceRequestHandlers({
-    list: async () => ({ resources: Array.from(resources.values()) }),
-    read: async (request) => {
-      const uri = request.params.uri;
-      const resource = resources.get(uri);
-      if (!resource) throw new Error(`Resource not found: ${uri}`);
-      
-      let content;
-      switch (uri) {
-        case 'mcp://specs/core':
-          content = {
-            spec: 'https://spec.modelcontextprotocol.io/specification/2025-06-18/',
-            jsonrpc: 'https://www.jsonrpc.org/specification',
-            org: 'https://github.com/modelcontextprotocol',
-            docs: 'https://modelcontextprotocol.io/',
-            sdk: 'https://github.com/modelcontextprotocol/sdk',
-            implementations: {
-              openrouter_agents: 'https://github.com/terminals-tech/openrouter-agents',
-              anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
-            }
-          };
-          break;
-        case 'mcp://tools/catalog':
-          try {
-            const text = await require('./tools').listToolsTool({ limit: 200, semantic: false });
-            content = JSON.parse(text);
-          } catch (_) {
-            content = { tools: [] };
-          }
-          break;
-          
-        case 'mcp://patterns/workflows':
-          content = {
-            basic_patterns: [
-              {
-                name: 'Search → Fetch → Research',
-                steps: ['search_web { query }', 'fetch_url { url }', 'conduct_research { query, textDocuments:[content] }'],
-                use_case: 'Web research with source verification'
-              },
-              {
-                name: 'Knowledge Base Query → Research',
-                steps: ['search { q, scope:"reports" }', 'get_past_research { query }', 'conduct_research { query }'],
-                use_case: 'Building on previous research'
-              },
-              {
-                name: 'Async Research Pipeline',
-                steps: ['submit_research { query }', 'get_job_status { job_id }', 'get_report_content { reportId }'],
-                use_case: 'Long-running comprehensive research'
-              }
-            ],
-            advanced_patterns: [
-              {
-                name: 'Multimodal Research Chain',
-                steps: ['conduct_research { query, images:[...] }', 'research_follow_up { originalQuery, followUpQuestion }'],
-                use_case: 'Vision-assisted analysis with iterative refinement'
-              },
-              {
-                name: 'Cost-Optimized Research',
-                steps: ['list_models', 'conduct_research { query, costPreference:"low" }', 'rate_research_report'],
-                use_case: 'Budget-conscious research with quality feedback'
-              }
-            ]
-          };
-          break;
-          
-        case 'mcp://examples/multimodal':
-          content = {
-            vision_research: {
-              conduct_research: {
-                query: 'Analyze the technical architecture diagram and explain the data flow patterns',
-                images: [{ url: 'data:image/png;base64,...', detail: 'high' }],
-                costPreference: 'low',
-                audienceLevel: 'expert'
-              }
-            },
-            document_analysis: {
-              conduct_research: {
-                query: 'Synthesize key findings from the research papers',
-                textDocuments: [{ name: 'paper1.pdf', content: '...' }],
-                structuredData: [{ name: 'results.csv', type: 'csv', content: 'metric,value\\n...' }]
-              }
-            }
-          };
-          break;
-          
-        case 'mcp://use-cases/domains':
-          content = await generateDomainUseCases();
-          break;
-          
-        case 'mcp://optimization/caching':
-          content = {
-            strategies: {
-              result_caching: {
-                description: 'Cache research results with semantic similarity matching',
-                ttl_seconds: 3600,
-                implementation: 'In-memory NodeCache + PGLite semantic search'
-              },
-              model_routing: {
-                description: 'Route queries to cost-effective models based on complexity',
-                models: {
-                  simple: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder'],
-                  complex: ['x-ai/grok-4', 'morph/morph-v3-large'],
-                  vision: ['z-ai/glm-4.5v', 'google/gemini-3-flash-preview']
-                }
-              },
-              batch_processing: {
-                description: 'Process multiple queries in parallel with bounded concurrency',
-                parallelism: 4,
-                cost_savings: '60-80% through efficient resource utilization'
-              }
-            }
-          };
-          break;
+  // === MCP Apps UI Resources (SEP-1865) ===
 
-        // === MCP Apps UI Resources (SEP-1865) ===
-        case 'ui://research/viewer':
-          // Return HTML template for research report viewer
-          content = generateUITemplate('research-viewer', {
-            title: 'Research Report Viewer',
-            description: 'Interactive research report display with markdown rendering',
-            linkedTools: ['research', 'get_report', 'research_follow_up'],
-            capabilities: ['markdown-rendering', 'citation-linking', 'export-pdf']
-          });
-          return {
-            contents: [{
-              uri: resource.uri,
-              mimeType: 'text/html',
-              text: content
-            }]
-          };
-
-        case 'ui://knowledge/graph':
-          // Return HTML template for knowledge graph explorer
-          content = generateUITemplate('graph-explorer', {
-            title: 'Knowledge Graph Explorer',
-            description: 'Force-directed graph visualization with D3.js',
-            linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank'],
-            capabilities: ['force-directed', 'clustering', 'path-finding', 'pagerank']
-          });
-          return {
-            contents: [{
-              uri: resource.uri,
-              mimeType: 'text/html',
-              text: content
-            }]
-          };
-
-        case 'ui://timeline/session':
-          // Return HTML template for session timeline
-          content = generateUITemplate('timeline', {
-            title: 'Session Timeline',
-            description: 'Time-travel debugging interface for session history',
-            linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state'],
-            capabilities: ['undo-redo', 'time-travel', 'checkpoints', 'forking']
-          });
-          return {
-            contents: [{
-              uri: resource.uri,
-              mimeType: 'text/html',
-              text: content
-            }]
-          };
-
-        default:
-          throw new Error(`Unknown resource: ${uri}`);
-      }
-      
+  server.registerResource(
+    'research-viewer',
+    'ui://research/viewer',
+    {
+      description: 'Interactive viewer for research reports with citation linking and markdown rendering',
+      mimeType: 'text/html+mcp'
+    },
+    async (uri) => {
+      const content = generateUITemplate('research-viewer', {
+        title: 'Research Report Viewer',
+        description: 'Interactive research report display with markdown rendering',
+        linkedTools: ['research', 'get_report', 'research_follow_up'],
+        capabilities: ['markdown-rendering', 'citation-linking', 'export-pdf']
+      });
       return {
         contents: [{
-          uri: resource.uri,
-          mimeType: resource.mimeType,
+          uri: uri.href,
+          mimeType: 'text/html',
+          text: content
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'knowledge-graph',
+    'ui://knowledge/graph',
+    {
+      description: 'Force-directed visualization of the knowledge graph with traversal and clustering',
+      mimeType: 'text/html+mcp'
+    },
+    async (uri) => {
+      const content = generateUITemplate('graph-explorer', {
+        title: 'Knowledge Graph Explorer',
+        description: 'Force-directed graph visualization with D3.js',
+        linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank'],
+        capabilities: ['force-directed', 'clustering', 'path-finding', 'pagerank']
+      });
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'text/html',
+          text: content
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'session-timeline',
+    'ui://timeline/session',
+    {
+      description: 'Time-travel interface showing session history with undo/redo controls',
+      mimeType: 'text/html+mcp'
+    },
+    async (uri) => {
+      const content = generateUITemplate('timeline', {
+        title: 'Session Timeline',
+        description: 'Time-travel debugging interface for session history',
+        linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state'],
+        capabilities: ['undo-redo', 'time-travel', 'checkpoints', 'forking']
+      });
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'text/html',
+          text: content
+        }]
+      };
+    }
+  );
+
+  // === Data Resources ===
+
+  server.registerResource(
+    'mcp-specs-core',
+    'mcp://specs/core',
+    {
+      description: 'Canonical Model Context Protocol specification links and references',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        spec: 'https://spec.modelcontextprotocol.io/specification/2025-06-18/',
+        jsonrpc: 'https://www.jsonrpc.org/specification',
+        org: 'https://github.com/modelcontextprotocol',
+        docs: 'https://modelcontextprotocol.io/',
+        sdk: 'https://github.com/modelcontextprotocol/sdk',
+        implementations: {
+          openrouter_agents: 'https://github.com/terminals-tech/openrouter-agents',
+          anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
+        }
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
           text: JSON.stringify(content, null, 2)
         }]
       };
     }
-  });
+  );
+
+  server.registerResource(
+    'tools-catalog',
+    'mcp://tools/catalog',
+    {
+      description: 'Live MCP tools catalog with lightweight params for client UIs',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      let content;
+      try {
+        const text = await require('./tools').listToolsTool({ limit: 200, semantic: false });
+        content = JSON.parse(text);
+      } catch (_) {
+        content = { tools: [] };
+      }
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'workflow-patterns',
+    'mcp://patterns/workflows',
+    {
+      description: 'Sophisticated tool chaining patterns for multi-agent research orchestration',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        basic_patterns: [
+          {
+            name: 'Search \u2192 Fetch \u2192 Research',
+            steps: ['search_web { query }', 'fetch_url { url }', 'conduct_research { query, textDocuments:[content] }'],
+            use_case: 'Web research with source verification'
+          },
+          {
+            name: 'Knowledge Base Query \u2192 Research',
+            steps: ['search { q, scope:"reports" }', 'get_past_research { query }', 'conduct_research { query }'],
+            use_case: 'Building on previous research'
+          },
+          {
+            name: 'Async Research Pipeline',
+            steps: ['submit_research { query }', 'get_job_status { job_id }', 'get_report_content { reportId }'],
+            use_case: 'Long-running comprehensive research'
+          }
+        ],
+        advanced_patterns: [
+          {
+            name: 'Multimodal Research Chain',
+            steps: ['conduct_research { query, images:[...] }', 'research_follow_up { originalQuery, followUpQuestion }'],
+            use_case: 'Vision-assisted analysis with iterative refinement'
+          },
+          {
+            name: 'Cost-Optimized Research',
+            steps: ['list_models', 'conduct_research { query, costPreference:"low" }', 'rate_research_report'],
+            use_case: 'Budget-conscious research with quality feedback'
+          }
+        ]
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'multimodal-examples',
+    'mcp://examples/multimodal',
+    {
+      description: 'Advanced examples for vision-capable research with dynamic model routing',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        vision_research: {
+          conduct_research: {
+            query: 'Analyze the technical architecture diagram and explain the data flow patterns',
+            images: [{ url: 'data:image/png;base64,...', detail: 'high' }],
+            costPreference: 'low',
+            audienceLevel: 'expert'
+          }
+        },
+        document_analysis: {
+          conduct_research: {
+            query: 'Synthesize key findings from the research papers',
+            textDocuments: [{ name: 'paper1.pdf', content: '...' }],
+            structuredData: [{ name: 'results.csv', type: 'csv', content: 'metric,value\\n...' }]
+          }
+        }
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'domain-use-cases',
+    'mcp://use-cases/domains',
+    {
+      description: 'Comprehensive use cases across technical, creative, and analytical domains',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = await generateDomainUseCases();
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'caching-optimization',
+    'mcp://optimization/caching',
+    {
+      description: 'Advanced caching strategies and cost-effective model selection patterns',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        strategies: {
+          result_caching: {
+            description: 'Cache research results with semantic similarity matching',
+            ttl_seconds: 3600,
+            implementation: 'In-memory NodeCache + PGLite semantic search'
+          },
+          model_routing: {
+            description: 'Route queries to cost-effective models based on complexity',
+            models: {
+              simple: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder'],
+              complex: ['x-ai/grok-4', 'morph/morph-v3-large'],
+              vision: ['z-ai/glm-4.5v', 'google/gemini-3-flash-preview']
+            }
+          },
+          batch_processing: {
+            description: 'Process multiple queries in parallel with bounded concurrency',
+            parallelism: 4,
+            cost_savings: '60-80% through efficient resource utilization'
+          }
+        }
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
 }
 
 // Register tools (minimal unified set)
@@ -1593,7 +1629,7 @@ register("sample_message", {
 // Elicitation Response (SEP-1036)
 register("elicitation_respond", {
   requestId: z.string().describe("Elicitation request ID"),
-  response: z.record(z.any()).describe("User response data")
+  response: z.record(z.string(), z.any()).describe("User response data")
 }, async (p) => {
   try {
     const result = await elicitationHandler.handleResponse(p.requestId, p.response);
@@ -1646,9 +1682,9 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
     return; // Exit after setting up stdio, don't proceed to HTTP setup
   }
 
-  // HTTP/SSE transport: only when --http is explicitly specified
+  // HTTP transport: only when --http is explicitly specified
   {
-  // For HTTP usage, set up Express with SSE and optional Streamable HTTP
+  // For HTTP usage, set up Express with Streamable HTTP (primary) and legacy SSE (deprecated)
     const app = express();
     const port = config.server.port;
   // OAuth2/JWT placeholder: use AUTH_JWKS_URL or fallback to API key until configured
@@ -1740,7 +1776,7 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
     return res.status(403).json({ error: 'Forbidden: Auth failed' });
   };
  
-  logger.info('Starting MCP server with HTTP/SSE transport', { port });
+  logger.info('Starting MCP server with Streamable HTTP transport', { port });
   if (supabaseAuth.isEnabled()) {
     logger.info('Supabase auth enabled (terminals.tech OAuth)', { providers: ['google', 'github'] });
   }
@@ -1753,64 +1789,62 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   } else if (!supabaseAuth.isEnabled()) {
     logger.error('No auth configured. Set SUPABASE_JWT_SECRET or SERVER_API_KEY');
   }
-  
-  // Streamable HTTP transport (preferred) guarded by feature flag
-  if (require('../../config').mcp.transport.streamableHttpEnabled) {
+
+  // Primary transport: Streamable HTTP (MCP SDK v2 compatible)
+  app.all('/mcp', authenticate, async (req, res) => {
     try {
-      const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-      app.all('/mcp', authenticate, async (req, res) => {
-        const transport = new StreamableHTTPServerTransport({
-          enableDnsRebindingProtection: true,
-          allowedHosts: ['127.0.0.1', 'localhost'],
-          allowedOrigins: ['http://localhost', 'http://127.0.0.1']
-        });
-        res.on('close', () => transport.close());
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => uuidv4(),
+        enableDnsRebindingProtection: true,
+        allowedHosts: ['127.0.0.1', 'localhost'],
+        allowedOrigins: ['http://localhost', 'http://127.0.0.1']
       });
+      res.on('close', () => transport.close());
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
     } catch (e) {
-      logger.warn('StreamableHTTP transport not available', { error: e.message });
+      logger.error('Streamable HTTP transport error', { error: e.message });
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Transport error' });
+      }
     }
-  }
+  });
 
-   // Endpoint for SSE - Apply authentication middleware
-   // Endpoint for SSE - Apply authentication middleware
+   // Legacy SSE transport — deprecated, kept for backward compatibility
+   // Clients should migrate to POST /mcp (Streamable HTTP)
    app.get('/sse', authenticate, async (req, res) => {
-     const connectionId = uuidv4(); // Generate a unique ID for this connection
-     logger.debug('New SSE connection established', { connectionId });
+     logger.warn('SSE transport is deprecated — migrate to Streamable HTTP at /mcp');
+     const connectionId = uuidv4();
 
-     // Set headers for SSE
+     res.setHeader('X-Deprecated', 'SSE transport is deprecated. Use /mcp endpoint instead.');
      res.writeHead(200, {
        'Content-Type': 'text/event-stream',
        'Cache-Control': 'no-cache',
        'Connection': 'keep-alive',
      });
 
-     const transport = new SSEServerTransport('/messages', res); // Pass the response object
-     sseConnections.set(connectionId, transport); // Store transport keyed by ID
-     lastSseTransport = transport; // Keep track of the last one for the simple POST handler
+     const transport = new SSEServerTransport('/messages', res);
+     sseConnections.set(connectionId, transport);
+     lastSseTransport = transport;
 
      try {
-       await server.connect(transport); // Connect the server to this specific transport
-       logger.debug('MCP Server connected to SSE transport', { connectionId });
+       await server.connect(transport);
+       logger.debug('MCP Server connected to legacy SSE transport', { connectionId });
      } catch (error) {
        logger.error('Error connecting MCP Server to SSE transport', { connectionId, error });
-       sseConnections.delete(connectionId); // Clean up on connection error
+       sseConnections.delete(connectionId);
        if (!res.writableEnded) {
          res.end();
        }
-       return; // Stop further processing for this request
+       return;
      }
 
-     // Handle client disconnect
      req.on('close', () => {
        logger.debug('SSE connection closed', { connectionId });
        sseConnections.delete(connectionId);
        if (lastSseTransport === transport) {
-         lastSseTransport = null; // Clear if it was the last one
+         lastSseTransport = null;
        }
-       // Optionally notify the server instance if needed, though transport might handle this
-       // server.disconnect(transport); // If SDK supports targeted disconnect
      });
    });
 
@@ -2369,10 +2403,10 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
      }
    });
 
-  // Endpoint for messages with per-connection routing and authentication
-  // Supports both legacy (no connectionId) and new path/query param routing
+  // Legacy /messages endpoint for SSE transport — deprecated in v2.0.0
+  // New clients should use POST /mcp (Streamable HTTP)
   app.post(['/messages', '/messages/:connectionId'], authenticate, express.json(), (req, res) => {
-    // Prefer explicit connectionId via route param or query
+    res.setHeader('X-Deprecated', 'Use /mcp endpoint instead. SSE transport is deprecated.');
     const routeId = req.params.connectionId;
     const queryId = req.query.connectionId;
     const connectionId = routeId || queryId || null;
@@ -2383,14 +2417,13 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         logger.warn('POST /messages for unknown connectionId', { connectionId });
         return res.status(404).json({ error: 'Unknown connectionId' });
       }
-      logger.debug('Routing POST /messages', { connectionId });
+      logger.debug('Routing POST /messages (legacy SSE)', { connectionId });
       return transport.handlePostMessage(req, res);
     }
 
-    // Legacy behavior: fall back to last transport if no connectionId provided
     if (!lastSseTransport) {
       logger.warn('POST /messages without connectionId and no active SSE transport');
-      return res.status(500).json({ error: 'No active SSE transport available' });
+      return res.status(500).json({ error: 'No active SSE transport. Use /mcp endpoint instead.' });
     }
     logger.debug('Handling legacy POST /messages via last active SSE transport');
     return lastSseTransport.handlePostMessage(req, res);
@@ -2415,7 +2448,7 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
    });
 
    httpServer.on('listening', () => {
-     logger.info('MCP server listening', { port, transport: 'HTTP' });
+     logger.info('MCP server listening', { port, transport: 'Streamable HTTP', legacySse: 'deprecated' });
    });
   } // Close the block for HTTP setup
  };
@@ -2662,5 +2695,7 @@ function stopJobWorker() {
 
   module.exports.stopJobWorker = stopJobWorker;
   module.exports.startServer = startServer;
+  module.exports.circuits = circuits;
+  module.exports.withRetry = withRetry;
 
 } // Close else block for --setup-claude check
