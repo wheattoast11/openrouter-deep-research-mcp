@@ -804,7 +804,39 @@ IMPORTANT: If the web results contradict your training data, TRUST THE WEB RESUL
     const workers = Array.from({ length: Math.min(parallelism, queries.length) }, () => worker());
     await Promise.all(workers);
 
-    const flatResults = results.filter(r => r !== null).flat();
+    // Stamp per-sub-query consensus onto individual results before flattening
+    const consensusDetails = [];
+    const nonNullResults = results.filter(r => r !== null);
+    for (const subQueryResults of nonNullResults) {
+      if (Array.isArray(subQueryResults) && subQueryResults._consensus) {
+        const c = subQueryResults._consensus;
+        const detail = { state: c.state, agreement: c.agreement, confidence: c.confidence };
+        consensusDetails.push(detail);
+        for (const item of subQueryResults) {
+          item._subQueryConsensus = detail;
+        }
+      }
+    }
+
+    const flatResults = nonNullResults.flat();
+
+    // Compute iteration-level consensus aggregate
+    if (consensusDetails.length > 0) {
+      const convergedCount = consensusDetails.filter(d =>
+        d.state === ConsensusState.CONVERGED || d.state === ConsensusState.PHASE_LOCKED
+      ).length;
+      const divergedCount = consensusDetails.filter(d => d.state === ConsensusState.DIVERGED).length;
+      flatResults._iterationConsensus = {
+        subQueryCount: consensusDetails.length,
+        avgAgreement: consensusDetails.reduce((s, d) => s + (d.agreement || 0), 0) / consensusDetails.length,
+        avgConfidence: consensusDetails.reduce((s, d) => s + (d.confidence || 0), 0) / consensusDetails.length,
+        convergedCount,
+        divergedCount,
+        states: consensusDetails.map(d => d.state),
+        details: consensusDetails
+      };
+    }
+
     const duration = Date.now() - startTime;
     const successfulTasks = flatResults.filter(r => !r.error).length;
     const failedTasks = flatResults.length - successfulTasks;

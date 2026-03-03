@@ -711,6 +711,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   let allResearchResults = [];
   let allSignals = []; // Collect signals from ensemble for verification
   let allTokens = []; // Rail Protocol: Collect tokens for provenance tracking
+  let allConsensusSnapshots = []; // Consensus snapshots per iteration
+  let tiebreakerUsed = false; // Divergence tiebreaker: extend once only
+  let earlyTermination = false; // Consensus-driven early exit
   let savedReportId = null;
 
   logger.info('Starting iterative research', { requestId, query: safeSubstring(query, 0, 50), maxIterations: MAX_ITERATIONS });
@@ -981,6 +984,41 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         });
       }
 
+      // Consensus-driven loop control
+      const iterConsensus = currentResearchResults?._iterationConsensus;
+      if (iterConsensus) {
+        allConsensusSnapshots.push({ iteration: currentIteration, ...iterConsensus });
+
+        const minAgreement = config.core?.rail?.consensus?.minAgreement ?? 0.6;
+        const convergedRatio = iterConsensus.convergedCount / iterConsensus.subQueryCount;
+        const divergedRatio = iterConsensus.divergedCount / iterConsensus.subQueryCount;
+
+        // Early termination: >=50% converged/phase-locked AND avg agreement meets threshold
+        if (convergedRatio >= 0.5 && iterConsensus.avgAgreement >= minAgreement) {
+          logger.info('Consensus early termination', {
+            requestId, iteration: currentIteration,
+            convergedRatio: convergedRatio.toFixed(2),
+            avgAgreement: iterConsensus.avgAgreement.toFixed(2)
+          });
+          earlyTermination = true;
+          break;
+        }
+
+        // Divergence tiebreaker: >=50% diverged → extend MAX_ITERATIONS by 1 (once)
+        if (divergedRatio >= 0.5 && !tiebreakerUsed) {
+          const cap = (config.models.maxResearchIterations || 2) + 2;
+          if (MAX_ITERATIONS < cap) {
+            MAX_ITERATIONS++;
+            tiebreakerUsed = true;
+            logger.info('Divergence tiebreaker: extending iterations', {
+              requestId, iteration: currentIteration,
+              divergedRatio: divergedRatio.toFixed(2),
+              newMaxIterations: MAX_ITERATIONS
+            });
+          }
+        }
+      }
+
       previousResultsForRefinement = currentResearchResults;
       currentIteration++;
     } // End of while loop
@@ -1011,15 +1049,16 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         query,
         allResearchResults,
         allAgentQueries, // Pass the list of planned agent queries
-        { 
-          audienceLevel, 
-          outputFormat, 
-          includeSources, 
-          maxLength, 
-          images, 
-          documents: textDocuments, 
+        {
+          audienceLevel,
+          outputFormat,
+          includeSources,
+          maxLength,
+          images,
+          documents: textDocuments,
           structuredData,
-          inputEmbeddings // Pass input embeddings
+          inputEmbeddings, // Pass input embeddings
+          consensusData: allConsensusSnapshots.length > 0 ? allConsensusSnapshots : null
         },
         requestId, // Pass requestId to context agent
         clientContext
@@ -1086,11 +1125,12 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
           usageAgg.totals.prompt_tokens += pt; usageAgg.totals.completion_tokens += ct; usageAgg.totals.total_tokens += tt;
         };
         usageAgg.planning.forEach(add); usageAgg.synthesis.forEach(add); usageAgg.agents.forEach(a=>add(a.usage));
+        const lastSnapshot = allConsensusSnapshots[allConsensusSnapshots.length - 1];
         const researchMetadata = {
-        durationMs: Date.now() - overallStartTime,
-        iterations: currentIteration - 1,
-        totalSubQueries: allAgentQueries.length,
-          requestId: requestId, // Store requestId with metadata
+          durationMs: Date.now() - overallStartTime,
+          iterations: currentIteration - 1,
+          totalSubQueries: allAgentQueries.length,
+          requestId: requestId,
           usage: usageAgg,
           signalSummary: {
             count: allSignals.length,
@@ -1098,6 +1138,12 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
             avgConfidence: allSignals.length > 0
               ? allSignals.reduce((sum, s) => sum + s.confidence, 0) / allSignals.length
               : 0
+          },
+          convergence: {
+            finalState: lastSnapshot?.states || [],
+            history: allConsensusSnapshots,
+            earlyTermination,
+            tiebreakerUsed
           }
         };
 

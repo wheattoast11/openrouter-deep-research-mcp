@@ -175,7 +175,8 @@ class ContextAgent {
       images = null, 
       documents = null, // Renamed from textDocuments for consistency
       structuredData = null,
-      inputEmbeddings = null // Add inputEmbeddings
+      inputEmbeddings = null, // Add inputEmbeddings
+      consensusData = null // Iteration consensus snapshots
     } = options;
 
     logger.info('Starting contextualization', {
@@ -359,12 +360,22 @@ ${localKnowledgeContext}
        embeddingContext = `\n\nNOTE: Semantic embeddings were generated for the provided documents/data, indicating their potential relevance. Consider this semantic context during synthesis.`;
     }
 
+    // Build consensus context for synthesis weighting
+    let consensusContext = '';
+    if (consensusData && consensusData.length > 0) {
+      const last = consensusData[consensusData.length - 1];
+      const majorityModels = last.details
+        ?.filter(d => d.state === 'converged' || d.state === 'phase_locked')
+        .map((_, i) => `sub-query ${i + 1}`) || [];
+      consensusContext = `\n\nCONSENSUS METRICS: ${last.subQueryCount} sub-queries, avg agreement ${(last.avgAgreement * 100).toFixed(0)}%, ${last.convergedCount} converged, ${last.divergedCount} diverged.${majorityModels.length > 0 ? ` Converged: ${majorityModels.join(', ')}.` : ''} Weight converged sub-queries higher.`;
+    }
 
     const userPrompt = `
 ORIGINAL RESEARCH QUERY: ${originalQuery}
 ${textDocumentContext}
 ${structuredDataContext}
 ${embeddingContext}
+${consensusContext}
 ${contradictionWarning}
 ${subQuerySummary}ENSEMBLE RESEARCH RESULTS (Grouped by Sub-Query, including status and failures):
 ${truncatedFormattedResults}
