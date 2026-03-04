@@ -120,27 +120,38 @@ class TaskAdapter {
 
   /**
    * Get task by ID
-   * @param {string} taskId - Task ID
+   * @param {string} jobId - Job ID (canonical form, also accepts taskId for backward compat)
    * @returns {Object|null} Task object or null if not found
    */
-  async getTask(taskId) {
-    const job = await dbClient.getJobStatus(taskId);
+  async getTask(jobId) {
+    if (!jobId) {
+      throw new Error('job_id is required');
+    }
+    const job = await dbClient.getJobStatus(jobId);
     if (!job) return null;
     return this.jobToTask(job);
   }
 
   /**
    * Get task result (only available for completed/failed tasks)
-   * @param {string} taskId - Task ID
+   * @param {string} jobId - Job ID (canonical form, also accepts taskId for backward compat)
    * @returns {Object|null} Task result or null if not available
    */
-  async getTaskResult(taskId) {
-    const job = await dbClient.getJobStatus(taskId);
+  async getTaskResult(jobId) {
+    if (!jobId) {
+      throw new Error('job_id is required');
+    }
+    const job = await dbClient.getJobStatus(jobId);
     if (!job) return null;
 
     // Only return result for terminal states
     if (!['succeeded', 'failed', 'canceled'].includes(job.status)) {
-      return null;
+      return {
+        job_id: jobId,
+        status: job.status,
+        message: `Job not complete (status: ${job.status})`,
+        progress: job.progress || 0
+      };
     }
 
     // Parse result if stored as JSON string
@@ -148,24 +159,57 @@ class TaskAdapter {
     if (typeof result === 'string') {
       try {
         result = JSON.parse(result);
-      } catch (_) {}
+      } catch (_) {
+        // Keep as string if not valid JSON
+      }
     }
 
-    return {
-      taskId,
+    // Extract reportId from result if available
+    let reportId = null;
+    if (result) {
+      // Strategy 1: Direct field access
+      reportId = result?.reportId || result?.report_id || result?.id;
+
+      // Strategy 2: Regex extraction from string result
+      if (!reportId && typeof job.result === 'string') {
+        const match = job.result.match(/Report ID:\s*(\d+)/i);
+        if (match) reportId = match[1];
+      }
+    }
+
+    // Wrap result in MCP tool result format with content array
+    const isError = job.status === 'failed';
+    const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+
+    const response = {
+      job_id: jobId,
       status: JOB_STATUS_TO_TASK_STATE[job.status],
-      result: result,
+      result: {
+        content: [{ type: 'text', text: resultText }],
+        isError
+      },
       completedAt: job.finished_at ? new Date(job.finished_at).toISOString() : new Date().toISOString()
     };
+
+    // Add first-class reportId and nextStep if available
+    if (reportId) {
+      response.reportId = reportId;
+      response.nextStep = `get_report({ reportId: "${reportId}" })`;
+    }
+
+    return response;
   }
 
   /**
    * Cancel a task
-   * @param {string} taskId - Task ID
+   * @param {string} jobId - Job ID (canonical form, also accepts taskId for backward compat)
    * @returns {Object} Cancellation result
    */
-  async cancelTask(taskId) {
-    const job = await dbClient.getJobStatus(taskId);
+  async cancelTask(jobId) {
+    if (!jobId) {
+      throw new Error('job_id is required');
+    }
+    const job = await dbClient.getJobStatus(jobId);
     if (!job) {
       return { cancelled: false, error: 'Task not found' };
     }
@@ -175,8 +219,8 @@ class TaskAdapter {
       return { cancelled: false, error: 'Task already in terminal state' };
     }
 
-    await dbClient.cancelJob(taskId);
-    process.stderr.write(`[${new Date().toISOString()}] TaskAdapter: Cancelled task ${taskId}\n`);
+    await dbClient.cancelJob(jobId);
+    process.stderr.write(`[${new Date().toISOString()}] TaskAdapter: Cancelled task ${jobId}\n`);
 
     return { cancelled: true };
   }
@@ -295,6 +339,7 @@ class TaskAdapter {
 
   /**
    * Emit a task notification (for server to send to client)
+   * Uses MCP standard notifications/progress method with taskId as progressToken
    * @param {string} taskId - Task ID
    * @param {string} eventType - Event type
    * @param {Object} payload - Event payload
@@ -302,11 +347,14 @@ class TaskAdapter {
    */
   createTaskNotification(taskId, eventType, payload = {}) {
     return {
-      method: 'notifications/tasks/' + eventType,
+      method: 'notifications/progress',
       params: {
-        taskId,
-        timestamp: new Date().toISOString(),
-        ...payload
+        progressToken: taskId,
+        progress: {
+          eventType,
+          timestamp: new Date().toISOString(),
+          ...payload
+        }
       }
     };
   }

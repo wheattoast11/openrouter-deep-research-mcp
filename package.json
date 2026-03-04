@@ -1,16 +1,23 @@
 {
   "name": "@terminals-tech/openrouter-agents",
-  "version": "1.9.0",
-  "description": "OpenRouter MCP server for research agents",
+  "version": "2.0.0",
+  "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
   "bin": {
-    "openrouter-agents": "src/server/mcpServer.js"
+    "openrouter-agents": "src/server/mcpServer.js",
+    "zero": "bin/zero"
   },
   "scripts": {
     "start": "node src/server/mcpServer.js",
     "dev": "nodemon src/server/mcpServer.js",
     "stdio": "node src/server/mcpServer.js --stdio",
+    "test": "node tests/unit/core.test.js && node tests/unit/config.test.js && node tests/unit/consensus-loop.test.js",
+    "test:integration": "node tests/integration/orchestration/mic-drop.test.js",
+    "test:mic-drop": "DRY_RUN=true node tests/integration/orchestration/mic-drop.test.js",
+    "test:mic-drop:live": "node tests/integration/orchestration/mic-drop.test.js",
+    "bench": "node src/bench/index.js",
     "postinstall": "node scripts/postinstall.js",
+    "prepublishOnly": "npm test",
     "setup-claude": "node scripts/setup-claude-code.js",
     "gen:examples": "node scripts/generate-examples.js",
     "gen:docs": "node scripts/gen-docs.js",
@@ -18,12 +25,16 @@
   },
   "files": [
     "src/",
+    "bin/",
+    "templates/",
     "config.js",
     "scripts/postinstall.js",
     "scripts/setup-claude-code.js",
     ".claude/",
     "CLAUDE.md",
-    "docs/TOOL-PATTERNS.md"
+    "README.md",
+    "LICENSE",
+    "docs/"
   ],
   "publishConfig": {
     "access": "public"
@@ -44,25 +55,32 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.2.17",
-    "@modelcontextprotocol/sdk": "^1.21.1",
+    "@electric-sql/pglite": "^0.3.14",
+    "@inkjs/ui": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@terminals-tech/core": "^0.1.1",
     "@terminals-tech/embeddings": "^0.1.0",
     "@terminals-tech/graph": "^0.1.0",
-    "@terminals-tech/core": "^0.1.1",
     "axios": "^1.6.2",
+    "chalk-animation": "^2.0.3",
     "csv-parse": "^5.6.0",
     "date-fns": "^4.1.0",
     "dotenv": "^16.3.1",
     "eventsource-parser": "1.1.2",
-    "express": "^4.18.2",
+    "express": "^5.2.1",
     "express-rate-limit": "^7.4.1",
     "fast-xml-parser": "^5.0.9",
+    "gradient-string": "^3.0.0",
+    "ink": "^5.1.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
     "jsdom": "^23.0.1",
     "node-cache": "^5.1.2",
     "node-fetch": "^2.7.0",
-    "tar": "^6.2.1",
+    "react": "^18.3.1",
+    "tar": "^7.5.9",
     "uuid": "^13.0.0",
-    "zod": "^3.22.4"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

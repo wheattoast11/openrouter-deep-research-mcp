@@ -1,11 +1,13 @@
 // src/agents/contextAgent.js
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const config = require('../../config');
 const structuredDataParser = require('../utils/structuredDataParser'); // Import parser
 const modelCatalog = require('../utils/modelCatalog'); // Model-aware token limits
 const logger = require('../utils/logger').child('ContextAgent');
 const localKnowledge = require('../utils/localKnowledge'); // Local knowledge for hallucination prevention
 const citationValidator = require('../utils/citationValidator'); // Citation validation
+const providerTelemetry = require('../utils/providerTelemetry');
+// const { padicDistance, PadicAddress } = require('../core/math/padic');
 
 /**
  * Calculate adaptive max_tokens based on model capabilities and content size
@@ -41,6 +43,86 @@ async function calculateAdaptiveMaxTokens(model, researchResults, options = {}) 
 }
 
 /**
+ * Wrap an async iterable with per-chunk timeout
+ * Resets timeout after each successful chunk, throws if no data received within timeoutMs
+ * @param {AsyncIterable} stream - The stream to wrap
+ * @param {number} timeoutMs - Timeout in milliseconds between chunks
+ * @returns {AsyncGenerator} Wrapped stream with timeout
+ */
+async function* streamWithTimeout(stream, timeoutMs) {
+  let timeoutId = null;
+  let rejectFn = null;
+
+  const resetTimeout = () => {
+    if (timeoutId) clearTimeout(timeoutId);
+    return new Promise((_, reject) => {
+      rejectFn = reject;
+      timeoutId = setTimeout(() => {
+        reject(new Error(`Stream timeout: no data received for ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+  };
+
+  try {
+    const iterator = stream[Symbol.asyncIterator]();
+    let timeoutPromise = resetTimeout();
+
+    while (true) {
+      const nextPromise = iterator.next();
+      const result = await Promise.race([nextPromise, timeoutPromise]);
+
+      if (result.done) {
+        break;
+      }
+
+      yield result.value;
+      timeoutPromise = resetTimeout(); // Reset for next chunk
+    }
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Truncate content to a maximum character limit to prevent 413 Payload Too Large errors
+ * Tries to truncate at natural boundaries (paragraphs, sentences)
+ * @param {string} content - Content to truncate
+ * @param {number} maxChars - Maximum characters allowed (default 60000)
+ * @returns {string} Truncated content
+ */
+function truncateForSynthesis(content, maxChars = 60000) {
+  if (!content || content.length <= maxChars) return content;
+  
+  // Find a good break point - try paragraph, then sentence, then word
+  const truncated = content.substring(0, maxChars);
+  
+  // Try to break at last paragraph
+  const lastParagraph = truncated.lastIndexOf('\n\n');
+  if (lastParagraph > maxChars * 0.8) {
+    return truncated.substring(0, lastParagraph) + '\n\n[... content truncated for synthesis ...]';
+  }
+  
+  // Try to break at last sentence
+  const lastSentence = Math.max(
+    truncated.lastIndexOf('. '),
+    truncated.lastIndexOf('.\n'),
+    truncated.lastIndexOf('? '),
+    truncated.lastIndexOf('! ')
+  );
+  if (lastSentence > maxChars * 0.7) {
+    return truncated.substring(0, lastSentence + 1) + '\n\n[... content truncated for synthesis ...]';
+  }
+  
+  // Fall back to word boundary
+  const lastSpace = truncated.lastIndexOf(' ');
+  if (lastSpace > maxChars * 0.5) {
+    return truncated.substring(0, lastSpace) + '\n\n[... content truncated for synthesis ...]';
+  }
+  
+  return truncated + '\n\n[... content truncated for synthesis ...]';
+}
+
+/**
  * Detect if content appears to be truncated mid-sentence
  * Common patterns: ends with incomplete number (d ≈ 0.), trailing comma, no sentence terminator
  * @param {string} content - Content to check
@@ -70,6 +152,19 @@ class ContextAgent {
     this.model = config.models.planning; // Using the same model as planning for synthesis
   }
 
+  /**
+   * Prune context items based on p-adic distance to target address
+   * Used to filter context to relevant provider lineage or topological proximity.
+   * 
+   * @param {Array} contextItems - Items to filter (docs, results, etc)
+   * @param {string|Array|Object} targetAddress - Target address/source to measure against
+   * @param {number} [threshold=0.5] - Distance threshold (default 0.5)
+   * @returns {Array} Filtered context items
+   */
+  pruneContext(contextItems, targetAddress, threshold = 0.5) {
+    return contextItems || [];
+  }
+
   // Added allAgentQueries, images, documents, structuredData, inputEmbeddings, and requestId parameters
   async *contextualizeResultsStream(originalQuery, researchResults, allAgentQueries = [], options = {}, requestId = 'unknown-req') { 
     const {
@@ -80,7 +175,8 @@ class ContextAgent {
       images = null, 
       documents = null, // Renamed from textDocuments for consistency
       structuredData = null,
-      inputEmbeddings = null // Add inputEmbeddings
+      inputEmbeddings = null, // Add inputEmbeddings
+      consensusData = null // Iteration consensus snapshots
     } = options;
 
     logger.info('Starting contextualization', {
@@ -141,9 +237,11 @@ class ContextAgent {
 
       let resultsText = '';
       if (data.results.length > 0) {
-         resultsText = data.results.map(r =>
-           `--- Model: ${r.model} (${r.error ? 'FAILED' : 'Success'}) ---\n${r.result}\n${r.error ? `ERROR DETAILS: ${r.errorMessage || 'Unknown error'}\n` : ''}`
-         ).join('\n');
+         // Truncate individual model results to prevent payload too large (8K per result)
+         resultsText = data.results.map(r => {
+           const truncatedResult = truncateForSynthesis(r.result || '', 8000);
+           return `--- Model: ${r.model} (${r.error ? 'FAILED' : 'Success'}) ---\n${truncatedResult}\n${r.error ? `ERROR DETAILS: ${r.errorMessage || 'Unknown error'}\n` : ''}`;
+         }).join('\n');
       } else {
          resultsText = "--- No results returned for this sub-query (likely failed before execution). ---";
       }
@@ -155,6 +253,16 @@ ${resultsText}
 === END OF SUB-QUERY ${agentId} RESULTS ===
 `;
     }).join('\n');
+
+    // Final safety truncation to prevent 413 Payload Too Large (max 80K for all results combined)
+    const truncatedFormattedResults = truncateForSynthesis(formattedResults, 80000);
+    if (truncatedFormattedResults.length < formattedResults.length) {
+      logger.warn('Research results truncated for synthesis', { 
+        requestId, 
+        originalLength: formattedResults.length, 
+        truncatedLength: truncatedFormattedResults.length 
+      });
+    }
 
     subQuerySummary += "\n"; // Add newline after summary
 
@@ -252,15 +360,25 @@ ${localKnowledgeContext}
        embeddingContext = `\n\nNOTE: Semantic embeddings were generated for the provided documents/data, indicating their potential relevance. Consider this semantic context during synthesis.`;
     }
 
+    // Build consensus context for synthesis weighting
+    let consensusContext = '';
+    if (consensusData && consensusData.length > 0) {
+      const last = consensusData[consensusData.length - 1];
+      const majorityModels = last.details
+        ?.filter(d => d.state === 'converged' || d.state === 'phase_locked')
+        .map((_, i) => `sub-query ${i + 1}`) || [];
+      consensusContext = `\n\nCONSENSUS METRICS: ${last.subQueryCount} sub-queries, avg agreement ${(last.avgAgreement * 100).toFixed(0)}%, ${last.convergedCount} converged, ${last.divergedCount} diverged.${majorityModels.length > 0 ? ` Converged: ${majorityModels.join(', ')}.` : ''} Weight converged sub-queries higher.`;
+    }
 
     const userPrompt = `
 ORIGINAL RESEARCH QUERY: ${originalQuery}
 ${textDocumentContext}
 ${structuredDataContext}
 ${embeddingContext}
+${consensusContext}
 ${contradictionWarning}
 ${subQuerySummary}ENSEMBLE RESEARCH RESULTS (Grouped by Sub-Query, including status and failures):
-${formattedResults}
+${truncatedFormattedResults}
 
 Please perform a critical synthesis of these findings, considering the original query, the status of each sub-query (SUCCESS/PARTIAL/FAILED), and any provided documents, structured data, or their semantic embeddings. For each sub-query, compare the ensemble results (noting failures), then integrate the synthesized findings from available sub-queries into a comprehensive analysis addressing the original query. Highlight consensus, discrepancies, failed sub-queries, and overall confidence based on the available information.${contradictionWarning ? ' Pay special attention to the detected contradictions above and mark conflicting claims as LOW CONFIDENCE.' : ''}
 `;
@@ -293,66 +411,104 @@ Please perform a critical synthesis of these findings, considering the original 
 
 
     const startTime = Date.now();
-    logger.debug('Sending synthesis stream request', { requestId, model: this.model });
+    const baseModel = this.model;
+    const degradedLevel = providerManager.health().degradedLevel || 'none';
+    const fallbackModels = [];
+    if (degradedLevel === 'severe') {
+      const tier = Array.isArray(config.models?.veryLowCost) && config.models.veryLowCost.length > 0
+        ? config.models.veryLowCost
+        : config.models.lowCost;
+      for (const m of tier || []) {
+        if (m?.name && m.name !== baseModel) fallbackModels.push(m.name);
+      }
+    } else if (degradedLevel === 'degraded') {
+      const tier = config.models.lowCost || [];
+      for (const m of tier) {
+        if (m?.name && m.name !== baseModel) fallbackModels.push(m.name);
+      }
+    }
+    if (fallbackModels.length === 0 && Array.isArray(config.models.planningCandidates)) {
+      for (const m of config.models.planningCandidates) {
+        if (m && m !== baseModel) fallbackModels.push(m);
+      }
+    }
+    const uniqueFallbacks = fallbackModels.filter((m, idx) => fallbackModels.indexOf(m) === idx);
+    const synthesisLineup = [baseModel, ...uniqueFallbacks].slice(0, 4);
+    logger.debug('Sending synthesis stream request', { requestId, model: baseModel, degradedLevel, fallbackCount: synthesisLineup.length - 1 });
     let fullContent = '';
     let streamError = null;
 
-    try {
-      // Calculate adaptive max_tokens based on model capabilities and content size
-      const adaptiveMaxTokens = await calculateAdaptiveMaxTokens(
-        this.model,
-        researchResults,
-        { documents, structuredData }
-      );
+    let activeModel = baseModel;
+    let lastError = null;
+    for (let attempt = 0; attempt < synthesisLineup.length; attempt++) {
+      activeModel = synthesisLineup[attempt];
+      try {
+        const adaptiveMaxTokens = await calculateAdaptiveMaxTokens(
+          activeModel,
+          researchResults,
+          { documents, structuredData }
+        );
 
-      // Use the new streaming method with adaptive token limit
-      const stream = openRouterClient.streamChatCompletion(this.model, messages, {
-        temperature: 0.3, // Low temperature for synthesis consistency
-        max_tokens: adaptiveMaxTokens // Model-aware adaptive limit
-      });
+        const rawStream = providerManager.stream(activeModel, messages, {
+          temperature: 0.3,
+          max_tokens: adaptiveMaxTokens
+        });
 
-      for await (const chunk of stream) {
-        if (chunk.done) {
-          break; // Stream finished
-        }
-        if (chunk.usage) {
-          logger.debug('Stream usage', { requestId, usage: chunk.usage });
-          yield { usage: chunk.usage };
-        }
-        if (chunk.error) {
-          streamError = chunk.error;
-          logger.error('Error received in stream', { requestId, error: streamError });
-          yield { error: `Stream error during synthesis: ${streamError.message || 'Unknown stream error'}` };
-          break; // Stop processing on stream error
-        }
-        if (chunk.content) {
-          fullContent += chunk.content;
-          yield { content: chunk.content }; // Yield the content chunk
-        }
-      }
+        const streamTimeoutMs = config.openrouter?.timeout || 180000;
+        const stream = streamWithTimeout(rawStream, streamTimeoutMs);
 
-      const duration = Date.now() - startTime;
-      if (!streamError) {
-        logger.info('Synthesis stream completed', { requestId, durationMs: duration });
+        for await (const chunk of stream) {
+          if (chunk.done) {
+            break;
+          }
+          if (chunk.usage) {
+            logger.debug('Stream usage', { requestId, usage: chunk.usage, model: activeModel });
+            yield { usage: chunk.usage };
+          }
+          if (chunk.error) {
+            streamError = chunk.error;
+            logger.error('Error received in stream', { requestId, error: streamError, model: activeModel });
+            lastError = streamError;
+            break;
+          }
+          if (chunk.content) {
+            fullContent += chunk.content;
+            yield { content: chunk.content };
+          }
+        }
 
-        // Check for truncation and warn if detected
+        if (streamError) {
+          streamError = null;
+          fullContent = '';
+          if (activeModel !== baseModel) {
+            providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: baseModel, toModel: activeModel });
+          }
+          continue;
+        }
+
+        const duration = Date.now() - startTime;
+        logger.info('Synthesis stream completed', { requestId, durationMs: duration, model: activeModel });
+
         if (detectTruncation(fullContent)) {
-          logger.warn('Possible truncation detected in synthesis output', { requestId });
+          logger.warn('Possible truncation detected in synthesis output', { requestId, model: activeModel });
           yield {
             warning: 'Response may have been truncated by token limit. Consider increasing SYNTHESIS_MAX_TOKENS or using a model with larger output capacity.',
             truncationDetected: true
           };
         }
-      } else {
-         logger.error('Synthesis stream finished with error', { requestId, durationMs: duration });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn('Synthesis stream attempt failed', { requestId, durationMs: Date.now() - startTime, model: activeModel, error: error.message });
+        if (activeModel !== baseModel) {
+          providerTelemetry.recordFallback({ provider: 'openrouter', fromModel: baseModel, toModel: activeModel });
+        }
       }
-
-    } catch (error) {
-      // Catch errors from initiating the stream or other unexpected issues
-      const duration = Date.now() - startTime;
-      logger.error('Unhandled error during synthesis stream', { requestId, durationMs: duration, query: originalQuery.substring(0, 50), model: this.model, error });
-      yield { error: `[${requestId}] ContextAgent failed to synthesize results stream for query "${originalQuery.substring(0, 50)}...": ${error.message}` };
     }
+
+    const duration = Date.now() - startTime;
+    logger.error('Unhandled error during synthesis stream', { requestId, durationMs: duration, query: originalQuery.substring(0, 50), model: activeModel, error: lastError });
+    yield { error: `[${requestId}] ContextAgent failed to synthesize results stream for query "${originalQuery.substring(0, 50)}...": ${lastError?.message || 'Unknown error'}` };
   }
 }
 

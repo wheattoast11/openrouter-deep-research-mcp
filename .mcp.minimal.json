@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.modelcontextprotocol.io/servers.json",
+  "mcpServers": {
+    "openrouter-agents": {
+      "command": "node",
+      "args": ["/var/home/zero/terminals-tech/src/server/mcpServer.js", "--stdio"],
+      "env": {
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+        "MODE": "MANUAL",
+        "INDEXER_ENABLED": "true",
+        "MCP_ENABLE_TASKS": "true",
+        "LOG_LEVEL": "warn",
+        "LOG_OUTPUT": "stderr",
+        "LOG_JSON": "false",
+        "EMBEDDING_CACHE_SIZE": "500",
+        "JOB_TTL_HOURS": "1"
+      }
+    }
+  },
+  "_profile": "Minimal config for token-constrained clients. Exposes only essential tools via MANUAL mode."
+}

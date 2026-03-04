@@ -1,8 +1,13 @@
 // src/server/tools.js
+/**
+ * @deprecated This file is serving as a legacy adapter. 
+ * Please use src/server/handlers/ and src/server/mcpServer.js for new tool implementations.
+ */
 const { z } = require('zod');
 const NodeCache = require('node-cache');
 const fs = require('fs'); // Added for file system operations
 const path = require('path'); // Added for path manipulation
+const zlib = require('zlib'); // For payload compression
 const planningAgent = require('../agents/planningAgent');
 const researchAgent = require('../agents/researchAgent');
 const contextAgent = require('../agents/contextAgent');
@@ -13,11 +18,13 @@ const config = require('../../config');
 const modelCatalog = require('../utils/modelCatalog'); // New: dynamic model catalog
 const tar = require('tar');
 const fetch = require('node-fetch');
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const structuredDataParser = require('../utils/structuredDataParser');
 const advancedCache = require('../utils/advancedCache');
 const robustWebScraper = require('../utils/robustWebScraper');
 const logger = require('../utils/logger').child('Tools');
+const { normalize: coreNormalize, GLOBAL_ALIASES } = require('../core/normalize');
+const { createNotifier, createNoOpNotifier } = require('./progressNotifier');
 const robustScraperInstance = new robustWebScraper();
 
 // ===== RECURSIVE TOOL EXECUTION =====
@@ -96,10 +103,15 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
         return await listModels(params);
       case 'batch_research':
         return await batchResearchTool(params, mcpExchange, requestId);
+
+      case 'research':
+        return await researchTool(params, mcpExchange, requestId);
       case 'ping':
         return await pingTool(params);
       case 'get_server_status':
         return await getServerStatus(params);
+      case 'get_provider_health':
+        return await getProviderHealth(params);
       case 'job_status':
       case 'get_job_status':
         return await getJobStatusTool(params);
@@ -119,21 +131,21 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
   }
 }
 
-// Compact param normalization for conduct_research
+// Compact param normalization - delegates to core/normalize.js
+// Handles: q, cost, aud, fmt, src, imgs, docs, data aliases
 function normalizeResearchParams(params) {
   if (!params || typeof params !== 'object') return params;
   // Only apply when simpleTools enabled (default true)
   try { if (require('../../config').simpleTools?.enabled === false) return params; } catch (_) {}
-  const out = { ...params };
-  if (out.q && !out.query) out.query = out.q;
-  if (out.cost && !out.costPreference) out.costPreference = out.cost;
-  if (out.aud && !out.audienceLevel) out.audienceLevel = out.aud;
-  if (out.fmt && !out.outputFormat) out.outputFormat = out.fmt;
-  if (typeof out.src === 'boolean' && out.includeSources === undefined) out.includeSources = out.src;
-  if (Array.isArray(out.imgs) && !out.images) out.images = out.imgs;
+
+  // Use core normalize for alias mapping
+  const out = coreNormalize('research', params);
+
+  // Handle complex transformations for docs/data arrays (not covered by core aliases)
   if (out.docs && !out.textDocuments) {
     if (Array.isArray(out.docs)) {
       out.textDocuments = out.docs.map((d, i) => typeof d === 'string' ? ({ name: `doc_${i+1}.txt`, content: d }) : d);
+      delete out.docs;
     }
   }
   if (out.data && !out.structuredData) {
@@ -142,6 +154,7 @@ function normalizeResearchParams(params) {
         if (typeof d === 'string') return ({ name: `data_${i+1}.json`, type: 'json', content: d });
         return d;
       });
+      delete out.data;
     }
   }
   return out;
@@ -180,7 +193,9 @@ async function index_texts(params, mcpExchange = null, requestId = 'unknown-req'
     try {
       const id = await dbClient.indexDocument({ sourceType, sourceId: d.id || `doc:${Date.now()}-${indexed}`, title: d.title || null, content: d.content });
       if (id) indexed++;
-    } catch (_) {}
+    } catch (err) {
+      logger.debug('Document indexing failed', { requestId, sourceType, error: err.message });
+    }
   }
   return JSON.stringify({ indexed });
 }
@@ -294,17 +309,39 @@ const conductResearchSchemaBase = z.object({
   })).optional().describe("Optional array of structured data inputs relevant to the query."),
   clientContext: z.any().optional().describe("Optional client-provided context about environment (app, os, user, session)."),
   mode: z.enum(['standard','hyper']).optional().default('standard'),
+  dialectic: z.boolean().optional().default(false).describe("Enable dialectic convergence mode for multi-round thesis-antithesis-synthesis research"),
+  convergenceThreshold: z.number().min(0).max(1).optional().default(0.85).describe("Coherence threshold for convergence (0-1)"),
+  maxRounds: z.number().int().min(1).max(10).optional().default(5).describe("Maximum dialectic rounds before forced synthesis"),
   _mcpExchange: z.any().optional().describe("Internal MCP exchange context for progress reporting"),
   _requestId: z.string().optional().describe("Internal request ID for logging")
 });
 
-// Helper to normalize research params (q->query, cost->costPreference)
+// Helper to normalize research params - delegates to core/normalize.js
+// Zod transform wrapper for schema validation
 function normalizeResearchInputSchema(data) {
-  const result = { ...data };
-  if (result.q && !result.query) result.query = result.q;
-  if (result.cost && !result.costPreference) result.costPreference = result.cost;
-  return result;
+  return coreNormalize('research', data);
 }
+
+// Async research tool (job by default | sync if async=false)
+async function researchTool(rawParams, mcpExchange, requestId) {
+  await dbClient.waitForInit();
+  const params = researchSchema.parse(rawParams); // Uses unified schema w/ async flag
+  if (!params.async) {
+    return await conductResearch(params, mcpExchange, requestId);
+  }
+  // Async: enqueue job
+  const jobId = await dbClient.createJob({type: 'research', params: JSON.stringify(params)});
+  await dbClient.appendJobEvent(jobId, 'enqueued', {query: params.query?.substring(0,100)});
+  logger.info('Research job enqueued', {jobId, requestId, query: params.query?.substring(0,50)});
+  return JSON.stringify({
+    job_id: jobId,
+    status: 'queued',
+    message: `Research job enqueued (async=true). Poll: job_status({job_id: "${jobId}", format: "compact"})`,
+    next: `get_job_status({job_id: "${jobId}"})`
+  });
+}
+
+// Batch research tool - see batchResearchTool implementation below (line ~2411)
 
 // Schema with transform for validation (used for conductResearch which is sync)
 const conductResearchSchema = conductResearchSchemaBase
@@ -336,13 +373,13 @@ const researchSchema = researchSchemaBase
   .describe("Unified research tool. async=true (default) enqueues and returns {job_id}. async=false streams results synchronously like conduct_research. Example: {query: 'What is quantum computing?', costPreference: 'low', async: true}");
 
 // Simplified tools
-const searchSchema = {
+const searchSchema = z.object({
   q: z.string().min(1).optional().describe("Search query (alias for 'query')"),
   query: z.string().min(1).optional().describe("Search query"),
   k: z.number().int().positive().optional().default(10).describe("Number of results"),
   scope: z.enum(['both','reports','docs']).optional().default('both').describe("Search scope"),
   rerank: z.boolean().optional().describe("Enable reranking")
-};
+}).describe("Hybrid BM25+vector search across reports and documents");
 const querySchema = z.object({
   sql: z.string().min(1).describe("SELECT query, e.g. 'SELECT id, query FROM research_reports LIMIT 5'"),
   params: z.array(z.any()).optional().default([]).describe("Bound params, e.g. [1, 'topic'] for $1, $2 placeholders"),
@@ -363,12 +400,109 @@ const getServerStatusSchema = z.object({
   _requestId: z.string().optional().describe("Internal request ID for logging") // Add optional requestId
 });
 
+const getProviderHealthSchema = z.object({
+  includeModels: z.boolean().optional().default(true).describe('Include per-model metrics'),
+  maxModels: z.number().int().positive().optional().default(8).describe('Maximum models to include'),
+  _requestId: z.string().optional().describe("Internal request ID for logging")
+});
+
+// Batch research schema - see batchResearchSchema definition below (line ~2376)
+
 // Schema for the new execute_sql tool
 const executeSqlSchema = z.object({
   sql: z.string().min(1, "SQL query must not be empty").describe("The SQL query string, using placeholders ($1, $2, etc.) for parameters."),
   params: z.array(z.any()).optional().default([]).describe("An array of parameters to safely bind to the SQL query placeholders."),
   _requestId: z.string().optional().describe("Internal request ID for logging")
 });
+
+/**
+ * Compress large report content for efficient transmission
+ * @param {string} content - Report content
+ * @param {string} format - Compression format (gzip, brotli, none)
+ * @returns {Object} Compressed payload with metadata
+ */
+function compressReportPayload(content, format = 'gzip') {
+  if (!content || content.length < 10000 || format === 'none') {
+    return { content, compressed: false, size: content?.length || 0 };
+  }
+
+  let compressed;
+  let encoding;
+  
+  try {
+    if (format === 'brotli' && zlib.brotliCompressSync) {
+      compressed = zlib.brotliCompressSync(Buffer.from(content));
+      encoding = 'br';
+    } else {
+      compressed = zlib.gzipSync(Buffer.from(content));
+      encoding = 'gzip';
+    }
+
+    const compressedB64 = compressed.toString('base64');
+    const ratio = (compressedB64.length / content.length * 100).toFixed(1);
+
+    return {
+      content: compressedB64,
+      compressed: true,
+      encoding,
+      originalSize: content.length,
+      compressedSize: compressedB64.length,
+      ratio: `${ratio}%`
+    };
+  } catch (err) {
+    logger.warn('Compression failed, returning raw content', { error: err.message });
+    return { content, compressed: false, size: content.length };
+  }
+}
+
+const zeroChatSchema = z.object({
+  messages: z.array(z.object({
+    role: z.enum(['user', 'assistant', 'system']),
+    content: z.string()
+  })),
+  sessionId: z.string().optional().default('default'),
+  model: z.string().optional(),
+  _requestId: z.string().optional()
+}).describe("Synchronous conversational dialogue with Zero. Maintains short-term memory within the provided messages array.");
+
+async function zeroChat(params, mcpExchange = null, requestId = 'unknown-req') {
+  const { messages, sessionId, model } = params;
+  const activeModel = model || config.models.planning || 'openai/gpt-5-chat';
+  
+  logger.info('Zero chat started', { requestId, model: activeModel, messageCount: messages.length });
+
+  try {
+    const response = await providerManager.chat(activeModel, messages, {
+      temperature: 0.7,
+      max_tokens: 2000,
+      requestId
+    });
+    
+    const content = response.choices?.[0]?.message?.content || '';
+    
+    // Update session store if available
+    try {
+      const sm = require('../utils/sessionStore').getSessionManager(dbClient);
+      if (sm && sessionId) {
+        const lastMsg = messages[messages.length - 1];
+        await sm.addMessage(sessionId, lastMsg.role, lastMsg.content);
+        await sm.addMessage(sessionId, 'assistant', content);
+      }
+    } catch (_) {}
+    
+    return content;
+  } catch (err) {
+    logger.error('Zero chat failed', { requestId, error: err.message });
+    throw err;
+  }
+}
+
+/**
+ * Execute dialectic convergence research - DISABLED
+ */
+async function executeDialecticResearch(opts) {
+  throw new Error("Dialectic research is disabled.");
+}
 
 // Updated to accept requestId
 async function conductResearch(params, mcpExchange = null, requestId = 'unknown-req') {
@@ -393,6 +527,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
   const structuredData = params.structuredData;
   const clientContext = params.clientContext || null;
   const mode = params.mode || 'standard';
+  const dialectic = params.dialectic || false;
+  const convergenceThreshold = params.convergenceThreshold || 0.85;
+  const maxRounds = params.maxRounds || 5;
   const progressToken = mcpExchange?.progressToken;
 
   // Helper function to safely truncate a string
@@ -412,6 +549,29 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       }
     }
   };
+
+  /**
+   * Helper to send large content in smaller chunks
+   * @param {string} content - Large content string
+   * @param {number} chunkSize - Max chars per chunk
+   */
+  const chunkedSendProgress = async (content, chunkSize = 4000) => {
+    if (!content) return;
+    for (let i = 0; i < content.length; i += chunkSize) {
+      const chunk = content.slice(i, i + chunkSize);
+      sendProgress({ 
+        content: chunk, 
+        isChunk: true, 
+        index: i / chunkSize, 
+        total: Math.ceil(content.length / chunkSize) 
+      });
+      // Small pause to allow event loop to breathe
+      await new Promise(r => setTimeout(r, 10));
+    }
+  };
+
+  // Create progress notifier for MCP 2025-11-25 push notifications
+  const notifier = mcpExchange ? createNotifier(mcpExchange, requestId, dbClient) : createNoOpNotifier();
 
   // Try semantic cache first (with strict similarity validation)
   try {
@@ -490,10 +650,16 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       if (type === 'planning_usage' && payload?.usage) usageAgg.planning.push(payload.usage);
       if (type === 'agent_usage' && payload?.usage) usageAgg.agents.push(payload);
       if (type === 'synthesis_usage' && payload?.usage) usageAgg.synthesis.push(payload.usage);
-    } catch(_) {}
+    } catch (err) {
+      logger.debug('Usage aggregation error', { type, error: err.message });
+    }
     // Forward to job events if running as async job
     if (isJob) {
-      try { await dbClient.appendJobEvent(requestId, type, payload || {}); } catch (_) {}
+      try {
+        await dbClient.appendJobEvent(requestId, type, payload || {});
+      } catch (err) {
+        logger.debug('Job event persistence failed', { requestId, type, error: err.message });
+      }
     }
   };
   // Determine MAX_ITERATIONS dynamically based on complexity assessment
@@ -517,9 +683,37 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
     logger.warn('Error assessing complexity, using default', { requestId, maxIterations: MAX_ITERATIONS, error: complexityError });
   }
 
+  // Dialectic convergence mode - DISABLED
+  /*
+  if (dialectic) {
+    logger.info('Dialectic mode enabled', { requestId, convergenceThreshold, maxRounds });
+    return await executeDialecticResearch({
+      query,
+      costPreference,
+      audienceLevel,
+      outputFormat,
+      includeSources,
+      maxLength,
+      images,
+      textDocuments,
+      structuredData,
+      convergenceThreshold,
+      maxRounds,
+      requestId,
+      mcpExchange,
+      notifier
+    });
+  }
+  */
+
   let currentIteration = 1;
   let allAgentQueries = [];
   let allResearchResults = [];
+  let allSignals = []; // Collect signals from ensemble for verification
+  let allTokens = []; // Rail Protocol: Collect tokens for provenance tracking
+  let allConsensusSnapshots = []; // Consensus snapshots per iteration
+  let tiebreakerUsed = false; // Divergence tiebreaker: extend once only
+  let earlyTermination = false; // Consensus-driven early exit
   let savedReportId = null;
 
   logger.info('Starting iterative research', { requestId, query: safeSubstring(query, 0, 50), maxIterations: MAX_ITERATIONS });
@@ -644,6 +838,13 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         const stagePrefixPlan = `Stage ${currentStageBase + 1}/${totalStages}`;
         logger.debug('Planning research', { requestId, stage: stagePrefixPlan, iteration: currentIteration, mode: previousResultsForRefinement ? 'refining' : 'planning' });
 
+        // Notify: Planning phase started
+        await notifier.phaseStarted('planning', {
+          query: safeSubstring(query, 0, 100),
+          iteration: currentIteration,
+          mode: previousResultsForRefinement ? 'refining' : 'planning'
+        });
+
         // Pass images, documents, structuredData, and past reports to the planning agent
         planningResultXml = await planningAgent.planResearch(
         query,
@@ -662,6 +863,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         );
         const planningDuration = Date.now() - planningStartTime;
         logger.debug('Planning completed', { requestId, stage: stagePrefixPlan, durationMs: planningDuration });
+
+        // Notify: Planning phase completed
+        await notifier.phaseComplete('planning', { durationMs: planningDuration });
       } catch (planningError) {
          logger.error('Error during planning/refinement', { requestId, error: planningError });
          throw new Error(`[${requestId}] Failed during planning agent call: ${planningError.message}`);
@@ -709,6 +913,14 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         const researchStartTime = Date.now();
         const stagePrefixResearch = `Stage ${currentStageBase + 3}/${totalStages}`;
         logger.info('Conducting parallel research', { requestId, stage: stagePrefixResearch, iteration: currentIteration, agentCount: currentAgentQueries.length });
+
+        // Notify: Researching phase started
+        await notifier.phaseStarted('researching', {
+          iteration: currentIteration,
+          agentCount: currentAgentQueries.length,
+          queries: currentAgentQueries.map(q => safeSubstring(q.query, 0, 50))
+        });
+
         // Pass images, documents, structuredData, inputEmbeddings, and requestId down to parallel research
         currentResearchResults = await researchAgent.conductParallelResearch(
            currentAgentQueries,
@@ -723,43 +935,90 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         );
         const researchDuration = Date.now() - researchStartTime;
         logger.info('Parallel research completed', { requestId, stage: stagePrefixResearch, durationMs: researchDuration });
+
+        // Notify: Researching phase completed
+        await notifier.phaseComplete('researching', {
+          iteration: currentIteration,
+          agentCount: currentResearchResults.length,
+          durationMs: researchDuration,
+          successCount: currentResearchResults.filter(r => !r.error).length,
+          errorCount: currentResearchResults.filter(r => r.error).length
+        });
       } catch (researchError) {
-        // This catch block might be less necessary now with Promise.allSettled inside conductParallelResearch,
-        // but kept for safety in case the call itself fails.
-        logger.error('Error calling conductParallelResearch', { requestId, error: researchError });
-        // Decide if this is fatal. Let's assume it is for now.
+        // Promise.allSettled in conductParallelResearch handles internal errors,
+        // but this catch handles failures in the call itself.
+        logger.error('Error calling conductParallelResearch', {
+          requestId,
+          iteration: currentIteration,
+          error: researchError.message
+        });
         throw new Error(`[${requestId}] Failed during parallel research call: ${researchError.message}`);
-        /* // Original fallback logic - less relevant if conductParallelResearch handles internal errors
-        if (costPreference === 'high') {
-          console.warn(`[${new Date().toISOString()}] [${requestId}] conductResearch: High-cost research failed (Iteration ${currentIteration}), falling back to low-cost models.`);
-          try {
-            // Pass context to fallback research as well
-            currentResearchResults = await researchAgent.conductParallelResearch(
-               currentAgentQueries, 
-               'low', 
-               images, 
-               textDocuments, 
-               structuredData,
-               inputEmbeddings, // Pass input embeddings
-               requestId
-            ); 
-          } catch (fallbackError) {
-            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Low-cost fallback research also failed (Iteration ${currentIteration}). Error:`, fallbackError);
-            currentResearchResults = currentAgentQueries.map(q => ({
-              agentId: q.id, model: 'N/A', query: q.query, result: `Research failed: ${fallbackError.message}`, error: true, errorMessage: fallbackError.message
-            }));
-            console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Marking iteration ${currentIteration} queries as failed due to fallback error.`);
-          }
-        } else {
-          currentResearchResults = currentAgentQueries.map(q => ({
-            agentId: q.id, model: 'N/A', query: q.query, result: `Research failed: ${researchError.message}`, error: true, errorMessage: researchError.message
-          }));
-          console.error(`[${new Date().toISOString()}] [${requestId}] conductResearch: Marking iteration ${currentIteration} queries as failed due to initial low-cost error.`);
-        }
-        */
       }
 
       allResearchResults.push(...currentResearchResults);
+
+      // Extract and collect signals from research results
+      const currentSignals = currentResearchResults
+        .filter(r => r.signal)
+        .map(r => r.signal);
+      allSignals.push(...currentSignals);
+
+      // Rail Protocol: Extract and collect tokens for provenance tracking
+      const currentTokens = currentResearchResults
+        .filter(r => r.token)
+        .map(r => r.token);
+      allTokens.push(...currentTokens);
+
+      // Emit ensemble signals event for real-time consumers
+      if (onEvent && currentSignals.length > 0) {
+        await onEvent('ensemble_signals', {
+          iteration: currentIteration,
+          signals: currentSignals.map(s => s.toJSON()),
+          signalCount: currentSignals.length,
+          // Rail Protocol: Include token traces for provenance
+          tokenTraces: currentTokens.map(t => ({
+            id: t.id,
+            origin: t.origin,
+            trace: t.trace
+          }))
+        });
+      }
+
+      // Consensus-driven loop control
+      const iterConsensus = currentResearchResults?._iterationConsensus;
+      if (iterConsensus) {
+        allConsensusSnapshots.push({ iteration: currentIteration, ...iterConsensus });
+
+        const minAgreement = config.core?.rail?.consensus?.minAgreement ?? 0.6;
+        const convergedRatio = iterConsensus.convergedCount / iterConsensus.subQueryCount;
+        const divergedRatio = iterConsensus.divergedCount / iterConsensus.subQueryCount;
+
+        // Early termination: >=50% converged/phase-locked AND avg agreement meets threshold
+        if (convergedRatio >= 0.5 && iterConsensus.avgAgreement >= minAgreement) {
+          logger.info('Consensus early termination', {
+            requestId, iteration: currentIteration,
+            convergedRatio: convergedRatio.toFixed(2),
+            avgAgreement: iterConsensus.avgAgreement.toFixed(2)
+          });
+          earlyTermination = true;
+          break;
+        }
+
+        // Divergence tiebreaker: >=50% diverged → extend MAX_ITERATIONS by 1 (once)
+        if (divergedRatio >= 0.5 && !tiebreakerUsed) {
+          const cap = (config.models.maxResearchIterations || 2) + 2;
+          if (MAX_ITERATIONS < cap) {
+            MAX_ITERATIONS++;
+            tiebreakerUsed = true;
+            logger.info('Divergence tiebreaker: extending iterations', {
+              requestId, iteration: currentIteration,
+              divergedRatio: divergedRatio.toFixed(2),
+              newMaxIterations: MAX_ITERATIONS
+            });
+          }
+        }
+      }
+
       previousResultsForRefinement = currentResearchResults;
       currentIteration++;
     } // End of while loop
@@ -773,25 +1032,33 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
     // Step 4 (Final Synthesis): Contextualize ALL accumulated results
     let finalReportContent = '';
     let streamError = null;
+    let synthesisTokenCount = 0;
     try {
       const contextStartTime = Date.now();
       const finalStagePrefix = `Stage ${totalStages}/${totalStages}`;
       logger.info('Contextualizing results', { requestId, stage: finalStagePrefix, resultCount: allResearchResults.length });
-      
+
+      // Notify: Synthesizing phase started
+      await notifier.phaseStarted('synthesizing', {
+        resultCount: allResearchResults.length,
+        queryCount: allAgentQueries.length
+      });
+
       // Pass allAgentQueries, images, documents, structuredData, and inputEmbeddings to the context agent
       const contextStream = contextAgent.contextualizeResultsStream(
         query,
         allResearchResults,
         allAgentQueries, // Pass the list of planned agent queries
-        { 
-          audienceLevel, 
-          outputFormat, 
-          includeSources, 
-          maxLength, 
-          images, 
-          documents: textDocuments, 
+        {
+          audienceLevel,
+          outputFormat,
+          includeSources,
+          maxLength,
+          images,
+          documents: textDocuments,
           structuredData,
-          inputEmbeddings // Pass input embeddings
+          inputEmbeddings, // Pass input embeddings
+          consensusData: allConsensusSnapshots.length > 0 ? allConsensusSnapshots : null
         },
         requestId, // Pass requestId to context agent
         clientContext
@@ -806,6 +1073,11 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         }
         if (chunk.content) {
           finalReportContent += chunk.content;
+          synthesisTokenCount += chunk.content.length; // Approximate token count
+          // Send periodic synthesis progress (every ~500 chars to avoid flooding)
+          if (synthesisTokenCount % 500 < chunk.content.length) {
+            await notifier.synthesisChunk(chunk.content, synthesisTokenCount);
+          }
         }
         if (chunk.error) {
           streamError = chunk.error;
@@ -815,6 +1087,12 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       const contextDuration = Date.now() - contextStartTime;
       if (!streamError) {
         logger.info('Contextualization completed', { requestId, stage: finalStagePrefix, durationMs: contextDuration });
+        // Notify: Synthesizing phase completed
+        await notifier.phaseComplete('synthesizing', {
+          durationMs: contextDuration,
+          contentLength: finalReportContent.length,
+          tokensGenerated: synthesisTokenCount
+        });
       } else {
          logger.warn('Contextualization finished with error', { requestId, stage: finalStagePrefix, durationMs: contextDuration });
          // Do not throw here, allow process to continue to report the error
@@ -836,7 +1114,9 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         // Store in semantic cache first; fallback to local cache
         try {
           await advancedCache.storeResult(query, { costPreference, audienceLevel, outputFormat, includeSources }, finalReportContent, savedReportId);
-        } catch (_) {}
+        } catch (cacheErr) {
+          logger.debug('Advanced cache storage failed', { requestId, error: cacheErr.message });
+        }
         setInCache(cacheKey, finalReportContent);
 
         // Compute usage totals
@@ -845,12 +1125,26 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
           usageAgg.totals.prompt_tokens += pt; usageAgg.totals.completion_tokens += ct; usageAgg.totals.total_tokens += tt;
         };
         usageAgg.planning.forEach(add); usageAgg.synthesis.forEach(add); usageAgg.agents.forEach(a=>add(a.usage));
+        const lastSnapshot = allConsensusSnapshots[allConsensusSnapshots.length - 1];
         const researchMetadata = {
-        durationMs: Date.now() - overallStartTime,
-        iterations: currentIteration - 1,
-        totalSubQueries: allAgentQueries.length,
-          requestId: requestId, // Store requestId with metadata
-          usage: usageAgg
+          durationMs: Date.now() - overallStartTime,
+          iterations: currentIteration - 1,
+          totalSubQueries: allAgentQueries.length,
+          requestId: requestId,
+          usage: usageAgg,
+          signalSummary: {
+            count: allSignals.length,
+            sources: [...new Set(allSignals.map(s => s.source))],
+            avgConfidence: allSignals.length > 0
+              ? allSignals.reduce((sum, s) => sum + s.confidence, 0) / allSignals.length
+              : 0
+          },
+          convergence: {
+            finalState: lastSnapshot?.states || [],
+            history: allConsensusSnapshots,
+            earlyTermination,
+            tiebreakerUsed
+          }
         };
 
         // Run fact-checking on the final report before saving
@@ -858,7 +1152,13 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         let accuracyScore = null;
         try {
           factCheckResults = await factCheckAgent.factCheck(finalReportContent, {
-            ensembleResults: aggregatedResults,
+            ensembleResults: allResearchResults.map(r => ({
+              model: r.model,
+              content: r.result,
+              agentId: r.agentId,
+              query: r.query
+            })),
+            signals: allSignals,
             requestId
           });
           accuracyScore = factCheckResults.accuracyScore?.score ?? null;
@@ -883,9 +1183,15 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
         structuredData: structuredData,
         basedOnPastReportIds: relevantPastReports.map(r => r.reportId),
         accuracyScore: accuracyScore,
-        factCheckResults: factCheckResults
+        factCheckResults: factCheckResults,
+        ensembleSignals: allSignals.map(s => s.toJSON())
         });
         logger.info('Report saved', { requestId, reportId: savedReportId, accuracyScore: accuracyScore ?? 'N/A' });
+
+        // Notify: Job complete with reportId
+        const totalDuration = Date.now() - overallStartTime;
+        await notifier.complete(savedReportId, totalDuration);
+
         // Index the saved report for hybrid search when enabled
         try {
           const cfg = require('../../config');
@@ -959,13 +1265,39 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
       // --- End Save Full Report ---
 
       // If synthesis succeeded, return the completion message including the file path
+      
+      // Determine output strategy based on size and format
+      const shouldCompress = finalReportContent.length > (config.payload?.compressionThreshold || 50000);
+      const shouldReference = outputFormat === 'reference' || finalReportContent.length > (config.payload?.referenceThreshold || 100000);
+
+      if (savedReportId && shouldReference) {
+        return JSON.stringify({
+          reportId: savedReportId,
+          message: "Report generated successfully. Use get_report_content to retrieve.",
+          path: fullReportPath,
+          preview: finalReportContent.substring(0, 500) + "...",
+          size: finalReportContent.length,
+          format: 'reference',
+          requestId
+        }, null, 2);
+      } else if (shouldCompress && outputFormat !== 'raw') {
+        const compressed = compressReportPayload(finalReportContent, config.payload?.compressionFormat || 'gzip');
+        return JSON.stringify({
+          reportId: savedReportId,
+          ...compressed,
+          message: "Compressed report content. Decode using " + (compressed.encoding === 'br' ? 'brotli' : 'gzip') + ".",
+          path: fullReportPath,
+          requestId
+        }, null, 2);
+      }
+
       const completionMessage = `Research complete. Results streamed. Report ID: ${savedReportId || 'N/A'}. Full report saved to: ${fullReportPath || 'Not saved'}. [${requestId}]`; // Include requestId and file path
       return completionMessage;
     }
 
   } catch (error) { // Main catch block for errors *before* or *during* synthesis failure reporting
     const overallDuration = Date.now() - overallStartTime;
-    const { wrapError, formatErrorForLog } = require('../utils/errors');
+    const { wrapError, formatErrorForLog, inferCategory } = require('../utils/errors');
 
     // Wrap error with full context, preserving original error as cause
     const wrappedError = wrapError(error,
@@ -977,6 +1309,19 @@ async function conductResearch(params, mcpExchange = null, requestId = 'unknown-
           duration: overallDuration,
           phase: 'research'
         }
+      }
+    );
+
+    // Notify: Job error
+    const errorCategory = inferCategory(error);
+    const isRetryable = ['NETWORK', 'RATE_LIMIT', 'TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(errorCategory);
+    await notifier.error(
+      wrappedError.code || errorCategory,
+      error.message,
+      {
+        isRetryable,
+        durationMs: overallDuration,
+        phase: wrappedError.context?.phase || 'unknown'
       }
     );
 
@@ -1054,7 +1399,7 @@ async function queryTool(params, mcpExchange = null, requestId = 'unknown-req') 
       { role: 'system', content: 'Explain these SQL SELECT results concisely in plain English for a technical reader.' },
       { role: 'user', content: `Results (first 30 rows max):\n${rowsStr.slice(0, 2000)}` }
     ];
-    const resp = await openRouterClient.chatCompletion(model, messages, { temperature: 0.2, max_tokens: 400 });
+    const resp = await providerManager.chat(model, messages, { temperature: 0.2, max_tokens: 400 });
     const explanation = resp.choices?.[0]?.message?.content || '';
     return JSON.stringify({ rows: JSON.parse(rowsStr), explanation }, null, 2);
   } catch (_) {
@@ -1349,6 +1694,12 @@ const exportReportsSchema = z.object({
   _requestId: z.string().optional()
 });
 
+const providerHealthSchema = z.object({
+  includeModels: z.boolean().optional(),
+  maxModels: z.number().int().positive().optional(),
+  _requestId: z.string().optional()
+});
+
 const importReportsSchema = z.object({
   format: z.enum(['json', 'ndjson']).default('json'),
   content: z.string().min(1),
@@ -1468,34 +1819,30 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
       logger.warn('Could not fetch convergence metrics', { error: convErr.message });
     }
 
+    const providerTelemetry = require('../utils/providerTelemetry');
+    const providerHealth = providerTelemetry.getSnapshot({ includeModels: false, maxModels: 5 });
+
+    // Circuit breaker status (if wired from mcpServer)
+    let circuitStatus = null;
+    try {
+      const { circuits } = require('./mcpServer');
+      if (circuits) {
+        circuitStatus = {};
+        for (const [name, breaker] of Object.entries(circuits)) {
+          circuitStatus[name] = breaker.getStatus();
+        }
+      }
+    } catch (_) {
+      // circuits not yet exported or circular dep - skip
+    }
+
     const status = {
-      serverName: config.server.name,
-      serverVersion: config.server.version,
-      timestamp: new Date().toISOString(),
-      database: {
-        initialized: dbInitialized,
-        initState,
-        storageType: dbPathInfo,
-        vectorDimension: config.database.vectorDimension,
-        maxRetries: config.database.maxRetryAttempts,
-        retryDelayBaseMs: config.database.retryDelayBaseMs,
-        relaxedDurability: config.database.relaxedDurability
-      },
+      providers: providerHealth.providers,
+      database: { initialized: dbInitialized, dbPathInfo },
+      embedder: { ready: embedderReady },
       jobs,
-      embedder: {
-        ready: embedderReady,
-        model: embedderReady ? 'Xenova/all-MiniLM-L6-v2' : 'Not Loaded'
-      },
-      cache: {
-        ttlSeconds: CACHE_TTL_SECONDS,
-        maxKeys: cache.options.maxKeys,
-        currentKeys: cache.keys().length,
-        stats: cache.getStats()
-      },
-      config: {
-        serverPort: config.server.port,
-        maxResearchIterations: config.models.maxResearchIterations
-      },
+      // Circuit breaker health
+      circuits: circuitStatus || { status: 'unavailable' },
       // Agent Zero Observation Loop - Convergence tracking
       convergence: convergence ? {
         windowHours: convergence.windowHours,
@@ -1506,7 +1853,7 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
         failedCalls: convergence.overall.failedCalls,
         uniqueTools: convergence.overall.uniqueTools,
         avgLatencyMs: convergence.overall.avgLatencyMs,
-        topErrors: convergence.errorBreakdown.slice(0, 3)
+        topErrors: (convergence.errorBreakdown || []).slice(0, 3)
       } : { status: 'unavailable', reason: 'No observation data' }
     };
 
@@ -1516,6 +1863,21 @@ async function getServerStatus(params, mcpExchange = null, requestId = 'unknown-
   } catch (error) {
     logger.error('Error retrieving server status', { requestId, error });
     throw new Error(`[${requestId}] Error retrieving server status: ${error.message}`);
+  }
+}
+
+async function getProviderHealth(params = {}, mcpExchange = null, requestId = 'unknown-req') {
+  logger.debug('Retrieving provider health', { requestId });
+  try {
+    const providerTelemetry = require('../utils/providerTelemetry');
+    const snapshot = providerTelemetry.getSnapshot({
+      includeModels: params.includeModels !== false,
+      maxModels: params.maxModels || 8
+    });
+    return JSON.stringify(snapshot, null, 2);
+  } catch (error) {
+    logger.error('Error retrieving provider health', { requestId, error });
+    throw new Error(`[${requestId}] Error retrieving provider health: ${error.message}`);
   }
 }
 
@@ -1607,7 +1969,13 @@ async function reindexVectorsTool(params, mcpExchange = null, requestId = 'unkno
 async function searchWeb(params, mcpExchange = null, requestId = 'unknown-req') {
   const { query, maxResults } = params;
   try {
-    const results = await robustScraperInstance.searchWeb(query, maxResults);
+    const signals = await robustScraperInstance.perception(query, maxResults);
+    const results = signals.map(s => ({
+      title: s.payload.title,
+      text: s.payload.snippet,
+      url: s.payload.url,
+      source: s.source
+    }));
     return JSON.stringify({ query, results }, null, 2);
   } catch (e) {
     // Fallback to simple DDG API
@@ -1655,7 +2023,14 @@ function stripHtml(html) {
 async function fetchUrl(params, mcpExchange = null, requestId = 'unknown-req') {
   const { url, maxBytes } = params;
   try {
-    const resObj = await robustScraperInstance.fetchUrl(url, { maxBytes });
+    const signal = await robustScraperInstance.fetchSignal(url);
+    const resObj = {
+      success: signal.type !== 'error',
+      content: signal.payload.content,
+      title: signal.payload.title,
+      url: signal.payload.url,
+      error: signal.type === 'error' ? signal.payload.message : null
+    };
     // Auto-index fetched text when enabled
     try {
       const cfg = require('../../config');
@@ -1734,6 +2109,7 @@ const TOOL_CATALOG = [
   { name: 'get_report_content', description: 'Alias for get_report.' },
   { name: 'history', description: 'List recent research reports. Optional limit and queryFilter.' },
   { name: 'get_server_status', description: 'Server health check - database, embedder, job queue status.' },
+  { name: 'get_provider_health', description: 'Provider health metrics with model-level stats.' },
   { name: 'date_time', description: "Current date/time. format: 'iso'|'rfc'|'epoch' (aka 'unix'); accepts freeform iso/rfc/epoch too." },
   { name: 'calc', description: 'Evaluate math: +,-,*,/,^,(), decimals. Accepts freeform expression or {expr}.' },
   { name: 'list_tools', description: 'Show all available tools with parameters.' },
@@ -1774,6 +2150,7 @@ function summarizeParamsForTool(name) {
     case 'search_tools': return ['query', 'limit?'];
     case 'date_time': return ['format?'];
     case 'get_server_status': return [];
+    case 'get_provider_health': return ['includeModels?', 'maxModels?'];
     case 'batch_research': return ['queries[]', 'waitForCompletion?', 'timeoutMs?', 'costPreference?'];
     default: return [];
   }
@@ -1796,7 +2173,7 @@ async function buildToolEmbedding(text) {
 
 // MODE-based tool exposure (mirrors mcpServer.js shouldExpose logic)
 const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
-const ALWAYS_ON = new Set(['ping', 'get_server_status', 'job_status', 'get_job_status', 'cancel_job']);
+const ALWAYS_ON = new Set(['ping', 'get_server_status', 'get_provider_health', 'job_status', 'get_job_status', 'cancel_job']);
 const AGENT_ONLY = new Set(['agent']);
 const MANUAL_SET = new Set([
   'research', 'conduct_research', 'submit_research', 'research_follow_up',
@@ -1863,18 +2240,107 @@ async function dateTimeTool(params) {
 }
 
 const calcSchema = z.object({ expr: z.string(), precision: z.number().int().min(0).max(12).optional().default(6) }).describe("Evaluate a simple arithmetic expression (+,-,*,/,^,(), decimals). Safe parser.");
+
+// Safe recursive descent parser for arithmetic expressions
+function tokenize(expr) {
+  const tokens = [];
+  let i = 0;
+  while (i < expr.length) {
+    if (/\s/.test(expr[i])) { i++; continue; }
+    if ('+-*/^()'.includes(expr[i])) {
+      tokens.push(expr[i++]);
+      continue;
+    }
+    if (/[0-9.]/.test(expr[i])) {
+      let num = '';
+      while (i < expr.length && /[0-9.]/.test(expr[i])) {
+        num += expr[i++];
+      }
+      tokens.push(parseFloat(num));
+      continue;
+    }
+    throw new Error(`Invalid char: ${expr[i]}`);
+  }
+  return tokens;
+}
+
+function safeEval(expr) {
+  const tokens = tokenize(expr);
+  let pos = 0;
+
+  function peek() { return tokens[pos]; }
+  function consume() { return tokens[pos++]; }
+
+  function parseExpr() {
+    let left = parseTerm();
+    while (peek() === '+' || peek() === '-') {
+      const op = consume();
+      const right = parseTerm();
+      left = op === '+' ? left + right : left - right;
+    }
+    return left;
+  }
+
+  function parseTerm() {
+    let left = parseFactor();
+    while (peek() === '*' || peek() === '/') {
+      const op = consume();
+      const right = parseFactor();
+      left = op === '*' ? left * right : left / right;
+    }
+    return left;
+  }
+
+  function parseFactor() {
+    let base = parsePrimary();
+    while (peek() === '^') {
+      consume();
+      const exp = parseFactor(); // Right-associative
+      base = Math.pow(base, exp);
+    }
+    return base;
+  }
+
+  function parsePrimary() {
+    const tok = peek();
+    if (tok === '(') {
+      consume();
+      const val = parseExpr();
+      if (consume() !== ')') throw new Error('Missing )');
+      return val;
+    }
+    if (tok === '-') {
+      consume();
+      return -parsePrimary();
+    }
+    if (typeof tok === 'number') {
+      consume();
+      return tok;
+    }
+    throw new Error(`Unexpected token: ${tok}`);
+  }
+
+  const result = parseExpr();
+  if (pos !== tokens.length) throw new Error('Unexpected tokens');
+  return result;
+}
+
 async function calcTool(params) {
   const src = String(params.expr || '').trim();
-  // Allow digits, operators, parens, decimal, caret, and whitespace (space, tab)
-  if (!/^[0-9+\-*/().^ \t]+$/.test(src)) return JSON.stringify({ error: 'Invalid characters' });
+  // Allow digits, operators, parens, decimal, caret, and whitespace
+  if (!/^[0-9+\-*/().^ \t]+$/.test(src)) {
+    return JSON.stringify({ error: 'Invalid characters' });
+  }
+
   try {
-    // Replace ^ with ** for exponent
-    const js = src.replace(/\^/g, '**');
-    // eslint-disable-next-line no-new-func
-    const fn = new Function(`return (${js});`);
-    const val = fn();
-    if (typeof val !== 'number' || !isFinite(val)) return JSON.stringify({ error: 'Computation failed' });
-    return JSON.stringify({ expr: src, result: Number(val.toFixed(params.precision || 6)) });
+    const result = safeEval(src);
+    if (typeof result !== 'number' || !isFinite(result)) {
+      return JSON.stringify({ error: 'Computation failed' });
+    }
+    return JSON.stringify({
+      expr: src,
+      result: Number(result.toFixed(params.precision || 6))
+    });
   } catch (e) {
     return JSON.stringify({ error: e.message });
   }
@@ -1937,7 +2403,7 @@ const agentSchema = z.object({
   // Tool chaining: execute multiple tools in sequence
   chain: z.array(z.object({
     tool: z.string(),
-    params: z.record(z.any()).optional()
+    params: z.record(z.string(), z.any()).optional()
   })).optional(),
   _requestId: z.string().optional()
 }).describe("Single entrypoint agent tool. Routes to research, follow_up, retrieve/query, or chain. Examples: {query:'AI safety'} for research, {action:'retrieve', query:'topic', k:5} for search, {chain:[{tool:'search',params:{q:'topic'}},{tool:'get_report',params:{reportId:'1'}}]} for chaining. Max depth: " + (parseInt(process.env.MAX_TOOL_DEPTH,10) ?? 3) + ".");
@@ -1945,7 +2411,44 @@ const agentSchema = z.object({
 async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now()}`) {
   const action = (params?.action || 'auto').toLowerCase();
 
-  // Handle tool chaining: execute multiple tools in sequence
+  // Swarm dispatch: planning → parallel research (Zero cell ensemble)
+  if (action === 'swarm' || action === 'ensemble' || params.ensemble_size || params.maxAgents) {
+    const query = params.query || params.q;
+    if (!query) throw new Error('agent swarm: query required');
+    const planningAgent = require('../agents/planningAgent');
+    const researchAgent = require('../agents/researchAgent');
+    
+    const planXml = await planningAgent.planResearch(query, {
+      maxAgents: params.ensemble_size || params.maxAgents || 3,
+      mode: params.mode || 'hyper',
+      onEvent: (type, payload) => logger.debug('Agent swarm event', { type, requestId })
+    }, null, requestId);
+    
+    const agentQueries = parseAgentXml(planXml).map((q, i) => ({ ...q, id: `agent-${i+1}` }));
+    
+    const results = await researchAgent.conductParallelResearch(
+      agentQueries,
+      params.costPreference || 'low',
+      params.images,
+      params.textDocuments,
+      params.structuredData,
+      null,
+      requestId,
+      null,
+      { clientContext: params.clientContext, mode: params.mode }
+    );
+    
+    return JSON.stringify({
+      swarm: {
+        query,
+        agentCount: agentQueries.length,
+        results: results.map(r => ({ agentId: r.agentId, model: r.model, summary: r.result?.substring(0, 200) })),
+        signals: results.filter(r => r.signal).map(r => r.signal.toJSON())
+      }
+    }, null, 2);
+  }
+
+  // Handle tool chaining (existing)
   if (action === 'chain' || (params?.chain && Array.isArray(params.chain))) {
     const chain = params.chain || [];
     if (!chain.length) {
@@ -1975,7 +2478,6 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
           success: false,
           error: err.message
         });
-        // Stop chain on error (can be made configurable)
         break;
       }
     }
@@ -1990,6 +2492,7 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
     }, null, 2);
   }
 
+  // Route to sub-tools (existing)
   if (action === 'research') return researchTool(params, mcpExchange, requestId);
   if (action === 'follow_up') return researchFollowUp(params, mcpExchange, requestId);
   if (action === 'retrieve') return retrieveTool({ mode: 'index', query: params.query, k: params.k, scope: params.scope, rerank: params.rerank }, mcpExchange, requestId);
@@ -2008,7 +2511,7 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
 }
 
 // Batch research tool for efficient parallel job dispatch
-const batchResearchSchema = z.object({
+const batchResearchSchemaBase = z.object({
   queries: z.array(z.union([
     z.string(),
     z.object({
@@ -2021,7 +2524,9 @@ const batchResearchSchema = z.object({
   timeoutMs: z.number().int().positive().optional().default(300000).describe("Max wait time in ms when waitForCompletion=true. Default 5 minutes."),
   costPreference: z.enum(['high', 'low']).optional().default('low').describe("Default cost preference for all queries"),
   _requestId: z.string().optional()
-}).describe("Batch dispatch multiple research queries in a single call. Returns job IDs or waits for completion. Example: {queries: ['topic 1', 'topic 2', {query:'topic 3', costPreference:'high'}], waitForCompletion: true}");
+});
+
+const batchResearchSchema = batchResearchSchemaBase.transform(({queries, ...rest}) => ({queries, ...rest})).describe("Batch dispatch multiple research queries in a single call. Returns job IDs or waits for completion. Example: {queries: ['topic 1', 'topic 2', {query:'topic 3', costPreference:'high'}], waitForCompletion: true}");
 
 async function batchResearchTool(params, mcpExchange = null, requestId = `batch-${Date.now()}`) {
   const queries = params.queries || [];
@@ -2158,9 +2663,168 @@ async function pingTool(params) {
     const dbPathInfo = dbClient.getDbPathInfo();
     let jobs = [];
     try { jobs = await dbClient.executeQuery(`SELECT status, COUNT(*) AS n FROM jobs GROUP BY status`, []); } catch (_) {}
-    return JSON.stringify({ ...base, database: { initialized: dbInitialized, storageType: dbPathInfo }, embedder: { ready: embedderReady }, jobs }, null, 2);
+  return JSON.stringify({ ...base, database: { initialized: dbInitialized, dbPathInfo, storageType: dbPathInfo }, embedder: { ready: embedderReady }, jobs }, null, 2);
   } catch (_) {
     return JSON.stringify(base);
+  }
+}
+
+// ===== SESSION & GRAPH TOOL WRAPPERS =====
+// These provide CLI-compatible interfaces to the session and graph handlers
+
+const { getSessionManager } = require('../utils/sessionStore');
+const { getKnowledgeGraph } = require('../utils/knowledgeGraph');
+
+// Lazy-initialized managers
+let _sessionManager = null;
+let _knowledgeGraph = null;
+
+async function ensureSessionManager() {
+  if (!_sessionManager) {
+    _sessionManager = getSessionManager(dbClient);
+    await _sessionManager.initialize().catch(e => logger.warn('SessionManager init warning', { error: e.message }));
+  }
+  return _sessionManager;
+}
+
+async function ensureKnowledgeGraph() {
+  if (!_knowledgeGraph) {
+    _knowledgeGraph = getKnowledgeGraph(dbClient);
+    await _knowledgeGraph.initialize().catch(e => logger.warn('KnowledgeGraph init warning', { error: e.message }));
+  }
+  return _knowledgeGraph;
+}
+
+// Session tools
+async function sessionState(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.getState(sessionId), null, 2);
+}
+
+async function sessionUndo(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.undo(sessionId), null, 2);
+}
+
+async function sessionRedo(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.redo(sessionId), null, 2);
+}
+
+async function sessionCheckpoint(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  const name = params.name || `checkpoint-${Date.now()}`;
+  await mgr.createCheckpoint(sessionId, name);
+  return JSON.stringify({ success: true, sessionId, checkpointName: name }, null, 2);
+}
+
+async function sessionFork(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  const newId = params.newSessionId || `fork_${Date.now()}`;
+  return JSON.stringify(await mgr.forkSession(sessionId, newId), null, 2);
+}
+
+async function sessionTimeTravel(params = {}) {
+  const mgr = await ensureSessionManager();
+  const sessionId = params.sessionId || 'default';
+  return JSON.stringify(await mgr.timeTravel(sessionId, params.timestamp), null, 2);
+}
+
+// Graph tools
+async function graphTraverse(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+  const { startNode, node, depth = 3, strategy = 'semantic' } = params;
+  const start = startNode || node || 'report:1';
+
+  if (typeof graph.traverseGraph === 'function') {
+    const [nodeType, nodeId] = start.includes(':') ? start.split(':') : ['report', start];
+    const result = await graph.traverseGraph(nodeType, nodeId, depth, strategy);
+    return JSON.stringify({ startNode: start, strategy, nodes: result || [] }, null, 2);
+  }
+
+  return JSON.stringify({ startNode: start, strategy, nodes: [], message: 'Graph traversal not available' }, null, 2);
+}
+
+async function graphPath(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+  const { from, to } = params;
+
+  if (!from || !to) {
+    return JSON.stringify({ error: 'Both from and to parameters are required' }, null, 2);
+  }
+
+  if (typeof graph.findPath === 'function') {
+    const path = await graph.findPath(from, to);
+    return JSON.stringify({ from, to, pathFound: path?.length > 0, path: path || [] }, null, 2);
+  }
+
+  return JSON.stringify({ from, to, pathFound: false, message: 'Path finding not available' }, null, 2);
+}
+
+async function graphClusters(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+
+  if (typeof graph.findClusters === 'function') {
+    const clusters = await graph.findClusters();
+    return JSON.stringify({ clusterCount: clusters?.length || 0, clusters: clusters || [] }, null, 2);
+  }
+
+  return JSON.stringify({ clusterCount: 0, clusters: [], message: 'Clustering not available' }, null, 2);
+}
+
+async function graphPageRank(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+  const topK = params.topK || 20;
+
+  if (typeof graph.getPageRank === 'function') {
+    const rankings = await graph.getPageRank(topK);
+    return JSON.stringify({ topK, rankings: rankings || [] }, null, 2);
+  }
+
+  // Fallback: use report order
+  try {
+    const rows = await dbClient.executeQuery(
+      `SELECT id, original_query FROM research_reports ORDER BY created_at DESC LIMIT $1`,
+      [topK]
+    );
+    return JSON.stringify({
+      topK,
+      rankings: (rows || []).map((r, i) => ({
+        rank: i + 1,
+        nodeId: `report:${r.id}`,
+        label: r.original_query?.substring(0, 50)
+      })),
+      message: 'Rankings based on recency'
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ topK, rankings: [], error: e.message }, null, 2);
+  }
+}
+
+async function graphStats(params = {}) {
+  const graph = await ensureKnowledgeGraph();
+
+  if (typeof graph.getGraphStats === 'function') {
+    const stats = await graph.getGraphStats();
+    return JSON.stringify({ available: true, ...stats }, null, 2);
+  }
+
+  // Fallback: count from database
+  try {
+    const reportCount = await dbClient.executeQuery('SELECT COUNT(*) as count FROM research_reports', []);
+    const docCount = await dbClient.executeQuery('SELECT COUNT(*) as count FROM doc_index', []);
+    return JSON.stringify({
+      available: true,
+      reportCount: parseInt(reportCount?.[0]?.count) || 0,
+      docCount: parseInt(docCount?.[0]?.count) || 0
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ available: false, error: e.message }, null, 2);
   }
 }
 
@@ -2178,6 +2842,7 @@ module.exports = {
   listModelsSchema: z.object({ refresh: z.boolean().optional().default(false) }),
   getReportContentSchema,
   getServerStatusSchema,
+  getProviderHealthSchema,
   exportReportsSchema,
   importReportsSchema,
   backupDbSchema,
@@ -2197,9 +2862,11 @@ module.exports = {
   dateTimeSchema,
   calcSchema,
   retrieveSchema,
+  zeroChatSchema,
   
   // Functions
   conductResearch,
+  zeroChat,
    submitResearch,
   getJobStatusTool,
   cancelJobTool,
@@ -2209,6 +2876,7 @@ module.exports = {
   listResearchHistory,
   getReportContent,
   getServerStatus,
+  getProviderHealth,
   executeSql,
   listModels,
   exportReports,
@@ -2242,5 +2910,18 @@ module.exports = {
   routeToTool,
   getToolDepth,
   withDepthTracking,
-  MAX_TOOL_DEPTH
+  MAX_TOOL_DEPTH,
+  // Session tools (CLI-compatible)
+  sessionState,
+  sessionUndo,
+  sessionRedo,
+  sessionCheckpoint,
+  sessionFork,
+  sessionTimeTravel,
+  // Graph tools (CLI-compatible)
+  graphTraverse,
+  graphPath,
+  graphClusters,
+  graphPageRank,
+  graphStats
 };

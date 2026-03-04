@@ -16,7 +16,9 @@ const metadataCache = new NodeCache({
 class ClientMetadataValidator {
   constructor() {
     this.enabled = config.mcp?.auth?.clientMetadataEnabled || false;
-    this.allowHttp = process.env.MCP_CIMD_ALLOW_HTTP === 'true'; // For testing only
+    // HTTP only allowed in non-production AND when explicitly enabled
+    const isProduction = process.env.NODE_ENV === 'production';
+    this.allowHttp = !isProduction && process.env.MCP_CIMD_ALLOW_HTTP === 'true';
   }
 
   /**

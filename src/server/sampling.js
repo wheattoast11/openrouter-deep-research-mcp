@@ -2,14 +2,14 @@
 // MCP 2025-11-25 Sampling with Tools (SEP-1577)
 // Server-side agentic loops using client sampling capabilities
 
-const openRouterClient = require('../utils/openRouterClient');
+const providerManager = require('../core/providers');
 const config = require('../../config');
 
 class SamplingHandler {
   constructor() {
     this.enabled = config.mcp?.features?.sampling?.enabled !== false;
     this.toolsEnabled = config.mcp?.features?.sampling?.withTools !== false;
-    this.defaultModel = config.models?.planning || 'google/gemini-2.5-pro';
+    this.defaultModel = config.models?.planning || 'google/gemini-3-pro-preview';
     this.maxIterations = 10; // Safety limit for agentic loops
   }
 
@@ -68,7 +68,7 @@ class SamplingHandler {
     process.stderr.write(`[${new Date().toISOString()}] Sampling: Creating message with model ${orRequest.model}, tools: ${tools?.length || 0}\n`);
 
     // Make the API call
-    const response = await openRouterClient.chatCompletion(
+    const response = await providerManager.chat(
       orRequest.model,
       orRequest.messages,
       {
@@ -302,18 +302,29 @@ class SamplingHandler {
     // Add tool calls
     if (message.tool_calls && Array.isArray(message.tool_calls)) {
       for (const tc of message.tool_calls) {
+        // Safely parse arguments with try-catch
+        let input = {};
+        if (tc.function?.arguments) {
+          try {
+            input = JSON.parse(tc.function.arguments);
+          } catch (e) {
+            // If JSON is invalid, store raw string in a wrapper
+            input = { _raw: tc.function.arguments };
+          }
+        }
         content.push({
           type: 'tool_use',
           id: tc.id,
           name: tc.function?.name,
-          input: tc.function?.arguments ? JSON.parse(tc.function.arguments) : {}
+          input
         });
       }
     }
 
+    // MCP spec requires content to always be an array of content blocks
     return {
       role: 'assistant',
-      content: content.length === 1 ? content[0] : content,
+      content: content,
       model: response.model,
       stopReason: this.mapStopReason(choice.finish_reason),
       usage: response.usage ? {

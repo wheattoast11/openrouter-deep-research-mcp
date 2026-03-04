@@ -7,13 +7,17 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
+      - run: npm install
+      - run: npm test
       - name: Publish to npm (public)
         run: npm publish --access public --provenance
         env:
@@ -21,7 +25,7 @@ jobs:
       - name: Configure Node for GitHub Packages
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://npm.pkg.github.com'
           scope: '@terminals-tech'
       - name: Publish to GitHub Packages

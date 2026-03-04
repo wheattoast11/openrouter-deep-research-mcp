@@ -1,11 +1,44 @@
 # Changelog
 
-## [1.9.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.8.0...v1.9.0) (2025-12-07)
-
+## [1.11.0] - 2025-12-25
 
 ### Features
+* **pglite:** Upgrade to PGlite 0.3.14 with 16 extensions
+  - Core: `vector`, `pgtap`, `pg_uuidv7`, `pg_ivm`
+  - Contrib: `bloom`, `cube`, `seg`, `tcn`, `tsm_system_time`, `ltree`, `lo`, `tablefunc`, `uuid_ossp`, `fuzzystrmatch`, `citext`, `hstore`
+* **models:** Update to latest model IDs (gpt-5-nano, gemini-3-flash-preview, claude-haiku-4.5)
+* **agents:** Add ZeroReplay temporal analysis for debugging orchestration flows
+* **agents:** Add StickyCluster for agent grouping based on communication patterns
+* **storage:** Add MultimodalStorage for binary data handling with `lo` extension
+* **routing:** Add HierarchicalRoute for ltree-based Rail protocol routing
+* **orchestrator:** Add ParallelismTracker for geometric parallelism alignment
 
-* **v1.8.1:** Core abstractions, handler integration, and error visibility ([c686386](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/c686386b6669cb485f009193c7b80498a3c65962))
+### Bug Fixes
+* **dbClient:** Fix TCN trigger setup by splitting multi-command prepared statements
+* **contextAgent:** Add intelligent payload truncation to prevent 413 errors
+* **bin/zero:** Add graceful shutdown with proper db.close() to prevent mutex lock errors
+* **config:** Replace deprecated gpt-4o-mini with gpt-5-nano
+
+### Documentation
+* **docs:** Add EXTENSIONS.md with comprehensive guide to all 16 PGlite extensions
+
+---
+
+## [1.9.2] - 2025-12-14
+
+### Features
+* **signal-protocol:** Wire Signal Protocol into research ensemble flow
+  - Multi-model consensus verification with weighted confidence
+  - Signal creation in ResearchAgent with `resultToSignal()`
+  - Signal collection and persistence in tools.js
+  - Database storage with `ensemble_signals` JSONB column
+  - CLI retrieval via `getReportSignals(reportId)`
+
+### Bug Fixes
+* **tools.js:** Fix undefined `aggregatedResults` passed to factCheck
+* **cli:** Fix report ID extraction for string return type
+* **cli:** Fix `getReport` → `getReportContent` function name
+* **mcpServer:** Add 60s debounce for job worker health warnings
 
 ## [1.8.0](https://github.com/wheattoast11/openrouter-deep-research-mcp/compare/v1.7.0...v1.8.0) (2025-12-04)
 
@@ -34,7 +67,7 @@
 * implement async job processing with submit, status, and cancel functionalities; enhance configuration for HTTPS and reranking; update README with new demo scripts and MCP client JSON configuration examples ([70e66a2](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/70e66a274a5a99cb6cf7834a8b1c58cad6538e75))
 * lightweight web tools (search_web, fetch_url) and docs; register tools ([1cdb005](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/1cdb0059f653bb7d6e62da9d4d124bd06c18de11))
 * **mode:** AGENT/MANUAL/ALL w/ always-on tools; add agent+ping; async submit UI/SSE links; docs/CI; v1.3.2 ([17b456e](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/17b456ef014b2d649a4bac88e6b3e7999c5d1188))
-* **models:** switch defaults to anthropic/claude-sonnet-4 and openai/gpt-5 family ([3348bd8](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/3348bd846a38b7864ce619518f0f8cb30eb206dc))
+* **models:** switch defaults to anthropic/claude-sonnet-4.5 and openai/gpt-5 family ([3348bd8](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/3348bd846a38b7864ce619518f0f8cb30eb206dc))
 * streaming robustness, dynamic catalog tools, DB QoL tools, README updates (Aug 09, 2025) ([65cf942](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/65cf942c8db3756f6df5a52308b5a02b46f73b3d))
 * tarball backups, refreshed default model IDs, extended tests, docs update; npm audit fix ([8918fcc](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/8918fcc1194511f8d55c3ed19aa6ee4b1c80ecdc))
 * update model configurations to include new planning defaults and enhance research agent capabilities; add client context handling and hyper mode for optimized model selection; improve web scraping with additional search strategies and usage tracking ([2850f59](https://github.com/wheattoast11/openrouter-deep-research-mcp/commit/2850f59033106a4ecd8fb5c683f92920ff33ff96))

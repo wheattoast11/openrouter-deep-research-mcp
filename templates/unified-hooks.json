@@ -1,0 +1,81 @@
+{
+  "description": "Universal hook definitions that work with both Claude Code and OpenCode",
+  "hooks": [
+    {
+      "universalEvent": "tool:before",
+      "claudeEvent": "PreToolUse",
+      "opencodeEvent": "tool.pre",
+      "description": "Fires before any tool execution",
+      "payload": {
+        "tool": "string",
+        "arguments": "object",
+        "sessionId": "string"
+      }
+    },
+    {
+      "universalEvent": "tool:after",
+      "claudeEvent": "PostToolUse",
+      "opencodeEvent": "tool.post",
+      "description": "Fires after tool execution completes",
+      "payload": {
+        "tool": "string",
+        "arguments": "object",
+        "result": "any",
+        "duration": "number",
+        "sessionId": "string"
+      }
+    },
+    {
+      "universalEvent": "session:start",
+      "claudeEvent": "SessionStart",
+      "opencodeEvent": "session.start",
+      "description": "Fires when a new session begins",
+      "payload": {
+        "sessionId": "string",
+        "provider": "string",
+        "timestamp": "string"
+      }
+    },
+    {
+      "universalEvent": "session:end",
+      "claudeEvent": "SessionEnd",
+      "opencodeEvent": "session.end",
+      "description": "Fires when a session ends",
+      "payload": {
+        "sessionId": "string",
+        "provider": "string",
+        "timestamp": "string",
+        "duration": "number"
+      }
+    },
+    {
+      "universalEvent": "agent:complete",
+      "claudeEvent": "SubagentStop",
+      "opencodeEvent": "agent.complete",
+      "description": "Fires when a subagent completes its task",
+      "payload": {
+        "agentId": "string",
+        "taskId": "string",
+        "result": "any",
+        "sessionId": "string"
+      }
+    },
+    {
+      "universalEvent": "prompt:submit",
+      "claudeEvent": "UserPromptSubmit",
+      "opencodeEvent": "prompt.submit",
+      "description": "Fires when user submits a prompt",
+      "payload": {
+        "prompt": "string",
+        "sessionId": "string",
+        "timestamp": "string"
+      }
+    }
+  ],
+  "graphIntegration": {
+    "enabled": true,
+    "nodeType": "hook_event",
+    "trackProvenance": true,
+    "edgeTypes": ["triggers", "follows", "relates_to"]
+  }
+}

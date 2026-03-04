@@ -19,11 +19,14 @@ else if (process.argv.includes('--setup-claude')) {
 
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+// Legacy SSE transport — kept for backward compatibility, deprecated in v2.0.0
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid'); // Import uuid for connection IDs
+const crypto = require('crypto'); // For timing-safe API key comparison
 const config = require('../../config');
 
 // MCP 2025-11-25 Feature Modules
@@ -34,8 +37,31 @@ const elicitationHandler = require('./elicitation');
 // Structured logging (MCP-compliant)
 const logger = require('../utils/logger');
 
+// Semantic error diagnostics (Rust-inspired)
+const {
+  createDiagnosticContext,
+  validateWithDiagnostics,
+  formatSemanticError
+} = require('../utils/diagnostics');
+
+/**
+ * HTML escape to prevent XSS in UI resource templates.
+ * @param {string} str - Untrusted string to escape
+ * @returns {string} HTML-safe string
+ */
+function escapeHtml(str) {
+  if (typeof str !== 'string') return String(str ?? '');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const { 
   // Schemas
+  zeroChatSchema,
   conductResearchSchema,
   researchFollowUpSchema,
   getPastResearchSchema,
@@ -69,6 +95,7 @@ const {
   batchResearchSchema, // Batch research for parallel job dispatch
   
   // Functions
+  zeroChat,
   conductResearch,
   researchFollowUp,
   getPastResearch,
@@ -110,6 +137,18 @@ const cors = require('cors');
 const { getKnowledgeGraph } = require('../utils/knowledgeGraph');
 const { getSessionManager, EventTypes } = require('../utils/sessionStore');
 
+// Zero Protocol - Self-referential MCP architecture
+const { DualRoleNode, ConnectionState, createZeroNode } = require('../core/dualRoleNode');
+const { ZeroUri, ZeroUriRouter, self: zeroSelf, parse: parseZeroUri, isZeroUri } = require('../core/zeroUri');
+
+// Circuit Breaker - production fail-fast for external services
+const { CircuitBreaker, withRetry } = require('../core/circuitBreaker');
+const circuits = {
+  openrouter: new CircuitBreaker({ name: 'openrouter', failureThreshold: 3, resetTimeoutMs: 60000 }),
+  database: new CircuitBreaker({ name: 'database', failureThreshold: 3, resetTimeoutMs: 30000 }),
+  embedder: new CircuitBreaker({ name: 'embedder', failureThreshold: 5, resetTimeoutMs: 45000 })
+};
+
 // Consolidated handlers (feature-flagged via CORE_HANDLERS_ENABLED)
 const handlers = config.core?.handlers?.enabled ? require('./handlers') : null;
 
@@ -123,8 +162,9 @@ const LEGACY_ONLY_TOOLS = new Set([
 // Initialize singleton instances
 let knowledgeGraph = null;
 let sessionManager = null;
+let zeroNode = null;
 
-// Lazy init for knowledge graph and session manager
+// Lazy init for knowledge graph, session manager, and Zero node
 async function ensureIntegrations() {
   if (!knowledgeGraph) {
     knowledgeGraph = getKnowledgeGraph(dbClient);
@@ -133,6 +173,63 @@ async function ensureIntegrations() {
   if (!sessionManager) {
     sessionManager = getSessionManager(dbClient);
     await sessionManager.initialize().catch(e => logger.error('SessionManager init error', { error: e }));
+  }
+  if (!zeroNode) {
+    try {
+      zeroNode = new DualRoleNode({
+        identity: config.server.name || 'openrouter-agents',
+        protocol: 'mcp',
+        capabilities: {
+          tools: true,
+          prompts: true,
+          resources: true,
+          sampling: true,
+          elicitation: true,
+        },
+      });
+      // Automatically connect to self for the fixed-point demonstration
+      await zeroNode.connectToSelf();
+      logger.info('Zero node initialized', {
+        identity: zeroNode.identity,
+        state: zeroNode.state,
+        fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED
+      });
+
+      // Wire DualRoleNode services for void simulation (Fix 1 from architecture plan)
+      if (zeroNode.state === ConnectionState.SELF_CONNECTED) {
+        const toolHandlers = {
+          'tools/ping': async () => ({ pong: true }),
+          'tools/research': async (params) => researchTool(params, null, `zero-${Date.now()}`),
+          'tools/conduct_research': async (params) => conductResearch(params, null, `zero-${Date.now()}`),
+          'tools/search': async (params) => searchTool(params, null, `zero-${Date.now()}`),
+          'tools/query': async (params) => queryTool(params, null, `zero-${Date.now()}`),
+          'tools/retrieve': async (params) => retrieveTool(params, null, `zero-${Date.now()}`),
+          'tools/get_report': async (params) => getReportContent(params, null, `zero-${Date.now()}`),
+          'tools/history': async (params) => listResearchHistory(params, null, `zero-${Date.now()}`),
+          'tools/get_server_status': async (params) => getServerStatus(params, null, `zero-${Date.now()}`),
+          'tools/batch_research': async (params) => batchResearchTool(params, null, `zero-${Date.now()}`),
+        };
+
+        for (const [name, handler] of Object.entries(toolHandlers)) {
+          zeroNode.registerService(name, async (params) => {
+            try {
+              const result = await handler(params);
+              // Handle both string results and object results
+              if (typeof result === 'string') return result;
+              if (result?.content?.[0]?.text) return result.content[0].text;
+              return JSON.stringify(result, null, 2);
+            } catch (e) {
+              logger.error('Zero service error', { service: name, error: e.message });
+              return JSON.stringify({ error: e.message }, null, 2);
+            }
+          });
+        }
+        logger.info('Zero services registered', { count: Object.keys(toolHandlers).length });
+      }
+    } catch (e) {
+      logger.error('Zero node init error', { error: e.message });
+      zeroNode = null;
+    }
   }
 }
 
@@ -167,6 +264,14 @@ function generateUITemplate(templateType, options = {}) {
     const mcpBridge = {
       requestId: 0,
       pending: new Map(),
+
+      // HTML escape to prevent XSS
+      escapeHtml(str) {
+        if (typeof str !== 'string') return String(str ?? '');
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      },
 
       init() {
         window.addEventListener('message', (e) => {
@@ -375,7 +480,7 @@ function generateUITemplate(templateType, options = {}) {
   return templates[templateType] || templates['research-viewer'];
 }
 
-// Create MCP server with proper capabilities declaration per MCP spec 2025-06-18
+// Create MCP server with proper capabilities declaration per MCP spec 2025-11-25
 const server = new McpServer({
   name: config.server.name,
   version: config.server.version,
@@ -383,7 +488,11 @@ const server = new McpServer({
     tools: {},
     prompts: { listChanged: true },
     resources: { subscribe: true, listChanged: true },
-    logging: {} // Enable MCP logging notifications
+    logging: {},
+    sampling: {}, // SEP-1577: Sampling support
+    elicitation: { form: {}, url: {} }, // SEP-1036: Elicitation support
+    // MCP 2025-11-25: Enable progress and job notifications for LLM agents
+    notifications: { progress: true, job_complete: true }
   }
 });
 
@@ -407,10 +516,14 @@ function shouldExpose(name) {
 }
 function register(name, schema, handler) {
   if (shouldExpose(name)) {
-    // Use registerTool with config object to properly pass ZodEffects schemas
-    // The .tool() method only accepts ZodRawShape, not full Zod schemas with transforms
-    const description = schema?.description || schema?._def?.description || '';
-    server.registerTool(name, { inputSchema: schema, description }, handler);
+    // Ensure inputSchema is a ZodObject/ZodType for SDK v2 compatibility.
+    // Raw shapes like { key: z.string() } must be wrapped in z.object().
+    let inputSchema = schema;
+    if (schema && typeof schema === 'object' && !(schema instanceof z.ZodType)) {
+      inputSchema = z.object(schema);
+    }
+    const description = inputSchema?.description || inputSchema?._def?.description || '';
+    server.registerTool(name, { inputSchema, description }, handler);
   }
 }
 
@@ -455,11 +568,30 @@ async function routeThroughHandler(toolName, params, context) {
  * Wrap a legacy tool with handler routing
  * When CORE_HANDLERS_ENABLED=true, routes through handlers first
  * Falls back to legacy implementation if handlers unavailable or for LEGACY_ONLY_TOOLS
+ *
+ * Includes semantic error formatting (Rust-inspired "borrow checker" style)
+ * for actionable error messages that guide users to correct usage.
  */
 function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
   return async (params, exchange, requestId = `req-${Date.now()}`) => {
+    // Create diagnostic context at the start for rich error formatting
+    const diagnosticCtx = createDiagnosticContext(toolName, params);
+
     try {
-      const norm = needsNormalization ? normalizeParamsForTool(toolName, params) : params;
+      // Run tool-specific validation with diagnostics
+      const validation = validateWithDiagnostics(toolName, params);
+      if (!validation.valid) {
+        const formatted = formatSemanticError(toolName, new Error(validation.error), validation.ctx);
+        return {
+          content: [{ type: 'text', text: formatted }],
+          isError: true
+        };
+      }
+
+      // Use normalized params from validator if available, otherwise normalize
+      const norm = validation.normalized
+        ? { ...params, ...validation.normalized }
+        : (needsNormalization ? normalizeParamsForTool(toolName, params) : params);
 
       // Try handler routing for non-legacy tools
       if (handlers && !LEGACY_ONLY_TOOLS.has(toolName)) {
@@ -472,8 +604,10 @@ function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
       const text = await legacyFn(norm, exchange, requestId);
       return { content: [{ type: 'text', text }] };
     } catch (e) {
+      // Format error with semantic diagnostics
+      const formatted = formatSemanticError(toolName, e, diagnosticCtx);
       return {
-        content: [{ type: 'text', text: `Error ${toolName}: ${e.message}` }],
+        content: [{ type: 'text', text: formatted }],
         isError: true
       };
     }
@@ -609,6 +743,9 @@ function normalizeParamsForTool(toolName, params) {
           out.query = out.query || (parsed._raw ? parsed._raw : s);
         }
         if (out.k !== undefined) out.k = toNumberOr(out.k, 10);
+        // Fix type coercion for boolean flags
+        if (out.rerank !== undefined) out.rerank = toBoolean(out.rerank);
+        if (out.explain !== undefined) out.explain = toBoolean(out.explain);
         return out;
       }
 
@@ -620,6 +757,9 @@ function normalizeParamsForTool(toolName, params) {
         if (out.q && !out.query) out.query = out.q;
         if (out.cost && !out.costPreference) out.costPreference = out.cost;
         if (out.async !== undefined) out.async = toBoolean(out.async, true);
+        // Fix type coercion for boolean flags
+        if (out.includeSources !== undefined) out.includeSources = toBoolean(out.includeSources, true);
+        if (out.detailed !== undefined) out.detailed = toBoolean(out.detailed, false);
         return out;
       }
       return s ? { query: s } : {};
@@ -630,9 +770,13 @@ function normalizeParamsForTool(toolName, params) {
       return s ? { query: s } : {};
 
     case 'search':
-      // Accept either 'q' or 'query' parameter
-      if (parsed && (parsed.q || parsed.query)) return parsed;
-      return s ? { q: s } : {};
+      {
+        // Accept either 'q' or 'query' parameter
+        const out = (parsed && (parsed.q || parsed.query)) ? { ...parsed } : (s ? { q: s } : {});
+        // Fix type coercion for boolean flags
+        if (out.rerank !== undefined) out.rerank = toBoolean(out.rerank);
+        return out;
+      }
 
     // Note: 'retrieve' case is handled above at line 503-518
 
@@ -645,87 +789,79 @@ function normalizeParamsForTool(toolName, params) {
   }
 }
 
-// Register prompts using latest MCP spec with proper protocol handlers
+// Register prompts using server.registerPrompt() (MCP SDK v2 pattern)
 if (config.mcp?.features?.prompts) {
-  const prompts = new Map([
-    ['planning_prompt', {
-      name: 'planning_prompt',
+  server.registerPrompt(
+    'planning_prompt',
+    {
       description: 'Generate sophisticated multi-agent research plan using advanced XML tagging and domain-aware query decomposition',
-      arguments: [
-        { name: 'query', description: 'Research query to decompose into specialized sub-queries', required: true },
-        { name: 'domain', description: 'Primary domain: general, technical, reasoning, search, creative', required: false },
-        { name: 'complexity', description: 'Query complexity: simple, moderate, complex', required: false },
-        { name: 'maxAgents', description: 'Maximum number of research agents (1-10)', required: false }
-      ]
-    }],
-    ['synthesis_prompt', {
-      name: 'synthesis_prompt', 
-      description: 'Synthesize ensemble research results with rigorous citation framework and confidence scoring',
-      arguments: [
-        { name: 'query', description: 'Original research query for synthesis context', required: true },
-        { name: 'results', description: 'JSON string of research results to synthesize', required: true },
-        { name: 'outputFormat', description: 'Output format: report, briefing, bullet_points', required: false },
-        { name: 'audienceLevel', description: 'Target audience: beginner, intermediate, expert', required: false }
-      ]
-    }],
-    ['research_workflow_prompt', {
-      name: 'research_workflow_prompt',
-      description: 'Complete research workflow: planning → parallel execution → synthesis with quality controls',
-      arguments: [
-        { name: 'topic', description: 'Research topic or question', required: true },
-        { name: 'costBudget', description: 'Cost preference: low, high', required: false },
-        { name: 'async', description: 'Use async job processing: true, false', required: false }
-      ]
-    }]
-  ]);
+      argsSchema: {
+        query: z.string().describe('Research query to decompose into specialized sub-queries'),
+        domain: z.string().optional().describe('Primary domain: general, technical, reasoning, search, creative'),
+        complexity: z.string().optional().describe('Query complexity: simple, moderate, complex'),
+        maxAgents: z.string().optional().describe('Maximum number of research agents (1-10)')
+      }
+    },
+    async ({ query, domain, complexity, maxAgents }) => {
+      if (!query) {
+        return {
+          messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Please provide a query parameter to generate a research plan.' }] }]
+        };
+      }
+      const p = require('../agents/planningAgent');
+      const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
+      return {
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: planResult }] }]
+      };
+    }
+  );
 
-  server.setPromptRequestHandlers({
-    list: async () => ({ prompts: Array.from(prompts.values()) }),
-    get: async (request) => {
-      const prompt = prompts.get(request.params.name);
-      if (!prompt) throw new Error(`Prompt not found: ${request.params.name}`);
-      
-      const { query, domain, complexity, maxAgents, results, outputFormat, audienceLevel, topic, costBudget, async } = request.params.arguments || {};
-      
-      switch (request.params.name) {
-        case 'planning_prompt':
-          if (!query) {
-            return {
-              description: prompt.description,
-              messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Please provide a query parameter to generate a research plan.' }] }]
-            };
-          }
-    const p = require('../agents/planningAgent');
-          const planResult = await p.planResearch(query, { domain, complexity, maxAgents }, null, 'prompt');
-          return { 
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: planResult }] }]
-          };
-          
-        case 'synthesis_prompt':
-    const c = require('../agents/contextAgent');
-          let parsedResults = [];
-          try {
-            parsedResults = results ? JSON.parse(results) : [];
-          } catch (e) {
-            parsedResults = [];
-          }
-          let synthesisResult = '';
-          for await (const ch of c.contextualizeResultsStream(query, parsedResults, [], { 
-            includeSources: true, 
-            outputFormat: outputFormat || 'report',
-            audienceLevel: audienceLevel || 'intermediate'
-          }, 'prompt')) {
-            if (ch.content) synthesisResult += ch.content;
-          }
-          return { 
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: synthesisResult }] }]
-          };
-          
-        case 'research_workflow_prompt':
-          const safeTopic = topic || '[your_topic]';
-          const workflowGuide = `
+  server.registerPrompt(
+    'synthesis_prompt',
+    {
+      description: 'Synthesize ensemble research results with rigorous citation framework and confidence scoring',
+      argsSchema: {
+        query: z.string().describe('Original research query for synthesis context'),
+        results: z.string().describe('JSON string of research results to synthesize'),
+        outputFormat: z.string().optional().describe('Output format: report, briefing, bullet_points'),
+        audienceLevel: z.string().optional().describe('Target audience: beginner, intermediate, expert')
+      }
+    },
+    async ({ query, results, outputFormat, audienceLevel }) => {
+      const c = require('../agents/contextAgent');
+      let parsedResults = [];
+      try {
+        parsedResults = results ? JSON.parse(results) : [];
+      } catch (e) {
+        parsedResults = [];
+      }
+      let synthesisResult = '';
+      for await (const ch of c.contextualizeResultsStream(query, parsedResults, [], {
+        includeSources: true,
+        outputFormat: outputFormat || 'report',
+        audienceLevel: audienceLevel || 'intermediate'
+      }, 'prompt')) {
+        if (ch.content) synthesisResult += ch.content;
+      }
+      return {
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: synthesisResult }] }]
+      };
+    }
+  );
+
+  server.registerPrompt(
+    'research_workflow_prompt',
+    {
+      description: 'Complete research workflow: planning → parallel execution → synthesis with quality controls',
+      argsSchema: {
+        topic: z.string().describe('Research topic or question'),
+        costBudget: z.string().optional().describe('Cost preference: low, high'),
+        async: z.string().optional().describe('Use async job processing: true, false')
+      }
+    },
+    async ({ topic, costBudget, async: useAsync }) => {
+      const safeTopic = topic || '[your_topic]';
+      const workflowGuide = `
 # Research Workflow for: ${safeTopic}
 
 ## 1. Planning Phase
@@ -734,7 +870,7 @@ planning_prompt { "query": "${safeTopic}", "domain": "auto-detect", "complexity"
 \`\`\`
 
 ## 2. Research Execution
-${async === 'true' ? `
+${useAsync === 'true' ? `
 \`\`\`mcp
 submit_research { "query": "${safeTopic}", "costPreference": "${costBudget || 'low'}" }
 get_job_status { "job_id": "[returned_job_id]" }
@@ -755,83 +891,17 @@ search { "q": "${safeTopic}", "scope": "reports" }
 \`\`\`mcp
 research_follow_up { "originalQuery": "${safeTopic}", "followUpQuestion": "[your_specific_question]" }
 \`\`\`
-          `;
-          return {
-            description: prompt.description,
-            messages: [{ role: 'assistant', content: [{ type: 'text', text: workflowGuide }] }]
-          };
-          
-        default:
-          throw new Error(`Unknown prompt: ${request.params.name}`);
-      }
+      `;
+      return {
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: workflowGuide }] }]
+      };
     }
-  });
+  );
 }
 
-// Register resources using latest MCP spec with proper protocol handlers and URI templates
+// Register resources using server.registerResource() (MCP SDK v2)
 // Includes MCP Apps (SEP-1865) ui:// resources for autonomous UI surfacing
 if (config.mcp?.features?.resources) {
-  const resources = new Map([
-    // === MCP Apps UI Resources (SEP-1865) ===
-    ['ui://research/viewer', {
-      uri: 'ui://research/viewer',
-      name: 'Research Report Viewer',
-      description: 'Interactive viewer for research reports with citation linking and markdown rendering',
-      mimeType: 'text/html+mcp',
-      linkedTools: ['research', 'get_report', 'research_follow_up']
-    }],
-    ['ui://knowledge/graph', {
-      uri: 'ui://knowledge/graph',
-      name: 'Knowledge Graph Explorer',
-      description: 'Force-directed visualization of the knowledge graph with traversal and clustering',
-      mimeType: 'text/html+mcp',
-      linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank']
-    }],
-    ['ui://timeline/session', {
-      uri: 'ui://timeline/session',
-      name: 'Session Timeline',
-      description: 'Time-travel interface showing session history with undo/redo controls',
-      mimeType: 'text/html+mcp',
-      linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state']
-    }],
-    // === Data Resources ===
-    ['mcp://specs/core', {
-      uri: 'mcp://specs/core',
-      name: 'MCP Core Specification',
-      description: 'Canonical Model Context Protocol specification links and references',
-      mimeType: 'application/json'
-    }],
-    ['mcp://tools/catalog', {
-      uri: 'mcp://tools/catalog',
-      name: 'Available Tools Catalog',
-      description: 'Live MCP tools catalog with lightweight params for client UIs',
-      mimeType: 'application/json'
-    }],
-    ['mcp://patterns/workflows', {
-      uri: 'mcp://patterns/workflows',
-      name: 'Research Workflow Patterns',
-      description: 'Sophisticated tool chaining patterns for multi-agent research orchestration',
-      mimeType: 'application/json'
-    }],
-    ['mcp://examples/multimodal', {
-      uri: 'mcp://examples/multimodal',
-      name: 'Multimodal Research Examples',
-      description: 'Advanced examples for vision-capable research with dynamic model routing',
-      mimeType: 'application/json'
-    }],
-    ['mcp://use-cases/domains', {
-      uri: 'mcp://use-cases/domains',
-      name: 'Domain-Specific Use Cases',
-      description: 'Comprehensive use cases across technical, creative, and analytical domains',
-      mimeType: 'application/json'
-    }],
-    ['mcp://optimization/caching', {
-      uri: 'mcp://optimization/caching',
-      name: 'Caching & Cost Optimization',
-      description: 'Advanced caching strategies and cost-effective model selection patterns',
-      mimeType: 'application/json'
-    }]
-  ]);
 
   // Helper function to generate domain-specific use cases
   const generateDomainUseCases = async () => {
@@ -848,7 +918,7 @@ if (config.mcp?.features?.resources) {
         expected_outcome: "Comprehensive technical analysis with authoritative citations"
       },
       business_intelligence: {
-        domain: "Market Research & Analysis", 
+        domain: "Market Research & Analysis",
         problem: "Gathering competitive intelligence and market trends",
         workflow: {
           step1: { tool: "search_web", params: { query: "AI market trends Q3 2025" } },
@@ -860,7 +930,7 @@ if (config.mcp?.features?.resources) {
       },
       creative_synthesis: {
         domain: "Creative Content & Strategy",
-        problem: "Developing innovative solutions and creative strategies",  
+        problem: "Developing innovative solutions and creative strategies",
         workflow: {
           step1: { tool: "conduct_research", params: { query: "innovative UX design patterns 2025", costPreference: "high" } },
           step2: { tool: "search", params: { q: "UX design", scope: "reports" } },
@@ -871,185 +941,286 @@ if (config.mcp?.features?.resources) {
     };
   };
 
-  server.setResourceRequestHandlers({
-    list: async () => ({ resources: Array.from(resources.values()) }),
-    read: async (request) => {
-      const uri = request.params.uri;
-      const resource = resources.get(uri);
-      if (!resource) throw new Error(`Resource not found: ${uri}`);
-      
-      let content;
-      switch (uri) {
-        case 'mcp://specs/core':
-          content = {
-            spec: 'https://spec.modelcontextprotocol.io/specification/2025-03-26/',
-            jsonrpc: 'https://www.jsonrpc.org/specification',
-            org: 'https://github.com/modelcontextprotocol',
-            docs: 'https://modelcontextprotocol.io/',
-            sdk: 'https://github.com/modelcontextprotocol/sdk',
-            implementations: {
-              openrouter_agents: 'https://github.com/wheattoast11/openrouter-deep-research',
-              anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
-            }
-          };
-          break;
-        case 'mcp://tools/catalog':
-          try {
-            const text = await require('./tools').listToolsTool({ limit: 200, semantic: false });
-            content = JSON.parse(text);
-          } catch (_) {
-            content = { tools: [] };
-          }
-          break;
-          
-        case 'mcp://patterns/workflows':
-          content = {
-            basic_patterns: [
-              {
-                name: 'Search → Fetch → Research',
-                steps: ['search_web { query }', 'fetch_url { url }', 'conduct_research { query, textDocuments:[content] }'],
-                use_case: 'Web research with source verification'
-              },
-              {
-                name: 'Knowledge Base Query → Research',
-                steps: ['search { q, scope:"reports" }', 'get_past_research { query }', 'conduct_research { query }'],
-                use_case: 'Building on previous research'
-              },
-              {
-                name: 'Async Research Pipeline',
-                steps: ['submit_research { query }', 'get_job_status { job_id }', 'get_report_content { reportId }'],
-                use_case: 'Long-running comprehensive research'
-              }
-            ],
-            advanced_patterns: [
-              {
-                name: 'Multimodal Research Chain',
-                steps: ['conduct_research { query, images:[...] }', 'research_follow_up { originalQuery, followUpQuestion }'],
-                use_case: 'Vision-assisted analysis with iterative refinement'
-              },
-              {
-                name: 'Cost-Optimized Research',
-                steps: ['list_models', 'conduct_research { query, costPreference:"low" }', 'rate_research_report'],
-                use_case: 'Budget-conscious research with quality feedback'
-              }
-            ]
-          };
-          break;
-          
-        case 'mcp://examples/multimodal':
-          content = {
-            vision_research: {
-              conduct_research: {
-                query: 'Analyze the technical architecture diagram and explain the data flow patterns',
-                images: [{ url: 'data:image/png;base64,...', detail: 'high' }],
-                costPreference: 'low',
-                audienceLevel: 'expert'
-              }
-            },
-            document_analysis: {
-              conduct_research: {
-                query: 'Synthesize key findings from the research papers',
-                textDocuments: [{ name: 'paper1.pdf', content: '...' }],
-                structuredData: [{ name: 'results.csv', type: 'csv', content: 'metric,value\\n...' }]
-              }
-            }
-          };
-          break;
-          
-        case 'mcp://use-cases/domains':
-          content = await generateDomainUseCases();
-          break;
-          
-        case 'mcp://optimization/caching':
-          content = {
-            strategies: {
-              result_caching: {
-                description: 'Cache research results with semantic similarity matching',
-                ttl_seconds: 3600,
-                implementation: 'In-memory NodeCache + PGLite semantic search'
-              },
-              model_routing: {
-                description: 'Route queries to cost-effective models based on complexity',
-                models: {
-                  simple: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder'],
-                  complex: ['x-ai/grok-4', 'morph/morph-v3-large'],
-                  vision: ['z-ai/glm-4.5v', 'google/gemini-2.5-flash']
-                }
-              },
-              batch_processing: {
-                description: 'Process multiple queries in parallel with bounded concurrency',
-                parallelism: 4,
-                cost_savings: '60-80% through efficient resource utilization'
-              }
-            }
-          };
-          break;
+  // === MCP Apps UI Resources (SEP-1865) ===
 
-        // === MCP Apps UI Resources (SEP-1865) ===
-        case 'ui://research/viewer':
-          // Return HTML template for research report viewer
-          content = generateUITemplate('research-viewer', {
-            title: 'Research Report Viewer',
-            description: 'Interactive research report display with markdown rendering',
-            linkedTools: ['research', 'get_report', 'research_follow_up'],
-            capabilities: ['markdown-rendering', 'citation-linking', 'export-pdf']
-          });
-          return {
-            contents: [{
-              uri: resource.uri,
-              mimeType: 'text/html',
-              text: content
-            }]
-          };
-
-        case 'ui://knowledge/graph':
-          // Return HTML template for knowledge graph explorer
-          content = generateUITemplate('graph-explorer', {
-            title: 'Knowledge Graph Explorer',
-            description: 'Force-directed graph visualization with D3.js',
-            linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank'],
-            capabilities: ['force-directed', 'clustering', 'path-finding', 'pagerank']
-          });
-          return {
-            contents: [{
-              uri: resource.uri,
-              mimeType: 'text/html',
-              text: content
-            }]
-          };
-
-        case 'ui://timeline/session':
-          // Return HTML template for session timeline
-          content = generateUITemplate('timeline', {
-            title: 'Session Timeline',
-            description: 'Time-travel debugging interface for session history',
-            linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state'],
-            capabilities: ['undo-redo', 'time-travel', 'checkpoints', 'forking']
-          });
-          return {
-            contents: [{
-              uri: resource.uri,
-              mimeType: 'text/html',
-              text: content
-            }]
-          };
-
-        default:
-          throw new Error(`Unknown resource: ${uri}`);
-      }
-      
+  server.registerResource(
+    'research-viewer',
+    'ui://research/viewer',
+    {
+      description: 'Interactive viewer for research reports with citation linking and markdown rendering',
+      mimeType: 'text/html+mcp'
+    },
+    async (uri) => {
+      const content = generateUITemplate('research-viewer', {
+        title: 'Research Report Viewer',
+        description: 'Interactive research report display with markdown rendering',
+        linkedTools: ['research', 'get_report', 'research_follow_up'],
+        capabilities: ['markdown-rendering', 'citation-linking', 'export-pdf']
+      });
       return {
         contents: [{
-          uri: resource.uri,
-          mimeType: resource.mimeType,
+          uri: uri.href,
+          mimeType: 'text/html',
+          text: content
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'knowledge-graph',
+    'ui://knowledge/graph',
+    {
+      description: 'Force-directed visualization of the knowledge graph with traversal and clustering',
+      mimeType: 'text/html+mcp'
+    },
+    async (uri) => {
+      const content = generateUITemplate('graph-explorer', {
+        title: 'Knowledge Graph Explorer',
+        description: 'Force-directed graph visualization with D3.js',
+        linkedTools: ['search', 'graph_traverse', 'graph_clusters', 'graph_pagerank'],
+        capabilities: ['force-directed', 'clustering', 'path-finding', 'pagerank']
+      });
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'text/html',
+          text: content
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'session-timeline',
+    'ui://timeline/session',
+    {
+      description: 'Time-travel interface showing session history with undo/redo controls',
+      mimeType: 'text/html+mcp'
+    },
+    async (uri) => {
+      const content = generateUITemplate('timeline', {
+        title: 'Session Timeline',
+        description: 'Time-travel debugging interface for session history',
+        linkedTools: ['history', 'undo', 'redo', 'time_travel', 'session_state'],
+        capabilities: ['undo-redo', 'time-travel', 'checkpoints', 'forking']
+      });
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'text/html',
+          text: content
+        }]
+      };
+    }
+  );
+
+  // === Data Resources ===
+
+  server.registerResource(
+    'mcp-specs-core',
+    'mcp://specs/core',
+    {
+      description: 'Canonical Model Context Protocol specification links and references',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        spec: 'https://spec.modelcontextprotocol.io/specification/2025-06-18/',
+        jsonrpc: 'https://www.jsonrpc.org/specification',
+        org: 'https://github.com/modelcontextprotocol',
+        docs: 'https://modelcontextprotocol.io/',
+        sdk: 'https://github.com/modelcontextprotocol/sdk',
+        implementations: {
+          openrouter_agents: 'https://github.com/terminals-tech/openrouter-agents',
+          anthropic_examples: 'https://github.com/modelcontextprotocol/servers'
+        }
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
           text: JSON.stringify(content, null, 2)
         }]
       };
     }
-  });
+  );
+
+  server.registerResource(
+    'tools-catalog',
+    'mcp://tools/catalog',
+    {
+      description: 'Live MCP tools catalog with lightweight params for client UIs',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      let content;
+      try {
+        const text = await require('./tools').listToolsTool({ limit: 200, semantic: false });
+        content = JSON.parse(text);
+      } catch (_) {
+        content = { tools: [] };
+      }
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'workflow-patterns',
+    'mcp://patterns/workflows',
+    {
+      description: 'Sophisticated tool chaining patterns for multi-agent research orchestration',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        basic_patterns: [
+          {
+            name: 'Search \u2192 Fetch \u2192 Research',
+            steps: ['search_web { query }', 'fetch_url { url }', 'conduct_research { query, textDocuments:[content] }'],
+            use_case: 'Web research with source verification'
+          },
+          {
+            name: 'Knowledge Base Query \u2192 Research',
+            steps: ['search { q, scope:"reports" }', 'get_past_research { query }', 'conduct_research { query }'],
+            use_case: 'Building on previous research'
+          },
+          {
+            name: 'Async Research Pipeline',
+            steps: ['submit_research { query }', 'get_job_status { job_id }', 'get_report_content { reportId }'],
+            use_case: 'Long-running comprehensive research'
+          }
+        ],
+        advanced_patterns: [
+          {
+            name: 'Multimodal Research Chain',
+            steps: ['conduct_research { query, images:[...] }', 'research_follow_up { originalQuery, followUpQuestion }'],
+            use_case: 'Vision-assisted analysis with iterative refinement'
+          },
+          {
+            name: 'Cost-Optimized Research',
+            steps: ['list_models', 'conduct_research { query, costPreference:"low" }', 'rate_research_report'],
+            use_case: 'Budget-conscious research with quality feedback'
+          }
+        ]
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'multimodal-examples',
+    'mcp://examples/multimodal',
+    {
+      description: 'Advanced examples for vision-capable research with dynamic model routing',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        vision_research: {
+          conduct_research: {
+            query: 'Analyze the technical architecture diagram and explain the data flow patterns',
+            images: [{ url: 'data:image/png;base64,...', detail: 'high' }],
+            costPreference: 'low',
+            audienceLevel: 'expert'
+          }
+        },
+        document_analysis: {
+          conduct_research: {
+            query: 'Synthesize key findings from the research papers',
+            textDocuments: [{ name: 'paper1.pdf', content: '...' }],
+            structuredData: [{ name: 'results.csv', type: 'csv', content: 'metric,value\\n...' }]
+          }
+        }
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'domain-use-cases',
+    'mcp://use-cases/domains',
+    {
+      description: 'Comprehensive use cases across technical, creative, and analytical domains',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = await generateDomainUseCases();
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerResource(
+    'caching-optimization',
+    'mcp://optimization/caching',
+    {
+      description: 'Advanced caching strategies and cost-effective model selection patterns',
+      mimeType: 'application/json'
+    },
+    async (uri) => {
+      const content = {
+        strategies: {
+          result_caching: {
+            description: 'Cache research results with semantic similarity matching',
+            ttl_seconds: 3600,
+            implementation: 'In-memory NodeCache + PGLite semantic search'
+          },
+          model_routing: {
+            description: 'Route queries to cost-effective models based on complexity',
+            models: {
+              simple: ['deepseek/deepseek-chat-v3.1', 'qwen/qwen3-coder'],
+              complex: ['x-ai/grok-4', 'morph/morph-v3-large'],
+              vision: ['z-ai/glm-4.5v', 'google/gemini-3-flash-preview']
+            }
+          },
+          batch_processing: {
+            description: 'Process multiple queries in parallel with bounded concurrency',
+            parallelism: 4,
+            cost_savings: '60-80% through efficient resource utilization'
+          }
+        }
+      };
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(content, null, 2)
+        }]
+      };
+    }
+  );
 }
 
 // Register tools (minimal unified set)
+register(
+  "zero_chat",
+  zeroChatSchema,
+  wrapWithHandler('zero_chat', zeroChat)
+);
 register(
   "research",
   researchSchema,
@@ -1162,6 +1333,29 @@ register(
   }
 );
 
+// New Tool: get_consensus_history
+const getConsensusHistorySchema = z.object({
+  limit: z.number().int().positive().optional().default(10).describe("Number of consensus log entries to retrieve")
+});
+
+async function getConsensusHistoryTool(params) {
+  const limit = params.limit || 10;
+  // Use dbClient directly
+  try {
+    const rows = await dbClient.executeQuery("SELECT * FROM consensus_log ORDER BY id DESC LIMIT $1", [limit]);
+    return JSON.stringify(rows, null, 2);
+  } catch (e) {
+    // Graceful fallback if table missing (dev environment)
+    return JSON.stringify({ error: e.message, hint: "consensus_log table may not exist in this environment" });
+  }
+}
+
+register(
+  "get_consensus_history",
+  getConsensusHistorySchema,
+  wrapWithHandler("get_consensus_history", getConsensusHistoryTool)
+);
+
 // Semantic aliases - provide clearer names for common operations
 register("search", searchSchema, wrapWithHandler('search', searchTool));
 register("query", querySchema, wrapWithHandler('query', queryTool));
@@ -1183,16 +1377,33 @@ register("batch_research", batchResearchSchema, async (p, ex) => {
 // ==========================================
 
 // Session tool legacy implementations (for when handlers disabled)
+// Each method calls ensureIntegrations() to guarantee sessionManager is initialized
 const sessionLegacy = {
-  undo: async (p) => JSON.stringify(await sessionManager.undo(p.sessionId || 'default'), null, 2),
-  redo: async (p) => JSON.stringify(await sessionManager.redo(p.sessionId || 'default'), null, 2),
+  undo: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.undo(p.sessionId || 'default'), null, 2);
+  },
+  redo: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.redo(p.sessionId || 'default'), null, 2);
+  },
   fork_session: async (p) => {
+    await ensureIntegrations();
     const newId = p.newSessionId || `fork_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
     return JSON.stringify(await sessionManager.forkSession(p.sessionId || 'default', newId), null, 2);
   },
-  time_travel: async (p) => JSON.stringify(await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp), null, 2),
-  session_state: async (p) => JSON.stringify(await sessionManager.getState(p.sessionId || 'default'), null, 2),
-  checkpoint: async (p) => JSON.stringify(await sessionManager.createCheckpoint(p.sessionId || 'default', p.name), null, 2)
+  time_travel: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.timeTravel(p.sessionId || 'default', p.timestamp), null, 2);
+  },
+  session_state: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.getState(p.sessionId || 'default'), null, 2);
+  },
+  checkpoint: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await sessionManager.createCheckpoint(p.sessionId || 'default', p.name), null, 2);
+  }
 };
 
 register("undo", {
@@ -1227,13 +1438,32 @@ register("checkpoint", {
 // ==========================================
 
 // Graph tool legacy implementations (for when handlers disabled)
+// Each method calls ensureIntegrations() to guarantee knowledgeGraph is initialized
 const graphLegacy = {
-  traverse: async (p) => JSON.stringify(await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic'), null, 2),
-  path: async (p) => JSON.stringify(await knowledgeGraph.findPath(p.from, p.to), null, 2),
-  clusters: async () => JSON.stringify(await knowledgeGraph.getClusters(), null, 2),
-  pagerank: async (p) => JSON.stringify(await knowledgeGraph.getPageRank(p.topK || 20), null, 2),
-  patterns: async (p) => JSON.stringify(await knowledgeGraph.findPatterns(p.n || 3), null, 2),
-  stats: async () => JSON.stringify(await knowledgeGraph.getStats(), null, 2)
+  traverse: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.traverse(p.startNode, p.depth || 3, p.strategy || 'semantic'), null, 2);
+  },
+  path: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.findPath(p.from, p.to), null, 2);
+  },
+  clusters: async () => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getClusters(), null, 2);
+  },
+  pagerank: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getPageRank(p.topK || 20), null, 2);
+  },
+  patterns: async (p) => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.findPatterns(p.n || 3), null, 2);
+  },
+  stats: async () => {
+    await ensureIntegrations();
+    return JSON.stringify(await knowledgeGraph.getStats(), null, 2);
+  }
 };
 
 register("graph_traverse", {
@@ -1260,28 +1490,127 @@ register("graph_patterns", {
 register("graph_stats", {}, wrapWithHandler('graph_stats', graphLegacy.stats, false));
 
 // ==========================================
+// Zero Protocol Tools - Self-Referential Architecture
+// ==========================================
+
+// Zero node status - returns the fixed-point state
+register("zero_status", {
+  verbose: z.boolean().optional().default(false).describe("Include detailed state information")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  const status = {
+    identity: zeroNode.identity,
+    protocol: zeroNode.protocol,
+    state: zeroNode.state,
+    fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED,
+    selfUri: zeroSelf(zeroNode.identity).toString(),
+    services: Array.from(zeroNode.services?.keys() || []),
+    peers: Array.from(zeroNode.peers?.keys() || []),
+  };
+  if (params.verbose) {
+    status.capabilities = zeroNode.capabilities;
+    status.adapter = {
+      protocol: zeroNode.adapter?.protocol,
+      role: zeroNode.adapter?.role,
+      connected: zeroNode.adapter?.connected,
+    };
+  }
+  return { content: [{ type: 'text', text: JSON.stringify(status, null, 2) }] };
+});
+
+// Zero connect - connect to a zero:// URI
+register("zero_connect", {
+  uri: z.string().describe("Zero URI to connect to (e.g., zero://self, zero://peer/id, zero://discover)")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  try {
+    if (!isZeroUri(params.uri)) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: `Invalid Zero URI: ${params.uri}`, hint: 'Valid formats: zero://self, zero://peer/<id>, zero://discover' }, null, 2) }], isError: true };
+    }
+    const parsed = parseZeroUri(params.uri);
+    let result;
+    if (parsed.type === 'self') {
+      await zeroNode.connectToSelf();
+      result = {
+        connected: true,
+        type: 'self',
+        state: zeroNode.state,
+        fixedPoint: zeroNode.state === ConnectionState.SELF_CONNECTED,
+        message: 'Fixed point reached: f(Zero) = Zero'
+      };
+    } else {
+      result = {
+        connected: false,
+        type: parsed.type,
+        message: `Connection type '${parsed.type}' not yet implemented. Currently only zero://self is supported.`
+      };
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: e.message }, null, 2) }], isError: true };
+  }
+});
+
+// Zero handshake - perform identity verification
+register("zero_handshake", {
+  challenge: z.string().optional().describe("Challenge string for verification (auto-generated if not provided)")
+}, async (params) => {
+  await ensureIntegrations();
+  if (!zeroNode) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Zero node not initialized' }, null, 2) }], isError: true };
+  }
+  try {
+    const result = await zeroNode.handshake(params.challenge);
+    return { content: [{ type: 'text', text: JSON.stringify({
+      success: true,
+      identity: zeroNode.identity,
+      state: zeroNode.state,
+      handshake: result,
+      fixedPointVerified: result?.identityMatch === true
+    }, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: e.message }, null, 2) }], isError: true };
+  }
+});
+
+// ==========================================
 // MCP 2025-11-25 Protocol Tools (SEP-1686, SEP-1577, SEP-1036)
 // ==========================================
 
 // Task Protocol Tools (SEP-1686)
+// Note: taskId is accepted for backward compatibility but job_id is the canonical form
+// after normalization. The normalize.js TOOL_ALIASES converts taskId -> job_id.
 const taskLegacy = {
-  get: async (p) => JSON.stringify(await taskAdapter.getTask(p.taskId), null, 2),
-  result: async (p) => JSON.stringify(await taskAdapter.getTaskResult(p.taskId), null, 2),
-  cancel: async (p) => JSON.stringify(await taskAdapter.cancelTask(p.taskId), null, 2),
+  get: async (p) => JSON.stringify(await taskAdapter.getTask(p.job_id || p.taskId), null, 2),
+  result: async (p) => JSON.stringify(await taskAdapter.getTaskResult(p.job_id || p.taskId), null, 2),
+  cancel: async (p) => JSON.stringify(await taskAdapter.cancelTask(p.job_id || p.taskId), null, 2),
   list: async (p) => JSON.stringify(await taskAdapter.listTasks(p.cursor, p.limit || 20), null, 2)
 };
 
-register("task_get", { taskId: z.string().describe("Task/job ID to retrieve") },
-  wrapWithHandler('task_get', taskLegacy.get, false));
+// Accept both job_id (canonical) and taskId (backward compat) in schema
+register("task_get", {
+  job_id: z.string().optional().describe("Job ID to retrieve (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_get', taskLegacy.get, true));  // Enable normalization
 
-register("task_result", { taskId: z.string().describe("Task/job ID to get result for") },
-  wrapWithHandler('task_result', taskLegacy.result, false));
+register("task_result", {
+  job_id: z.string().optional().describe("Job ID to get result for (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_result', taskLegacy.result, true));  // Enable normalization
 
-register("task_cancel", { taskId: z.string().describe("Task/job ID to cancel") },
-  wrapWithHandler('task_cancel', taskLegacy.cancel, false));
+register("task_cancel", {
+  job_id: z.string().optional().describe("Job ID to cancel (canonical)"),
+  taskId: z.string().optional().describe("Task ID (alias for job_id, backward compatible)")
+}, wrapWithHandler('task_cancel', taskLegacy.cancel, true));  // Enable normalization
 
 register("task_list", { cursor: z.string().optional(), limit: z.number().optional() },
-  wrapWithHandler('task_list', taskLegacy.list, false));
+  wrapWithHandler('task_list', taskLegacy.list, true));  // Enable normalization for consistency
 
 // Sampling with Tools (SEP-1577)
 register("sample_message", {
@@ -1300,7 +1629,7 @@ register("sample_message", {
 // Elicitation Response (SEP-1036)
 register("elicitation_respond", {
   requestId: z.string().describe("Elicitation request ID"),
-  response: z.record(z.any()).describe("User response data")
+  response: z.record(z.string(), z.any()).describe("User response data")
 }, async (p) => {
   try {
     const result = await elicitationHandler.handleResponse(p.requestId, p.response);
@@ -1335,22 +1664,36 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
   let lastSseTransport = null; // Variable to hold the last SSE transport
   const sseConnections = new Map(); // Map to store active SSE connections
 
-  // For command-line usage, use STDIO
-  if (process.argv.includes('--stdio')) {
-    // console.error('Starting MCP server with STDIO transport'); // Commented out: Logs interfere with STDIO JSON-RPC
+  // Transport mode detection per MCP spec (STDIO is default per spec: "Clients SHOULD support stdio")
+  const hasStdioFlag = process.argv.includes('--stdio');
+  const hasHttpFlag = process.argv.includes('--http');
+
+  // Mutual exclusivity check
+  if (hasStdioFlag && hasHttpFlag) {
+    logger.error('Cannot specify both --stdio and --http flags');
+    process.exit(1);
+  }
+
+  // STDIO transport: explicit --stdio flag OR default when no flags specified
+  if (hasStdioFlag || !hasHttpFlag) {
+    // STDIO mode - no logging to stdout/stderr during operation (JSON-RPC protocol)
     const transport = new StdioServerTransport();
-    // console.error('Attempting server.connect(transport)...'); // Commented out: Logs interfere with STDIO JSON-RPC
     await server.connect(transport);
-    // console.error('server.connect(transport) completed.'); // Commented out: Logs interfere with STDIO JSON-RPC
     return; // Exit after setting up stdio, don't proceed to HTTP setup
-  } else { // Only setup HTTP/SSE if --stdio is NOT specified
-  // For HTTP usage, set up Express with SSE and optional Streamable HTTP
+  }
+
+  // HTTP transport: only when --http is explicitly specified
+  {
+  // For HTTP usage, set up Express with Streamable HTTP (primary) and legacy SSE (deprecated)
     const app = express();
     const port = config.server.port;
   // OAuth2/JWT placeholder: use AUTH_JWKS_URL or fallback to API key until configured
   const serverApiKey = config.server.apiKey;
   const jwksUrl = process.env.AUTH_JWKS_URL || null;
   const expectedAudience = process.env.AUTH_EXPECTED_AUD || 'mcp-server';
+
+  // Supabase auth for terminals.tech OAuth (Google/GitHub)
+  const supabaseAuth = require('./auth/supabaseAuth');
 
   app.use(cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'], allowedHeaders: ['Content-Type', 'authorization', 'mcp-session-id'] }));
 
@@ -1376,7 +1719,7 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
     });
   }
     
-  // Authentication Middleware (JWT first, fallback API key if configured)
+  // Authentication Middleware (Supabase JWT → Enterprise JWT → API key)
   const authenticate = async (req, res, next) => {
     const allowNoAuth = process.env.ALLOW_NO_API_KEY === 'true';
     const authHeader = req.headers.authorization || '';
@@ -1385,6 +1728,20 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
       return res.status(401).json({ error: 'Unauthorized: Missing bearer token' });
     }
     const token = authHeader.split(' ')[1];
+
+    // 1. Try Supabase auth first (terminals.tech Google/GitHub OAuth)
+    if (supabaseAuth.isEnabled()) {
+      try {
+        const user = await supabaseAuth.validateToken(token);
+        req.user = user;
+        req.userId = user.userId;
+        return next();
+      } catch (e) {
+        // Fall through to other auth methods
+      }
+    }
+
+    // 2. Try enterprise JWKS auth
     if (jwksUrl) {
       try {
         // Lazy import jose to keep dep optional
@@ -1396,85 +1753,98 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         }
         return next();
       } catch (e) {
-        if (!serverApiKey) {
+        if (!serverApiKey && !supabaseAuth.isEnabled()) {
           return res.status(403).json({ error: 'Forbidden: JWT verification failed' });
         }
         // Fall through to API key if configured
       }
     }
-    if (serverApiKey && token === serverApiKey) return next();
+
+    // 3. Try API key auth with timing-safe comparison
+    if (serverApiKey && token) {
+      try {
+        const tokenBuf = Buffer.from(token);
+        const keyBuf = Buffer.from(serverApiKey);
+        if (tokenBuf.length === keyBuf.length && crypto.timingSafeEqual(tokenBuf, keyBuf)) {
+          return next();
+        }
+      } catch (e) {
+        // Length mismatch or other error - fall through to reject
+      }
+    }
     if (allowNoAuth) return next();
     return res.status(403).json({ error: 'Forbidden: Auth failed' });
   };
  
-  logger.info('Starting MCP server with HTTP/SSE transport', { port });
+  logger.info('Starting MCP server with Streamable HTTP transport', { port });
+  if (supabaseAuth.isEnabled()) {
+    logger.info('Supabase auth enabled (terminals.tech OAuth)', { providers: ['google', 'github'] });
+  }
   if (jwksUrl) {
-    logger.info('OAuth2/JWT auth enabled', { jwksUrl, audience: expectedAudience });
+    logger.info('Enterprise JWT auth enabled', { jwksUrl, audience: expectedAudience });
   } else if (serverApiKey) {
     logger.info('API key fallback enabled for HTTP transport');
   } else if (process.env.ALLOW_NO_API_KEY === 'true') {
     logger.warn('Authentication DISABLED for HTTP transport (ALLOW_NO_API_KEY=true)');
-  } else {
-    logger.error('SERVER_API_KEY not set and ALLOW_NO_API_KEY!=true. HTTP transport may fail');
+  } else if (!supabaseAuth.isEnabled()) {
+    logger.error('No auth configured. Set SUPABASE_JWT_SECRET or SERVER_API_KEY');
   }
-  
-  // Streamable HTTP transport (preferred) guarded by feature flag
-  if (require('../../config').mcp.transport.streamableHttpEnabled) {
+
+  // Primary transport: Streamable HTTP (MCP SDK v2 compatible)
+  app.all('/mcp', authenticate, async (req, res) => {
     try {
-      const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-      app.all('/mcp', authenticate, async (req, res) => {
-        const transport = new StreamableHTTPServerTransport({
-          enableDnsRebindingProtection: true,
-          allowedHosts: ['127.0.0.1', 'localhost'],
-          allowedOrigins: ['http://localhost', 'http://127.0.0.1']
-        });
-        res.on('close', () => transport.close());
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => uuidv4(),
+        enableDnsRebindingProtection: true,
+        allowedHosts: ['127.0.0.1', 'localhost'],
+        allowedOrigins: ['http://localhost', 'http://127.0.0.1']
       });
+      res.on('close', () => transport.close());
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
     } catch (e) {
-      logger.warn('StreamableHTTP transport not available', { error: e.message });
+      logger.error('Streamable HTTP transport error', { error: e.message });
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Transport error' });
+      }
     }
-  }
+  });
 
-   // Endpoint for SSE - Apply authentication middleware
-   // Endpoint for SSE - Apply authentication middleware
+   // Legacy SSE transport — deprecated, kept for backward compatibility
+   // Clients should migrate to POST /mcp (Streamable HTTP)
    app.get('/sse', authenticate, async (req, res) => {
-     const connectionId = uuidv4(); // Generate a unique ID for this connection
-     logger.debug('New SSE connection established', { connectionId });
+     logger.warn('SSE transport is deprecated — migrate to Streamable HTTP at /mcp');
+     const connectionId = uuidv4();
 
-     // Set headers for SSE
+     res.setHeader('X-Deprecated', 'SSE transport is deprecated. Use /mcp endpoint instead.');
      res.writeHead(200, {
        'Content-Type': 'text/event-stream',
        'Cache-Control': 'no-cache',
        'Connection': 'keep-alive',
      });
 
-     const transport = new SSEServerTransport('/messages', res); // Pass the response object
-     sseConnections.set(connectionId, transport); // Store transport keyed by ID
-     lastSseTransport = transport; // Keep track of the last one for the simple POST handler
+     const transport = new SSEServerTransport('/messages', res);
+     sseConnections.set(connectionId, transport);
+     lastSseTransport = transport;
 
      try {
-       await server.connect(transport); // Connect the server to this specific transport
-       logger.debug('MCP Server connected to SSE transport', { connectionId });
+       await server.connect(transport);
+       logger.debug('MCP Server connected to legacy SSE transport', { connectionId });
      } catch (error) {
        logger.error('Error connecting MCP Server to SSE transport', { connectionId, error });
-       sseConnections.delete(connectionId); // Clean up on connection error
+       sseConnections.delete(connectionId);
        if (!res.writableEnded) {
          res.end();
        }
-       return; // Stop further processing for this request
+       return;
      }
 
-     // Handle client disconnect
      req.on('close', () => {
        logger.debug('SSE connection closed', { connectionId });
        sseConnections.delete(connectionId);
        if (lastSseTransport === transport) {
-         lastSseTransport = null; // Clear if it was the last one
+         lastSseTransport = null;
        }
-       // Optionally notify the server instance if needed, though transport might handle this
-       // server.disconnect(transport); // If SDK supports targeted disconnect
      });
    });
 
@@ -1695,6 +2065,109 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
      }
    });
 
+   // Auth configuration endpoint for clients (no auth required)
+   // Tells clients how to authenticate with this server
+   app.get('/auth/config', (req, res) => {
+     res.json({
+       supabase: supabaseAuth.getAuthConfig(),
+       enterprise: {
+         enabled: !!jwksUrl,
+         jwksUrl: jwksUrl || null
+       },
+       apiKey: {
+         enabled: !!serverApiKey
+       },
+       instructions: supabaseAuth.isEnabled()
+         ? 'Login at terminals.tech with Google or GitHub. Use the returned access_token in Authorization: Bearer <token>'
+         : jwksUrl
+           ? 'Use enterprise SSO JWT in Authorization: Bearer <token>'
+           : serverApiKey
+             ? 'Use SERVER_API_KEY in Authorization: Bearer <key>'
+             : 'No authentication configured'
+     });
+   });
+
+   // OAuth redirect helper - redirects to terminals.tech login
+   app.get('/auth/login/:provider', (req, res) => {
+     const { provider } = req.params;
+     const redirectTo = req.query.redirect_to || `${req.protocol}://${req.get('host')}/auth/callback`;
+
+     if (!supabaseAuth.isEnabled()) {
+       return res.status(400).json({ error: 'Supabase auth not configured' });
+     }
+
+     if (!['google', 'github'].includes(provider)) {
+       return res.status(400).json({ error: 'Invalid provider. Use google or github' });
+     }
+
+     try {
+       const loginUrl = supabaseAuth.getOAuthUrl(provider, redirectTo);
+       res.redirect(loginUrl);
+     } catch (e) {
+       res.status(500).json({ error: e.message });
+     }
+   });
+
+   // Callback handler - displays token for user to copy
+   app.get('/auth/callback', (req, res) => {
+     // Supabase redirects with tokens in URL hash (client-side)
+     // This page extracts them and displays for MCP client setup
+     res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>terminals.tech MCP Auth</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+    .token { background: #f0f0f0; padding: 10px; border-radius: 4px; word-break: break-all; font-family: monospace; font-size: 12px; }
+    .success { color: #22c55e; }
+    .error { color: #ef4444; }
+    button { margin-top: 10px; padding: 8px 16px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>terminals.tech MCP Authentication</h1>
+  <div id="result"></div>
+  <script>
+    // HTML escape to prevent XSS from URL parameters
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const accessToken = params.get('access_token');
+    const error = params.get('error_description') || params.get('error');
+
+    const result = document.getElementById('result');
+    if (accessToken) {
+      result.innerHTML = \`
+        <p class="success">Authentication successful!</p>
+        <p>Your access token (copy this for MCP client):</p>
+        <div class="token" id="token">\${esc(accessToken)}</div>
+        <button onclick="navigator.clipboard.writeText(document.getElementById('token').textContent)">Copy Token</button>
+        <p style="margin-top: 20px;">Use this in your MCP client configuration:</p>
+        <pre>Authorization: Bearer \${esc(accessToken.substring(0, 20))}...</pre>
+      \`;
+    } else if (error) {
+      result.innerHTML = \`<p class="error">Error: \${esc(error)}</p>\`;
+    } else {
+      result.innerHTML = '<p>Waiting for authentication...</p>';
+    }
+  </script>
+</body>
+</html>`);
+   });
+
+   // Verify token endpoint - check if a token is valid
+   app.get('/auth/verify', authenticate, (req, res) => {
+     res.json({
+       valid: true,
+       user: req.user || null,
+       userId: req.userId || null
+     });
+   });
+
    // Server discovery endpoint for MCP clients (SEP-1649 Server Cards)
    // No auth required per MCP draft spec Nov 2025
    app.get('/.well-known/mcp-server', (req, res) => {
@@ -1886,7 +2359,14 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         const rows=new Map();
         function addAgentRow(id,text,cls){
           let r=rows.get(id);
-          if(!r){ r=document.createElement('div'); r.className='row'; r.innerHTML='<span class="chip">agent '+id+'</span><span class="chip" id="st"></span><span id="q" class="muted"></span>'; agentsEl.appendChild(r); rows.set(id,r); }
+          if(!r){
+            r=document.createElement('div'); r.className='row';
+            const agentChip=document.createElement('span'); agentChip.className='chip'; agentChip.textContent='agent '+id;
+            const stChip=document.createElement('span'); stChip.className='chip'; stChip.id='st';
+            const qSpan=document.createElement('span'); qSpan.className='muted'; qSpan.id='q';
+            r.appendChild(agentChip); r.appendChild(stChip); r.appendChild(qSpan);
+            agentsEl.appendChild(r); rows.set(id,r);
+          }
           r.querySelector('#st').textContent=text; r.querySelector('#st').className='chip '+(cls||'');
         }
         function appendLog(s){ logEl.textContent += s; logEl.scrollTop = logEl.scrollHeight; }
@@ -1923,10 +2403,10 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
      }
    });
 
-  // Endpoint for messages with per-connection routing and authentication
-  // Supports both legacy (no connectionId) and new path/query param routing
+  // Legacy /messages endpoint for SSE transport — deprecated in v2.0.0
+  // New clients should use POST /mcp (Streamable HTTP)
   app.post(['/messages', '/messages/:connectionId'], authenticate, express.json(), (req, res) => {
-    // Prefer explicit connectionId via route param or query
+    res.setHeader('X-Deprecated', 'Use /mcp endpoint instead. SSE transport is deprecated.');
     const routeId = req.params.connectionId;
     const queryId = req.query.connectionId;
     const connectionId = routeId || queryId || null;
@@ -1937,71 +2417,108 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
         logger.warn('POST /messages for unknown connectionId', { connectionId });
         return res.status(404).json({ error: 'Unknown connectionId' });
       }
-      logger.debug('Routing POST /messages', { connectionId });
+      logger.debug('Routing POST /messages (legacy SSE)', { connectionId });
       return transport.handlePostMessage(req, res);
     }
 
-    // Legacy behavior: fall back to last transport if no connectionId provided
     if (!lastSseTransport) {
       logger.warn('POST /messages without connectionId and no active SSE transport');
-      return res.status(500).json({ error: 'No active SSE transport available' });
+      return res.status(500).json({ error: 'No active SSE transport. Use /mcp endpoint instead.' });
     }
     logger.debug('Handling legacy POST /messages via last active SSE transport');
     return lastSseTransport.handlePostMessage(req, res);
   });
 
-   // Start server
-   app.listen(port, () => {
-     logger.info('MCP server listening', { port });
+   // Start server with error handling
+   const httpServer = app.listen(port);
+
+   httpServer.on('error', (err) => {
+     if (err.code === 'EADDRINUSE') {
+       logger.error('Port already in use', {
+         port,
+         suggestion: `Another instance running? Try: lsof -i tcp:${port}`,
+         alternatives: [
+           'Use STDIO transport (default): npx @terminals-tech/openrouter-agents',
+           `Use different port: SERVER_PORT=${port + 1} npx @terminals-tech/openrouter-agents --http`
+         ]
+       });
+       process.exit(1); // Clean exit instead of crash
+     }
+     throw err;
    });
-  } // Close the else block for HTTP setup
+
+   httpServer.on('listening', () => {
+     logger.info('MCP server listening', { port, transport: 'Streamable HTTP', legacySse: 'deprecated' });
+   });
+  } // Close the block for HTTP setup
  };
 
  /**
   * Job worker function - processes async research jobs
   * Only starts if database is initialized
   */
- function startJobWorker() {
-   const initState = dbClient.getInitState ? dbClient.getInitState() : null;
-   if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
-     logger.warn('Job worker not started: database not initialized', { initState });
-     return;
-   }
+ // Debounce state for health warnings (shared across workers)
+ let lastHealthWarningTime = 0;
+ let lastHealthIssues = '';
+ const HEALTH_WARNING_DEBOUNCE_MS = 60000; // Only log once per minute per unique issue set
 
-   logger.info('Starting job worker', { concurrency: require('../../config').jobs.concurrency });
+let workerStopped = false;
+let activeHeartbeats = new Set();
 
-   const { concurrency, heartbeatMs } = require('../../config').jobs;
-   const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
-     while (true) {
-       try {
-         // Pre-flight check before claiming work
-         const { quickCheck } = require('../utils/preflight');
-         const health = quickCheck(dbClient);
-         if (!health.ready) {
-           logger.warn('JobWorker unhealthy', { issues: health.issues });
-           await new Promise(r => setTimeout(r, 5000));
-           continue;
-         }
+function startJobWorker() {
+  const initState = dbClient.getInitState ? dbClient.getInitState() : null;
+  if (initState !== 'INITIALIZED' && !dbClient.isDbInitialized()) {
+    logger.warn('Job worker not started: database not initialized', { initState });
+    return;
+  }
 
-         const job = await dbClient.claimNextJob();
-         if (!job) { await new Promise(r=>setTimeout(r, 750)); continue; }
-         const jobId = job.id;
-         await dbClient.appendJobEvent(jobId, 'started', {});
-         const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
-         try {
-           if (job.type === 'research') {
-             // Reuse conductResearch flow but stream events via job events
-             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
-             // Validate query parameter before execution - fail fast with clear error
-             if (!params?.query || typeof params.query !== 'string' || params.query.trim() === '') {
-               logger.error('Job missing query parameter', { jobId, params: JSON.stringify(params).substring(0, 200) });
-               throw new Error(`Job ${jobId} missing required query parameter`);
-             }
-             // Minimal bridge: send progress chunks into job events
-             const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
-             const resultText = await require('./tools').conductResearch(params, exchange, jobId);
-             await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
-             await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
+  workerStopped = false;
+  logger.info('Starting job worker', { concurrency: require('../../config').jobs.concurrency });
+
+  const { concurrency, heartbeatMs } = require('../../config').jobs;
+  const runners = Array.from({ length: Math.max(1, concurrency) }, () => (async function loop(){
+    while (!workerStopped) {
+      try {
+        // Pre-flight check before claiming work
+        const { quickCheck } = require('../utils/preflight');
+        const health = quickCheck(dbClient);
+        if (!health.ready) {
+          // Debounce health warnings - only log once per minute per unique issue set
+          const issueKey = JSON.stringify(health.issues);
+          const now = Date.now();
+          if (issueKey !== lastHealthIssues || now - lastHealthWarningTime > HEALTH_WARNING_DEBOUNCE_MS) {
+            logger.warn('JobWorker unhealthy', { issues: health.issues, nextLogIn: '60s' });
+            lastHealthWarningTime = now;
+            lastHealthIssues = issueKey;
+          }
+          await new Promise(r => setTimeout(r, 5000));
+          continue;
+        }
+
+        const job = await dbClient.claimNextJob();
+        if (!job) { 
+          if (workerStopped) break;
+          await new Promise(r=>setTimeout(r, 750)); 
+          continue; 
+        }
+        const jobId = job.id;
+        await dbClient.appendJobEvent(jobId, 'started', {});
+        const hb = setInterval(()=> dbClient.heartbeatJob(jobId).catch(()=>{}), Math.max(1000, heartbeatMs));
+        activeHeartbeats.add(hb);
+        try {
+          if (job.type === 'research') {
+            // Reuse conductResearch flow but stream events via job events
+            const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+            // Validate query parameter before execution - fail fast with clear error
+            if (!params?.query || typeof params.query !== 'string' || params.query.trim() === '') {
+              logger.error('Job missing query parameter', { jobId, params: JSON.stringify(params).substring(0, 200) });
+              throw new Error(`Job ${jobId} missing required query parameter`);
+            }
+            // Minimal bridge: send progress chunks into job events
+            const exchange = { progressToken: 'job', sendProgress: ({ value }) => dbClient.appendJobEvent(jobId, 'progress', value || {}) };
+            const resultText = await require('./tools').conductResearch(params, exchange, jobId);
+            await dbClient.setJobStatus(jobId, 'succeeded', { result: { message: resultText }, finished: true });
+            await dbClient.appendJobEvent(jobId, 'completed', { message: resultText });
             // Optional webhook notification
             try {
               if (params?.notify) {
@@ -2012,9 +2529,9 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
                 }).catch(()=>{});
               }
             } catch (_) {}
-           } else {
-             await dbClient.setJobStatus(jobId, 'failed', { result: { error: 'Unknown job type' }, finished: true });
-             await dbClient.appendJobEvent(jobId, 'error', { message: 'Unknown job type' });
+          } else {
+            await dbClient.setJobStatus(jobId, 'failed', { result: { error: 'Unknown job type' }, finished: true });
+            await dbClient.appendJobEvent(jobId, 'error', { message: 'Unknown job type' });
             // Notify if requested
             try {
               const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
@@ -2026,62 +2543,72 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
                 }).catch(()=>{});
               }
             } catch (_) {}
-           }
-         } catch (e) {
-           // Wrap error with full context for detailed diagnosis
-           const { wrapError, formatErrorForLog } = require('../utils/errors');
-           const wrapped = wrapError(e, `Job ${jobId} failed`, { requestId: jobId });
+          }
+        } catch (e) {
+          // Wrap error with full context for detailed diagnosis
+          const { wrapError, formatErrorForLog } = require('../utils/errors');
+          const wrapped = wrapError(e, `Job ${jobId} failed`, { requestId: jobId });
 
-           logger.error('Job failed', formatErrorForLog(wrapped, jobId));
+          logger.error('Job failed', formatErrorForLog(wrapped, jobId));
 
-           await dbClient.setJobStatus(jobId, 'failed', {
-             result: {
-               error: wrapped.message,
-               category: wrapped.category,
-               code: wrapped.code,
-               isRetryable: wrapped.isRetryable,
-               originalError: e.message,
-               stack: e.stack?.split('\n').slice(0, 5).join('\n')
-             },
-             finished: true
-           });
-           await dbClient.appendJobEvent(jobId, 'error', {
-             message: wrapped.message,
-             category: wrapped.category,
-             code: wrapped.code,
-             isRetryable: wrapped.isRetryable,
-             originalError: e.message
-           });
+          await dbClient.setJobStatus(jobId, 'failed', {
+            result: {
+              error: wrapped.message,
+              category: wrapped.category,
+              code: wrapped.code,
+              isRetryable: wrapped.isRetryable,
+              originalError: e.message,
+              stack: e.stack?.split('\n').slice(0, 5).join('\n')
+            },
+            finished: true
+          });
+          await dbClient.appendJobEvent(jobId, 'error', {
+            message: wrapped.message,
+            category: wrapped.category,
+            code: wrapped.code,
+            isRetryable: wrapped.isRetryable,
+            originalError: e.message
+          });
           try {
             const params = typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
             if (params?.notify) {
               await nodeFetch(params.notify, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_id: jobId, status: 'failed', error: e.message })
+                body: JSON.stringify({ job_id: jobId, status: 'failed', error: wrapped.message })
               }).catch(()=>{});
             }
           } catch (_) {}
-         } finally {
-           clearInterval(hb);
-         }
-       } catch (loopError) {
-         // Log worker loop errors with full context instead of swallowing
-         const { formatErrorForLog } = require('../utils/errors');
-         logger.error('JobWorker loop error', formatErrorForLog(loopError));
+        } finally {
+          clearInterval(hb);
+          activeHeartbeats.delete(hb);
+        }
+      } catch (loopError) {
+        // Log worker loop errors with full context instead of swallowing
+        const { formatErrorForLog } = require('../utils/errors');
+        logger.error('JobWorker loop error', formatErrorForLog(loopError));
 
-         // Distinguish transient vs fatal errors for backoff
-         const isFatal = loopError.message?.includes('database') ||
-                        loopError.message?.includes('connection') ||
-                        loopError.message?.includes('ECONNREFUSED');
-         await new Promise(r => setTimeout(r, isFatal ? 5000 : 1000));
-       }
-     }
-   })());
-   Promise.allSettled(runners).catch(err => {
-     logger.error('Job worker runners failed', { error: err.message });
-   });
- }
+        // Distinguish transient vs fatal errors for backoff
+        const isFatal = loopError.message?.includes('database') ||
+                       loopError.message?.includes('connection') ||
+                       loopError.message?.includes('ECONNREFUSED');
+        if (!workerStopped) await new Promise(r => setTimeout(r, isFatal ? 5000 : 1000));
+      }
+    }
+  })());
+  Promise.allSettled(runners).catch(err => {
+    logger.error('Job worker runners failed', { error: err.message });
+  });
+}
+
+function stopJobWorker() {
+  workerStopped = true;
+  for (const hb of activeHeartbeats) {
+    clearInterval(hb);
+  }
+  activeHeartbeats.clear();
+  logger.info('Job worker stop signal sent');
+}
 
  /**
   * Main server startup sequence
@@ -2118,6 +2645,16 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
      }
    }
 
+   // Seed default providers for multi-provider integration (OpenCode + Claude Code)
+   try {
+     if (typeof dbClient.seedProviders === 'function') {
+       const seededCount = await dbClient.seedProviders();
+       logger.info('Providers seeded', { count: seededCount });
+     }
+   } catch (seedError) {
+     logger.warn('Provider seeding failed (non-fatal)', { error: seedError.message });
+   }
+
    logger.info('Phase 2/4: Initializing embedder...');
    try {
      // Initialize embedder (non-blocking - vector search is optional)
@@ -2148,10 +2685,17 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
    });
  }
 
- // Single entry point with proper error handling
- startServer().catch(error => {
-   logger.error('FATAL: Server startup failed', { error: error.message, stack: error.stack });
-   process.exit(1);
- });
+  // Single entry point with proper error handling
+  if (require.main === module) {
+    startServer().catch(error => {
+      logger.error('FATAL: Server startup failed', { error: error.message, stack: error.stack });
+      process.exit(1);
+    });
+  }
+
+  module.exports.stopJobWorker = stopJobWorker;
+  module.exports.startServer = startServer;
+  module.exports.circuits = circuits;
+  module.exports.withRetry = withRetry;
 
 } // Close else block for --setup-claude check

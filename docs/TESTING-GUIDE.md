@@ -1,20 +1,20 @@
 # Testing Guide: OpenRouter Agents
 
 **Package:** @terminals-tech/openrouter-agents
-**Version:** 1.8.0
-**Date:** December 5, 2025
+**Version:** 2.0.0
+**Date:** February 6, 2026
 
 ---
 
 ## Current Features
 
 This release includes:
-- ✅ MCP SDK 1.21.1 (latest)
+- ✅ MCP SDK 1.26.0 (latest)
 - ✅ Server discovery endpoint (`/.well-known/mcp-server`)
 - ✅ Health monitoring endpoint (`/health`)
 - ✅ Rate limiting (100 req/min per IP)
 - ✅ Request size limits (10MB)
-- ✅ 100% MCP Specification 2025-06-18 compliance
+- ✅ 100% MCP Specification 2025-11-25 compliance
 - ✅ Knowledge Graph tools (traverse, path, clusters, pagerank)
 - ✅ Session time-travel (undo, redo, fork, checkpoint)
 - ✅ MCP Apps with UI resources (SEP-1865)
@@ -66,8 +66,8 @@ npm unlink -g @terminals-tech/openrouter-agents
 ### Option 3: Direct npx (After npm publish)
 
 ```bash
-# Once v1.8.0 is published to npm
-npx @terminals-tech/openrouter-agents@1.8.0 --stdio
+# Once v1.10.0 is published to npm
+npx @terminals-tech/openrouter-agents@1.10.0 --stdio
 ```
 
 ---
@@ -88,8 +88,8 @@ curl http://localhost:3002/.well-known/mcp-server | jq
 # Expected response:
 # {
 #   "name": "openrouter-agents",
-#   "version": "1.8.0",
-#   "specification": "2025-06-18",
+#   "version": "1.10.0",
+#   "specification": "2025-11-25",
 #   "specificationDraft": "2025-11-25",
 #   "capabilities": { ... },
 #   "transports": [ ... ],
@@ -104,7 +104,7 @@ curl http://localhost:3002/.well-known/mcp-server | jq
 
 **What to verify:**
 - ✅ Returns 200 OK
-- ✅ Contains `version: "1.8.0"`
+- ✅ Contains `version: "1.10.0"`
 - ✅ Shows `specificationDraft: "2025-11-25"`
 - ✅ Lists all three extensions
 - ✅ No authentication required
@@ -118,7 +118,7 @@ curl http://localhost:3002/health | jq
 # Expected response:
 # {
 #   "status": "healthy",
-#   "version": "1.8.0",
+#   "version": "1.10.0",
 #   "timestamp": "2025-11-12T...",
 #   "checks": {
 #     "database": "ok",
@@ -318,7 +318,7 @@ Use this checklist to verify all features:
 - [ ] Prompts API returns 3 prompts
 - [ ] Progress notifications stream correctly
 
-### New Features (v1.8.0)
+### New Features (v1.10.0)
 - [ ] `/.well-known/mcp-server` returns discovery info
 - [ ] `/health` endpoint works (no auth)
 - [ ] Extension metadata present in discovery
@@ -422,7 +422,7 @@ node -e "require('./src/utils/dbClient').initializeDb()"
 
 When reporting issues, include:
 
-1. **Version:** 1.8.0
+1. **Version:** 1.10.0
 2. **Branch:** `claude/mcp-compliance-review-hardening-011CV4DVd434Mj4UvYfrW9C3`
 3. **Environment:**
    - Node version: `node --version`
@@ -509,4 +509,4 @@ kill $SERVER_PID
 
 **Happy Testing!** 🚀
 
-This beta release is production-ready and fully compliant with MCP Specification 2025-06-18, with forward compatibility for the November 2025 MCP release.
+This release is production-ready and fully compliant with MCP Specification 2025-11-25 (stable, AAIF/Linux Foundation governance).
