@@ -40,6 +40,22 @@ async function routeToHandler(toolName, params, context = {}) {
   // UNIFIED TOOL LAYER (v1.14.0)
   // =========================================================================
 
+  // v3 conversational / KB shortcuts (delegate to tools.js)
+  if (['ask', 'status', 'job_get', 'kb_search', 'kb_query'].includes(toolName)) {
+    const tools = require('../tools');
+    const rid = context.requestId || `h-${Date.now()}`;
+    if (toolName === 'ask') return tools.askTool(params, context.mcpExchange, rid);
+    if (toolName === 'status') return tools.statusTool(params, context.mcpExchange, rid);
+    if (toolName === 'job_get') return tools.jobGetTool(params);
+    if (toolName === 'kb_search') return tools.kbSearchTool(params, context.mcpExchange, rid);
+    if (toolName === 'kb_query') return tools.queryTool(params, context.mcpExchange, rid);
+  }
+
+  if (toolName === 'get_provider_health') {
+    const tools = require('../tools');
+    return tools.getProviderHealth(params);
+  }
+
   // 'zero' - Unified research tool (replaces research, conduct_research, batch_research, research_follow_up)
   if (toolName === 'zero' || toolName === 'zero_chat') {
     return handleZeroTool(params, context);
@@ -65,7 +81,7 @@ async function routeToHandler(toolName, params, context = {}) {
     return util.handleUtil(toolName, params, context);
   }
 
-  // Job tools
+  // Job tools (job_get is handled in v3 block above)
   if (['job_status', 'get_job_status', 'cancel_job', 'task_get', 'task_result', 'task_list', 'task_cancel'].includes(toolName)) {
     const op = getJobOp(toolName);
     return job.handleJob(op, params, context);
@@ -84,7 +100,7 @@ async function routeToHandler(toolName, params, context = {}) {
   }
 
   // KB tools
-  if (['search', 'query', 'retrieve', 'get_report', 'history', 'list_research_history'].includes(toolName)) {
+  if (['search', 'query', 'retrieve', 'get_report', 'get_report_content', 'history', 'list_research_history'].includes(toolName)) {
     const op = getKBOp(toolName);
     return kb.handleKB(op, params, context);
   }
@@ -282,6 +298,7 @@ function getJobOp(toolName) {
   const map = {
     job_status: 'status',
     get_job_status: 'status',
+    job_get: 'status',
     cancel_job: 'cancel',
     task_get: 'status',
     task_result: 'result',
@@ -315,6 +332,7 @@ function getKBOp(toolName) {
     query: 'sql',
     retrieve: 'retrieve',
     get_report: 'report',
+    get_report_content: 'report',
     history: 'history',
     list_research_history: 'history'
   };

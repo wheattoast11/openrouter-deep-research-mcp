@@ -83,9 +83,10 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
   try {
     // Route to appropriate tool
     switch (toolName) {
-      case 'research':
       case 'conduct_research':
         return await conductResearch(params, mcpExchange, requestId);
+      case 'research':
+        return await researchTool(params, mcpExchange, requestId);
       case 'search':
         return await searchTool(params);
       case 'query':
@@ -104,8 +105,15 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
       case 'batch_research':
         return await batchResearchTool(params, mcpExchange, requestId);
 
-      case 'research':
-        return await researchTool(params, mcpExchange, requestId);
+      case 'ask':
+        return await askTool(params, mcpExchange, requestId);
+      case 'status':
+        return await statusTool(params, mcpExchange, requestId);
+      case 'job_get':
+        return await jobGetTool(params);
+      case 'kb_search':
+        return await kbSearchTool(params, mcpExchange, requestId);
+
       case 'ping':
         return await pingTool(params);
       case 'get_server_status':
@@ -2095,6 +2103,12 @@ const searchToolsSchema = z.object({
 
 // New: Tool catalog utilities
 const TOOL_CATALOG = [
+  { name: 'ask', description: 'v3 primary tool: natural-language research, KB search (kb: prefix), or follow-up. Returns stable JSON envelope.' },
+  { name: 'status', description: 'v3 combined health: ping + database + embedder.' },
+  { name: 'job_get', description: 'v3 structured async job status JSON (reportId when complete).' },
+  { name: 'kb_search', description: 'v3 KB hybrid search only (BM25+vector).' },
+  { name: 'kb_query', description: 'v3 read-only SQL SELECT against the local KB.' },
+  { name: 'research_start', description: 'v3 same as research: enqueue or run sync with async flag.' },
   { name: 'agent', description: 'Single entrypoint agent. Routes to research, follow_up, or retrieve/query with parameters.' },
   { name: 'ping', description: 'Health check. Returns pong, optionally with server info.' },
   { name: 'research', description: 'Submit research query. async:true (default) returns job_id, async:false streams results. Requires query parameter.' },
@@ -2120,6 +2134,12 @@ const TOOL_CATALOG = [
 function summarizeParamsForTool(name) {
   // Minimal param summaries for client display (avoid leaking full zod schemas)
   switch (name) {
+    case 'ask': return ['message', 'sessionId?', 'sync?', 'intent?', 'costPreference?', 'originalQuery?', 'followUpQuestion?', 'k?', 'scope?'];
+    case 'status': return [];
+    case 'job_get': return ['job_id'];
+    case 'kb_search': return ['query|q', 'k?', 'scope?'];
+    case 'kb_query': return ['sql', 'params?', 'explain?'];
+    case 'research_start': return ['query', 'async?', 'costPreference?', 'audienceLevel?'];
     case 'agent': return ['action? (auto|research|follow_up|retrieve|query)', 'query?', 'async?', 'originalQuery?', 'followUpQuestion?', 'mode?', 'sql?', 'params?', 'k?', 'scope?', 'explain?'];
     case 'ping': return ['info?'];
     case 'research': return ['query', 'async?', 'costPreference?', 'audienceLevel?', 'outputFormat?', 'includeSources?'];
@@ -2171,20 +2191,11 @@ async function buildToolEmbedding(text) {
   }
 }
 
-// MODE-based tool exposure (mirrors mcpServer.js shouldExpose logic)
-const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
-const ALWAYS_ON = new Set(['ping', 'get_server_status', 'get_provider_health', 'job_status', 'get_job_status', 'cancel_job']);
-const AGENT_ONLY = new Set(['agent']);
-const MANUAL_SET = new Set([
-  'research', 'conduct_research', 'submit_research', 'research_follow_up',
-  'retrieve', 'search', 'query',
-  'get_report', 'get_report_content', 'history', 'list_research_history'
-]);
+// Preset-based tool exposure (mirrors mcpServer.js shouldExpose; v3 uses MCP_PRESET)
+const { toolAllowedInPreset, normalizePreset } = require('./mcpToolSets');
 function toolExposedByMode(name) {
-  if (ALWAYS_ON.has(name)) return true;
-  if (MODE === 'AGENT') return AGENT_ONLY.has(name);
-  if (MODE === 'MANUAL') return MANUAL_SET.has(name);
-  return true; // ALL
+  const preset = normalizePreset(config.mcp?.preset || 'conversational');
+  return toolAllowedInPreset(name, preset);
 }
 
 async function listToolsTool(params, mcpExchange = null, requestId = 'unknown-req') {
@@ -2508,6 +2519,299 @@ async function agentTool(params, mcpExchange = null, requestId = `req-${Date.now
     return retrieveTool({ mode: 'index', query: params.query, k: params.k || 10, scope: params.scope || 'both', rerank: !!params.rerank }, mcpExchange, requestId);
   }
   return researchTool(params, mcpExchange, requestId);
+}
+
+// --- v3 conversational surface (ask / status / job_get / kb_search) ---
+
+const askSchema = z
+  .object({
+    message: z.string().min(1).describe('Natural-language request'),
+    sessionId: z.string().optional().default('default'),
+    sync: z.boolean().optional().default(true),
+    timeoutMs: z.number().int().positive().optional().default(180000),
+    intent: z.enum(['auto', 'research', 'kb_search', 'follow_up']).optional().default('auto'),
+    costPreference: conductResearchSchemaBase.shape.costPreference.optional(),
+    audienceLevel: conductResearchSchemaBase.shape.audienceLevel.optional(),
+    originalQuery: z.string().optional(),
+    followUpQuestion: z.string().optional(),
+    k: z.number().int().positive().optional(),
+    scope: z.enum(['both', 'reports', 'docs']).optional(),
+    includeSources: z.boolean().optional(),
+    mode: z.enum(['standard', 'hyper']).optional(),
+    _requestId: z.string().optional()
+  })
+  .describe(
+    'v3 primary conversational tool. sync=true waits for full research; sync=false returns job_id for job_get polling. Use intent kb_search or prefix message with "kb:" for KB-only search.'
+  );
+
+const kbSearchSchema = z
+  .object({
+    query: z.string().min(1).optional(),
+    q: z.string().min(1).optional(),
+    k: z.number().int().positive().optional().default(10),
+    scope: z.enum(['both', 'reports', 'docs']).optional().default('both'),
+    rerank: z.boolean().optional(),
+    _requestId: z.string().optional()
+  })
+  .refine((d) => !!(d.query || d.q), { message: 'query or q required', path: ['query'] });
+
+const statusSchema = z
+  .object({
+    _requestId: z.string().optional()
+  })
+  .describe('Combined health: ping + database + embedder status (v3 status tool).');
+
+const jobGetSchema = z
+  .object({
+    job_id: z.string().optional(),
+    jobId: z.string().optional(),
+    _requestId: z.string().optional()
+  })
+  .refine((d) => !!(d.job_id || d.jobId), { message: 'job_id required', path: ['job_id'] });
+
+function buildAskEnvelope(partial) {
+  const base = {
+    answer: partial.answer || '',
+    citations: partial.citations || [],
+    reportId: partial.reportId != null ? String(partial.reportId) : null,
+    jobId: partial.jobId != null ? String(partial.jobId) : null,
+    sessionId: partial.sessionId || 'default',
+    sync: partial.sync !== false,
+    trace: partial.trace,
+    warnings: partial.warnings || [],
+    next: partial.next
+  };
+  return JSON.stringify(base, null, 2);
+}
+
+async function statusTool(params, mcpExchange = null, requestId = 'unknown-req') {
+  await dbClient.waitForInit();
+  const pingRes = await pingTool(params || {});
+  const srvText = await getServerStatus({}, mcpExchange, requestId);
+  let pingParsed;
+  let srvParsed;
+  try {
+    pingParsed = JSON.parse(pingRes);
+  } catch (_) {
+    pingParsed = { pong: true, raw: pingRes };
+  }
+  try {
+    srvParsed = JSON.parse(srvText);
+  } catch (_) {
+    srvParsed = { raw: srvText };
+  }
+  let pkgVersion = 'unknown';
+  try {
+    pkgVersion = require('../../package.json').version;
+  } catch (_) {}
+  return JSON.stringify(
+    {
+      ok: true,
+      version: pkgVersion,
+      ping: pingParsed,
+      server: srvParsed
+    },
+    null,
+    2
+  );
+}
+
+async function jobGetTool(params) {
+  await dbClient.waitForInit();
+  const jobId = params.job_id || params.jobId;
+  const job = await dbClient.getJob(jobId);
+  if (!job) {
+    return JSON.stringify(
+      {
+        job_id: jobId,
+        status: 'unknown',
+        message: 'Not found (expired or invalid job ID)'
+      },
+      null,
+      2
+    );
+  }
+  let reportId = null;
+  const resultBlob = job.result;
+  const resultStr =
+    typeof resultBlob === 'object' && resultBlob !== null
+      ? JSON.stringify(resultBlob)
+      : String(resultBlob || '');
+  try {
+    const parsed =
+      typeof resultBlob === 'object' && resultBlob !== null ? resultBlob : JSON.parse(resultBlob);
+    if (parsed && (parsed.reportId || parsed.report_id)) {
+      reportId = String(parsed.reportId || parsed.report_id);
+    }
+  } catch (_) {}
+  if (!reportId) {
+    const m = resultStr.match(/Report ID:\s*(\d+)/i);
+    if (m) reportId = m[1];
+  }
+  return JSON.stringify(
+    {
+      job_id: jobId,
+      status: job.status,
+      type: job.type,
+      progress: job.progress || null,
+      reportId,
+      result: job.result,
+      timestamps: job.timestamps || null
+    },
+    null,
+    2
+  );
+}
+
+async function askTool(params, mcpExchange = null, requestId = `ask-${Date.now()}`) {
+  await dbClient.waitForInit();
+  const parsed = askSchema.parse(params);
+  const sessionId = parsed.sessionId || 'default';
+  const warnings = [];
+  const trace = [];
+
+  const resolveIntent = () => {
+    if (
+      parsed.intent === 'follow_up' ||
+      (parsed.originalQuery && parsed.followUpQuestion)
+    ) {
+      return 'follow_up';
+    }
+    if (parsed.intent === 'kb_search') return 'kb_search';
+    if (parsed.message.trim().toLowerCase().startsWith('kb:')) return 'kb_search';
+    return 'research';
+  };
+
+  const intent = resolveIntent();
+  trace.push(`intent:${intent}`);
+
+  if (intent === 'follow_up') {
+    const oq = parsed.originalQuery || '';
+    const fq = parsed.followUpQuestion || '';
+    if (!oq || !fq) {
+      return buildAskEnvelope({
+        answer: '',
+        sessionId,
+        warnings: ['follow_up requires originalQuery and followUpQuestion'],
+        trace
+      });
+    }
+    const raw = await researchFollowUp(
+      {
+        originalQuery: oq,
+        followUpQuestion: fq,
+        costPreference: parsed.costPreference || 'low'
+      },
+      mcpExchange,
+      requestId
+    );
+    const rid = parseReportIdFromMessage(raw);
+    return buildAskEnvelope({
+      answer: String(raw),
+      reportId: rid,
+      sessionId,
+      sync: true,
+      trace
+    });
+  }
+
+  if (intent === 'kb_search') {
+    const q = parsed.message.replace(/^kb:\s*/i, '').trim() || parsed.message.trim();
+    const raw = await retrieveTool(
+      {
+        mode: 'index',
+        query: q,
+        k: parsed.k || 10,
+        scope: parsed.scope || 'both'
+      },
+      mcpExchange,
+      requestId
+    );
+    return buildAskEnvelope({
+      answer: typeof raw === 'string' ? raw : JSON.stringify(raw),
+      sessionId,
+      sync: true,
+      trace
+    });
+  }
+
+  const query = parsed.message.trim();
+
+  if (!parsed.sync) {
+    const out = await researchTool(
+      {
+        query,
+        async: true,
+        costPreference: parsed.costPreference || 'low',
+        audienceLevel: parsed.audienceLevel,
+        includeSources: parsed.includeSources,
+        mode: parsed.mode
+      },
+      mcpExchange,
+      requestId
+    );
+    let jobId = null;
+    try {
+      const j = JSON.parse(out);
+      jobId = j.job_id || j.jobId || null;
+    } catch (_) {
+      warnings.push('async research did not return JSON job envelope');
+    }
+    return buildAskEnvelope({
+      answer: '',
+      jobId,
+      sessionId,
+      sync: false,
+      next: jobId ? `job_get({ job_id: "${jobId}" })` : undefined,
+      trace,
+      warnings
+    });
+  }
+
+  const raw = await researchTool(
+    {
+      query,
+      async: false,
+      costPreference: parsed.costPreference || 'low',
+      audienceLevel: parsed.audienceLevel || 'intermediate',
+      includeSources: parsed.includeSources !== false,
+      mode: parsed.mode || 'standard'
+    },
+    mcpExchange,
+    requestId
+  );
+
+  let reportId = null;
+  let answer = String(raw);
+  try {
+    const j = JSON.parse(raw);
+    if (j && typeof j === 'object') {
+      reportId = j.reportId ? String(j.reportId) : null;
+      if (j.preview) answer = String(j.preview);
+      else if (j.message) answer = String(j.message);
+    }
+  } catch (_) {
+    reportId = parseReportIdFromMessage(raw);
+  }
+
+  return buildAskEnvelope({
+    answer,
+    reportId,
+    sessionId,
+    sync: true,
+    trace,
+    warnings
+  });
+}
+
+async function kbSearchTool(params, mcpExchange = null, requestId = 'unknown-req') {
+  const p = kbSearchSchema.parse(params);
+  const q = p.query || p.q;
+  return retrieveTool(
+    { mode: 'index', query: q, k: p.k, scope: p.scope, rerank: p.rerank },
+    mcpExchange,
+    requestId
+  );
 }
 
 // Batch research tool for efficient parallel job dispatch
@@ -2901,6 +3205,15 @@ module.exports = {
   // Agent & ping
   agentSchema,
   agentTool,
+  askSchema,
+  askTool,
+  statusSchema,
+  statusTool,
+  jobGetSchema,
+  jobGetTool,
+  kbSearchSchema,
+  kbSearchTool,
+  buildAskEnvelope,
   pingSchema,
   pingTool,
   // Batch research

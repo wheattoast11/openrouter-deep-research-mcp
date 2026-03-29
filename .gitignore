@@ -58,6 +58,7 @@ researchAgentDB/
 .cache/
 .temp/
 .tmp/
+.model_cache.json
 
 # Research outputs (generated artifacts)
 research_outputs/

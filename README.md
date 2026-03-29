@@ -17,15 +17,13 @@ npx @terminals-tech/openrouter-agents --stdio
 claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
 ```
 
-## What's New (v2.0.0)
+## What's New (v3.0.0)
 
-- **MCP SDK 1.27.1** — registerTool/registerPrompt/registerResource APIs, security fixes
-- **Zod 4** — Upgraded from Zod 3; z.record() syntax, config schema fixes
-- **Express 5** — Upgraded from Express 4; modern path patterns, req.query handling
-- **Streamable HTTP** — Primary transport (SSE deprecated as legacy fallback)
-- **Circuit breaker** — Model API fault tolerance with configurable thresholds
-- **Embedding-based model routing** — Local vector similarity for model selection (no LLM call)
-- **Persistent storage** — Reports, jobs, knowledge graph persist across sessions by default
+- **`ask` + presets** — Default **`MCP_PRESET=conversational`** exposes only `ask`, `status`, `job_get`, and `cancel_job`. Use `developer` or `enterprise` for the full tool surface.
+- **Stable `ask` JSON** — Primary user-facing responses use a single envelope (see `src/server/schemas/askResult.js`).
+- **Deprecated `MODE`** — Prefer `MCP_PRESET`; legacy `MODE` is mapped when `MCP_PRESET` is unset (warning logged).
+
+**Also from v2:** MCP SDK 1.27.1, Zod 4, Express 5, Streamable HTTP, circuit breaker, embedding-based routing, persistent PGlite storage.
 
 > **macOS/Node 25 Note**: A cosmetic `libc++abi: mutex lock failed` message may appear on shutdown. This is harmless — data is checkpointed before shutdown. Set `DB_AUTO_HEAL=true` for in-memory mode (no persistence, no message).
 
@@ -41,7 +39,8 @@ Set `OPENROUTER_API_KEY` in your environment, then configure via `.env` or `.mcp
 | `OPENROUTER_API_KEYS` | *(optional)* | Comma-separated OpenRouter keys for rotation |
 | `OPENROUTER_KEY_COOLDOWN_MS` | `5000` | Base cooldown per key after failures |
 | `SERVER_PORT` | `3002` | HTTP server port |
-| `MODE` | `ALL` | `AGENT`, `MANUAL`, or `ALL` |
+| `MCP_PRESET` | `conversational` | `conversational` (minimal), `developer`, or `enterprise` (full tool list) |
+| `MODE` | *(deprecated)* | If set without `MCP_PRESET`, maps to a preset and logs a warning |
 | `EMBEDDING_ROUTING_ENABLED` | `true` | Enable embedding-based model routing |
 | `INDEXER_ENABLED` | `true` | Enable knowledge indexing |
 
@@ -87,10 +86,10 @@ STDIO is the default transport per [MCP spec](https://spec.modelcontextprotocol.
 3. Configure:
    - **Name:** `openrouter-agents`
    - **Command:** `npx`
-   - **Arguments:** `@terminals-tech/openrouter-agents`
+   - **Arguments:** `@terminals-tech/openrouter-agents` (optional final arg: `--stdio` — same transport as the [Install](#install) one-liner; use whichever your client documents)
    - **Environment:** `OPENROUTER_API_KEY=sk-or-...`
 
-Note: STDIO is now default - no `--stdio` flag needed.
+The server defaults to STDIO when launched without flags; Jan and Claude configs above match the top-of-doc `npx @terminals-tech/openrouter-agents` pattern.
 </details>
 
 <details>

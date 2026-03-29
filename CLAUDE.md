@@ -1,4 +1,4 @@
-# Agent Zero: Isomorphic Protocol Bridge (v2.0.0)
+# Agent Zero: Isomorphic Protocol Bridge (v3.0.0)
 
 Grounding: 2026-02-06
 
@@ -495,7 +495,7 @@ When the server updates, check:
 
 ## Version Info
 
-- **Server Version**: 2.0.0
+- **Server Version**: 3.0.0
 - **MCP SDK**: 1.27.1
 - **Zod**: 4.x (upgraded from 3.x)
 - **Express**: 5.x (upgraded from 4.x)

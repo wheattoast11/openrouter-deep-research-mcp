@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.0.0 — 2026-03-29
+
+### Breaking — MCP preset surface
+- **`MCP_PRESET`** replaces `MODE` for tool exposure defaults. Presets: `conversational` (default), `developer`, `enterprise`. Deprecated `MODE` is still read when `MCP_PRESET` is unset and logs a warning.
+- **Conversational preset** exposes only `ask`, `status`, `job_get`, and `cancel_job` — optimized for host models.
+- **New tools**: `ask` (stable JSON envelope for Q&A / research / KB prefix `kb:` / follow-up), `status` (ping + `get_server_status`), `job_get` (structured job JSON), `kb_search`, `kb_query`, `research_start`.
+- **`CORE_HANDLERS_ENABLED` no longer disables routing** — consolidated handlers in `src/server/handlers/` are always used from MCP startup.
+- **Registered missing catalog tools**: `conduct_research`, `submit_research`, `get_job_status`, `get_report_content`, `get_provider_health` now have `register()` entries for enterprise parity with docs.
+
+### Tooling
+- `scripts/tool-registry-audit.js` — static check that `TOOL_CATALOG` names are registered.
+- Tests: `tests/unit/mcp-preset.test.js`, `tests/unit/ask-result.test.js`.
+- `npm run test:integration:v3` — smoke test: `ask` (validation + async job enqueue) → `job_get` (no OpenRouter). Runs before `npm publish` via `prepublishOnly`.
+
+See [MIGRATION-v2-to-v3.md](MIGRATION-v2-to-v3.md).
+
+---
+
 ## v1.16.0 — 2026-02-06
 
 ### SDK & Spec Updates

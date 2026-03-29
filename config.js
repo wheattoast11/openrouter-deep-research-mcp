@@ -203,7 +203,9 @@ config.mcp = {
     resources: process.env.MCP_ENABLE_RESOURCES === 'false' ? false : true
   }
 };
-config.mcp.mode = (process.env.MODE || 'ALL').toUpperCase();
+config.mcp.mode = (process.env.MODE || 'ALL').toUpperCase(); // deprecated — use MCP_PRESET
+const { resolvePresetFromEnv } = require('./src/server/mcpToolSets');
+config.mcp.preset = resolvePresetFromEnv();
 
 // Experimental modes
 config.modes = {
@@ -296,9 +298,9 @@ config.payload = {
 
 // Core abstractions (Convergence Plan v2.0)
 config.core = {
-  // Enable new consolidated handlers (enabled by default since v1.9.0)
+  // v3: consolidated handler router is always on (CORE_HANDLERS_ENABLED is ignored)
   handlers: {
-    enabled: process.env.CORE_HANDLERS_ENABLED !== 'false',
+    enabled: true,
     // Which domains use new handlers (others fall back to tools.js)
     domains: (process.env.CORE_HANDLER_DOMAINS || '').split(',').filter(Boolean)
   },

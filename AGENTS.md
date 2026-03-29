@@ -32,6 +32,7 @@ Dev (watch):
 
 Tests (unit + auth + config):
 - `npm test`
+- `npm run test:integration:v3` — v3 `ask` → `job_get` contract (heavier; also runs before publish)
 
 Single test (direct node entrypoints):
 - `node tests/unit/core.test.js`

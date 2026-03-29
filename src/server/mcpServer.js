@@ -104,6 +104,8 @@ const {
   getReportContent,
   getServerStatus, // Import function for status tool
   listModels, // New: function for listing models
+  getProviderHealthSchema,
+  getProviderHealth,
   
   getJobStatusTool,
   cancelJobTool,
@@ -121,12 +123,21 @@ const {
   listToolsTool,
   searchToolsTool,
   researchTool,
+  submitResearch,
   dateTimeTool,
   calcTool,
   retrieveTool, // New: function for retrieve tool
   batchResearchTool, // Batch research function
   searchTool, // KB search
   queryTool, // SQL query
+  askSchema,
+  askTool,
+  statusSchema,
+  statusTool,
+  jobGetSchema,
+  jobGetTool,
+  kbSearchSchema,
+  kbSearchTool
 
 } = require('./tools');
 const dbClient = require('../utils/dbClient'); // Import dbClient
@@ -149,14 +160,23 @@ const circuits = {
   embedder: new CircuitBreaker({ name: 'embedder', failureThreshold: 5, resetTimeoutMs: 45000 })
 };
 
-// Consolidated handlers (feature-flagged via CORE_HANDLERS_ENABLED)
-const handlers = config.core?.handlers?.enabled ? require('./handlers') : null;
+// Consolidated handlers (v3: always on; CORE_HANDLERS_ENABLED=false is ignored)
+const handlers = require('./handlers');
 
-// Tools that require legacy tools.js implementation (complex orchestration, MCP protocols, external APIs)
+// Legacy path only for tools that still bypass the handler router
 const LEGACY_ONLY_TOOLS = new Set([
-  'research', 'agent', 'research_follow_up', 'batch_research',
-  'sample_message', 'elicitation_respond',
-  'search_web', 'fetch_url', 'get_server_status'
+  'research',
+  'research_start',
+  'conduct_research',
+  'submit_research',
+  'agent',
+  'research_follow_up',
+  'batch_research',
+  'sample_message',
+  'elicitation_respond',
+  'search_web',
+  'fetch_url',
+  'get_server_status'
 ]);
 
 // Initialize singleton instances
@@ -499,20 +519,10 @@ const server = new McpServer({
 // Wire structured logger to MCP server for sendLoggingMessage support
 logger.setServer(server);
 
-// MODE-based tool exposure
-const MODE = (config.mcp?.mode || 'ALL').toUpperCase();
-const ALWAYS_ON = new Set(['ping','get_server_status','job_status','get_job_status','cancel_job']);
-const AGENT_ONLY = new Set(['agent']);
-const MANUAL_SET = new Set([
-  'research','conduct_research','submit_research','research_follow_up',
-  'retrieve','search','query',
-  'get_report','get_report_content','history','list_research_history'
-]);
+// v3 preset-based tool exposure (MCP_PRESET; MODE deprecated — see mcpToolSets)
+const { toolAllowedInPreset } = require('./mcpToolSets');
 function shouldExpose(name) {
-  if (ALWAYS_ON.has(name)) return true;
-  if (MODE === 'AGENT') return AGENT_ONLY.has(name);
-  if (MODE === 'MANUAL') return MANUAL_SET.has(name);
-  return true; // ALL
+  return toolAllowedInPreset(name, config.mcp?.preset || 'conversational');
 }
 function register(name, schema, handler) {
   if (shouldExpose(name)) {
@@ -528,24 +538,27 @@ function register(name, schema, handler) {
 }
 
 // =============================================================================
-// Handler Integration (v1.8.1 - Feature-flagged via CORE_HANDLERS_ENABLED)
+// Handler integration (v3: always routes through src/server/handlers/)
+// CORE_HANDLERS_ENABLED env does not disable this path — see config.core.handlers
 // =============================================================================
 
 /**
  * Build context object for consolidated handlers
  */
-function buildHandlerContext() {
+function buildHandlerContext(mcpExchange = null, requestId = null) {
   return {
     dbClient,
     sessionStore: sessionManager,
     graphClient: knowledgeGraph,
-    toolRegistry: server.getTools?.() || new Map()
+    toolRegistry: server.getTools?.() || new Map(),
+    mcpExchange,
+    requestId: requestId || `ctx-${Date.now()}`
   };
 }
 
 /**
- * Route a tool call through consolidated handlers
- * Returns null if handlers are disabled or tool is unknown to handlers
+ * Route a tool call through consolidated handlers.
+ * Returns null if the handler layer does not recognize the tool (caller may fall back to legacyFn).
  */
 async function routeThroughHandler(toolName, params, context) {
   if (!handlers) return null;
@@ -565,12 +578,10 @@ async function routeThroughHandler(toolName, params, context) {
 }
 
 /**
- * Wrap a legacy tool with handler routing
- * When CORE_HANDLERS_ENABLED=true, routes through handlers first
- * Falls back to legacy implementation if handlers unavailable or for LEGACY_ONLY_TOOLS
+ * Wrap a legacy-registered tool: try consolidated handlers first, then legacyFn.
+ * Tools in LEGACY_ONLY_TOOLS skip the handler hop and run legacyFn directly.
  *
- * Includes semantic error formatting (Rust-inspired "borrow checker" style)
- * for actionable error messages that guide users to correct usage.
+ * Includes semantic error formatting for actionable errors.
  */
 function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
   return async (params, exchange, requestId = `req-${Date.now()}`) => {
@@ -596,7 +607,7 @@ function wrapWithHandler(toolName, legacyFn, needsNormalization = true) {
       // Try handler routing for non-legacy tools
       if (handlers && !LEGACY_ONLY_TOOLS.has(toolName)) {
         await ensureIntegrations();
-        const result = await routeThroughHandler(toolName, norm, buildHandlerContext());
+        const result = await routeThroughHandler(toolName, norm, buildHandlerContext(exchange, requestId));
         if (result) return result;
       }
 
@@ -678,7 +689,14 @@ function toBoolean(value, fallback = false) {
 
 function normalizeParamsForTool(toolName, params) {
   // For research tools, always go through normalization to handle q -> query conversion
-  const needsNormalization = ['research', 'submit_research', 'conduct_research'].includes(toolName);
+  const needsNormalization = [
+    'research',
+    'research_start',
+    'submit_research',
+    'conduct_research',
+    'ask',
+    'agent'
+  ].includes(toolName);
 
   // If already a structured object without loose fields, pass through (except research tools)
   if (!needsNormalization && params && typeof params === 'object' && !('random_string' in params) && !('raw' in params) && !('text' in params)) {
@@ -701,7 +719,12 @@ function normalizeParamsForTool(toolName, params) {
 
     case 'job_status':
     case 'get_job_status':
-      if (parsed && parsed.job_id) return parsed;
+    case 'job_get':
+      if (parsed && (parsed.job_id || parsed.jobId)) {
+        const o = { ...parsed };
+        if (o.jobId && !o.job_id) o.job_id = o.jobId;
+        return o;
+      }
       return { job_id: s || String(parsed._raw || '') };
 
     case 'cancel_job':
@@ -749,7 +772,12 @@ function normalizeParamsForTool(toolName, params) {
         return out;
       }
 
+    case 'ask':
+      if (parsed && parsed.message) return parsed;
+      return s ? { message: s } : {};
+
     case 'research':
+    case 'research_start':
     case 'submit_research':
     case 'conduct_research':
       if (parsed && (parsed.query || parsed.q)) {
@@ -770,6 +798,7 @@ function normalizeParamsForTool(toolName, params) {
       return s ? { query: s } : {};
 
     case 'search':
+    case 'kb_search':
       {
         // Accept either 'q' or 'query' parameter
         const out = (parsed && (parsed.q || parsed.query)) ? { ...parsed } : (s ? { q: s } : {});
@@ -781,6 +810,7 @@ function normalizeParamsForTool(toolName, params) {
     // Note: 'retrieve' case is handled above at line 503-518
 
     case 'get_server_status':
+    case 'status':
       return {}; // no params
 
     default:
@@ -1275,6 +1305,100 @@ register(
   }
 );
 register(
+  "ask",
+  askSchema,
+  wrapWithHandler('ask', askTool)
+);
+register(
+  "status",
+  statusSchema,
+  wrapWithHandler('status', statusTool, false)
+);
+register(
+  "job_get",
+  jobGetSchema,
+  wrapWithHandler('job_get', jobGetTool, false)
+);
+register(
+  "kb_search",
+  kbSearchSchema,
+  wrapWithHandler('kb_search', kbSearchTool)
+);
+register(
+  "kb_query",
+  querySchema,
+  wrapWithHandler('kb_query', queryTool)
+);
+register(
+  "research_start",
+  researchSchema,
+  async (params, exchange) => {
+    const requestId = `req-${Date.now()}`;
+    try {
+      const { runResearchPreflight } = require('../utils/preflight');
+      const preflight = await runResearchPreflight(dbClient);
+      if (!preflight.passed) {
+        const { formatErrorForResponse } = require('../utils/errors');
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: true,
+              message: preflight.toError().message,
+              code: 'PREFLIGHT_FAILED',
+              checks: preflight.checks,
+              errors: preflight.errors,
+              warnings: preflight.warnings
+            }, null, 2)
+          }],
+          isError: true
+        };
+      }
+      const norm = normalizeParamsForTool('research_start', params);
+      logger.info('research_start normalized', { requestId, hasQuery: !!norm?.query });
+      const text = await researchTool(norm, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      const { formatErrorForResponse } = require('../utils/errors');
+      const errorResponse = formatErrorForResponse(e, true);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ ...errorResponse, requestId }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+);
+register(
+  "conduct_research",
+  conductResearchSchema,
+  async (params, exchange) => {
+    const requestId = `req-${Date.now()}`;
+    try {
+      const norm = normalizeParamsForTool('conduct_research', params);
+      const text = await conductResearch(norm, exchange, requestId);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error conduct_research: ${e.message}` }], isError: true };
+    }
+  }
+);
+register(
+  "submit_research",
+  submitResearchSchema,
+  async (params, exchange) => {
+    try {
+      const norm = normalizeParamsForTool('submit_research', params);
+      const text = await submitResearch(norm, exchange, `req-${Date.now()}`);
+      return { content: [{ type: 'text', text }] };
+    } catch (e) {
+      return { content: [{ type: 'text', text: `Error submit_research: ${e.message}` }], isError: true };
+    }
+  }
+);
+register(
   "ping",
   require('./tools').pingSchema,
   wrapWithHandler('ping', require('./tools').pingTool, false)
@@ -1283,6 +1407,11 @@ register(
   "job_status",
   getJobStatusSchema,
   wrapWithHandler('job_status', getJobStatusTool)
+);
+register(
+  "get_job_status",
+  getJobStatusSchema,
+  wrapWithHandler('get_job_status', getJobStatusTool)
 );
 register(
   "cancel_job",
@@ -1298,6 +1427,16 @@ register(
   "get_report",
   getReportContentSchema,
   wrapWithHandler('get_report', getReportContent)
+);
+register(
+  "get_report_content",
+  getReportContentSchema,
+  wrapWithHandler('get_report_content', getReportContent)
+);
+register(
+  "get_provider_health",
+  getProviderHealthSchema,
+  wrapWithHandler('get_provider_health', getProviderHealth, false)
 );
 register(
   "history",
