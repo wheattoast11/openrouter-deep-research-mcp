@@ -113,8 +113,10 @@ async function routeToTool(toolName, params, mcpExchange, requestId) {
       case 'history':
       case 'list_research_history':
         return await listResearchHistory(params);
+      case 'codebox_recall':
+        return await codeboxRecallTool(params);
       default:
-        return JSON.stringify({ error: `Unknown tool: ${toolName}`, available: ['research', 'search', 'query', 'retrieve', 'get_report', 'search_web', 'fetch_url'] });
+        return JSON.stringify({ error: `Unknown tool: ${toolName}`, available: ['research', 'search', 'query', 'retrieve', 'get_report', 'search_web', 'fetch_url', 'codebox_recall'] });
     }
   } finally {
     toolDepthMap.set(requestId, depth);
@@ -1949,7 +1951,8 @@ const TOOL_CATALOG = [
   { name: 'calc', description: 'Evaluate math: +,-,*,/,^,(), decimals. Accepts freeform expression or {expr}.' },
   { name: 'list_tools', description: 'Show all available tools with parameters.' },
   { name: 'search_tools', description: 'Find tools by semantic search. Requires query parameter.' },
-  { name: 'batch_research', description: 'Dispatch multiple research queries in single call. waitForCompletion:true waits and returns results.' }
+  { name: 'batch_research', description: 'Dispatch multiple research queries in single call. waitForCompletion:true waits and returns results.' },
+  { name: 'codebox_recall', description: 'Query codebox substrate for prompt-similar past solves (k-NN over solve_history with Wilson CI + model recommendation). Wraps `codebox-mind suggest`. Shipped-inert (set CODEBOX_MCP_RECALL=1 on the server to enable; returns {enabled:false, hint} when disabled).' }
 ];
 
 function summarizeParamsForTool(name) {
@@ -1972,6 +1975,7 @@ function summarizeParamsForTool(name) {
     case 'get_report_content': return ['reportId'];
     case 'execute_sql': return ['sql', 'params?'];
     case 'list_models': return ['refresh?'];
+    case 'codebox_recall': return ['prompt', 'k?'];
     case 'export_reports': return ['format?', 'limit?', 'queryFilter?'];
     case 'import_reports': return ['format?', 'content'];
     case 'backup_db': return ['destinationDir?'];
@@ -2178,6 +2182,64 @@ async function calcTool(params) {
   } catch (e) {
     return JSON.stringify({ error: e.message });
   }
+}
+
+// ─────── iter230 · codebox MCP recall tool (shipped-inert) ─────── //
+// Wraps `codebox-mind suggest --prompt X --json` so external MCP clients
+// (Claude Code, Cursor, Codex CLI) can query the codebox substrate's
+// accumulated learning (235-row solve_history, k-NN retrieval, Wilson CI).
+//
+// Default OFF. Enable: export CODEBOX_MCP_RECALL=1 on the MCP server.
+// Override bin path: export CODEBOX_BIN=/path/to/codebox-mind
+//
+// The tool stays discoverable when disabled (list_tools shows it) and
+// returns {enabled:false, hint:...} when invoked without the env var
+// flipped. This is the shipped-inert pattern per feedback_shipped_inert_pattern.
+async function codeboxRecallTool(params) {
+  if (process.env.CODEBOX_MCP_RECALL !== '1') {
+    return JSON.stringify({
+      enabled: false,
+      hint: 'codebox_recall is shipped-inert. Set CODEBOX_MCP_RECALL=1 on the MCP server to enable.'
+    });
+  }
+  const prompt = String(params.prompt || params.query || params.q || '').trim();
+  if (!prompt) {
+    return JSON.stringify({ error: 'prompt parameter required (or alias: query, q)' });
+  }
+  const k = Number.isInteger(params.k) && params.k > 0 && params.k <= 50 ? params.k : 10;
+  const binPath = process.env.CODEBOX_BIN || '/var/home/zero/strix-mind/bin/codebox-mind';
+
+  return new Promise((resolve) => {
+    const { spawn } = require('child_process');
+    let proc;
+    try {
+      proc = spawn(binPath, ['suggest', '--prompt', prompt, '-k', String(k), '--json'], {
+        timeout: 30000
+      });
+    } catch (e) {
+      resolve(JSON.stringify({ error: `spawn failed: ${e.message}`, bin: binPath }));
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        resolve(JSON.stringify({ error: `codebox-mind rc=${code}`, stderr: stderr.slice(-500) }));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        resolve(JSON.stringify(parsed));
+      } catch (e) {
+        resolve(JSON.stringify({ error: 'malformed JSON from codebox-mind', stdout_tail: stdout.slice(-500) }));
+      }
+    });
+    proc.on('error', (e) => {
+      resolve(JSON.stringify({ error: `spawn error: ${e.message}`, bin: binPath }));
+    });
+  });
 }
 
 // Unified retrieve schema (index/sql)
