@@ -2,6 +2,8 @@
 
 This document provides Claude and other LLMs with everything needed to effectively use the OpenRouter Agents MCP server as an extension of their own capabilities.
 
+**Related:** [/var/home/zero/strix-mind/CHAIN.md](../strix-mind/CHAIN.md) (causal chain spine) · [/var/home/zero/CODEBASE-MAP.md](../CODEBASE-MAP.md) (where-everything-lives) · [/var/home/zero/IDENTITY.md](../IDENTITY.md) (objective-frame canon)
+
 ## Quick Reference: Core Tools
 
 ### Always Available (All Modes)
