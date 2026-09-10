@@ -7,11 +7,9 @@ const { JSDOM } = require('jsdom');
 const { Signal } = require('../core/signal');
 
 class UnifiedSearchMesh {
-  constructor() {
-    this.userAgents = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    ];
+  constructor({ transport = axios } = {}) {
+    this.transport = transport;
+    this.userAgents = ['Mozilla/5.0 Maxwell-Zero/1.0'];
     
     this.defaultHeaders = {
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -32,7 +30,7 @@ class UnifiedSearchMesh {
    */
   async perception(query, maxResults = 5) {
     const strategies = [
-      () => this.searchSearx(query, maxResults),
+      ...(process.env.SEARXNG_URL ? [() => this.searchSearx(query, maxResults)] : []),
       () => this.searchDuckDuckGoHtml(query, maxResults)
     ];
 
@@ -72,7 +70,7 @@ class UnifiedSearchMesh {
   async searchSearx(query, maxResults = 5) {
     const base = process.env.SEARXNG_URL || 'https://searx.be'; // Public instance fallback
     try {
-      const response = await axios.get(`${base.replace(/\/$/, '')}/search`, {
+      const response = await this.transport.get(`${base.replace(/\/$/, '')}/search`, {
         params: { q: query, format: 'json', language: 'en' },
         timeout: 10000,
         headers: { 'User-Agent': this.getRandomUserAgent() }
@@ -90,9 +88,8 @@ class UnifiedSearchMesh {
 
   async searchDuckDuckGoHtml(query, maxResults = 5) {
     try {
-      const response = await axios.get('https://duckduckgo.com/html/', {
-        params: { q: query },
-        headers: { 'User-Agent': this.getRandomUserAgent(), ...this.defaultHeaders },
+      const response = await this.transport.post('https://html.duckduckgo.com/html/', new URLSearchParams({ q: query }).toString(), {
+        headers: { 'User-Agent': this.getRandomUserAgent(), 'Content-Type': 'application/x-www-form-urlencoded' },
         timeout: 10000
       });
       const dom = new JSDOM(response.data);
@@ -100,12 +97,14 @@ class UnifiedSearchMesh {
       const links = Array.from(doc.querySelectorAll('.result__a'));
       const snippets = Array.from(doc.querySelectorAll('.result__snippet'));
       
-      return links.slice(0, maxResults).map((a, i) => ({
+      const results = links.slice(0, maxResults).map((a, i) => ({
         title: a.textContent?.trim(),
         text: snippets[i]?.textContent?.trim() || '',
-        url: a.href,
+        url: (() => { const link = new URL(a.href, 'https://duckduckgo.com'); return link.searchParams.get('uddg') || link.href; })(),
         source: 'ddg_html'
       }));
+      dom.window.close();
+      return results;
     } catch (e) {
       return [];
     }
@@ -113,7 +112,7 @@ class UnifiedSearchMesh {
 
   async fetchSignal(url) {
     try {
-      const response = await axios.get(url, {
+      const response = await this.transport.get(url, {
         headers: { 'User-Agent': this.getRandomUserAgent() },
         timeout: 15000,
         maxContentLength: 500000,
@@ -129,12 +128,16 @@ class UnifiedSearchMesh {
         .replace(/\s+/g, ' ')
         .trim();
 
-      return Signal.response(
-        { url, content: content.substring(0, 5000), title: doc.title },
+      const published = doc.querySelector('meta[property="article:published_time"], meta[name="date"]')?.content;
+      const publishedAt = published && Number.isFinite(Date.parse(published)) ? new Date(published).toISOString() : null;
+      const result = Signal.response(
+        { url: response.finalUrl || url, content: content.substring(0, 5000), title: doc.title, retrievedAt: new Date().toISOString(), publishedAt },
         'web-fetch',
         0.9,
         { tags: ['source-material'] }
       );
+      dom.window.close();
+      return result;
     } catch (e) {
       return Signal.error(`Failed to fetch ${url}: ${e.message}`, 'web-fetch');
     }
