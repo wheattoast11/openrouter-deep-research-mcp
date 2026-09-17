@@ -1,6 +1,6 @@
 # OpenRouter Agents MCP Server
 
-[![npm](https://img.shields.io/npm/v/%40terminals-tech%2Fopenrouter-agents?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/openrouter-agents)
+[![npm](https://img.shields.io/npm/v/%40terminals-tech%2Fterminals?color=2ea043)](https://www.npmjs.com/package/@terminals-tech/terminals)
 [![MCP Stable](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://spec.modelcontextprotocol.io/specification/2025-06-18/)
 [![MCP Draft](https://img.shields.io/badge/MCP-2025--11--25%20Draft-brightgreen)](docs/MCP-COMPLIANCE-REPORT.md)
 [![GitHub](https://img.shields.io/github/stars/terminals-tech/openrouter-agents?style=social)](https://github.com/terminals-tech/openrouter-agents)
@@ -10,12 +10,12 @@ Production MCP server for multi-agent AI research. Plan, parallelize, synthesize
 ## Install
 
 ```bash
-npx @terminals-tech/openrouter-agents --stdio
+npx @terminals-tech/terminals --stdio
 ```
 
 **Claude Code one-liner:**
 ```bash
-claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
+claude mcp add openrouter-agents -- npx @terminals-tech/terminals --stdio
 ```
 
 ## What's New (v1.11.0)
@@ -51,7 +51,7 @@ Set `OPENROUTER_API_KEY` in your environment, then configure via `.env` or `.mcp
   "mcpServers": {
     "openrouter-agents": {
       "command": "npx",
-      "args": ["@terminals-tech/openrouter-agents", "--stdio"],
+      "args": ["@terminals-tech/terminals", "--stdio"],
       "env": {
         "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
         "INDEXER_ENABLED": "true"
@@ -83,7 +83,7 @@ STDIO is the default transport per [MCP spec](https://modelcontextprotocol.io/sp
 3. Configure:
    - **Name:** `openrouter-agents`
    - **Command:** `npx`
-   - **Arguments:** `@terminals-tech/openrouter-agents`
+   - **Arguments:** `@terminals-tech/terminals`
    - **Environment:** `OPENROUTER_API_KEY=sk-or-...`
 
 Note: STDIO is now default - no `--stdio` flag needed.
@@ -99,7 +99,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "openrouter-agents": {
       "command": "npx",
-      "args": ["@terminals-tech/openrouter-agents"],
+      "args": ["@terminals-tech/terminals"],
       "env": {
         "OPENROUTER_API_KEY": "sk-or-..."
       }
@@ -116,7 +116,7 @@ Standard MCP config - STDIO is default, no flags needed:
 ```json
 {
   "command": "npx",
-  "args": ["@terminals-tech/openrouter-agents"],
+  "args": ["@terminals-tech/terminals"],
   "env": { "OPENROUTER_API_KEY": "..." }
 }
 ```
@@ -229,7 +229,7 @@ User Query
 ## Links
 
 - **Homepage:** [terminals.tech](https://terminals.tech)
-- **npm:** [@terminals-tech/openrouter-agents](https://www.npmjs.com/package/@terminals-tech/openrouter-agents)
+- **npm:** [@terminals-tech/terminals](https://www.npmjs.com/package/@terminals-tech/terminals)
 - **GitHub:** [terminals-tech/openrouter-agents](https://github.com/terminals-tech/openrouter-agents)
 - **Docs:** [CLAUDE.md](CLAUDE.md) | [Tool Patterns](docs/TOOL-PATTERNS.md)
 
@@ -244,4 +244,4 @@ npm publish --access public        # Publish to npm
 
 ---
 
-**Version:** 1.11.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** MIT
+**Version:** 1.11.0 | **Author:** [Tej Desai](https://terminals.tech) | **License:** AGPL-3.0-or-later (commercial licence available)

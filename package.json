@@ -1,5 +1,5 @@
 {
-  "name": "@terminals-tech/openrouter-agents",
+  "name": "@terminals-tech/terminals",
   "version": "1.11.1",
   "description": "Production MCP server for multi-agent AI research with OpenRouter",
   "main": "src/server/mcpServer.js",
@@ -44,7 +44,7 @@
   },
   "author": "Tej Desai <admin@terminals.tech> (https://terminals.tech)",
   "homepage": "https://terminals.tech",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "keywords": [
     "mcp",
     "model context protocol",
