@@ -26,7 +26,7 @@ const LOCAL_KNOWLEDGE = [
       'PGlite (from Electric SQL) FULLY SUPPORTS pgvector as a core extension bundled in the package.',
       'PGlite runs PostgreSQL entirely in WebAssembly/WASM and includes pgvector for vector similarity search.',
       'The @electric-sql/pglite package includes built-in extensions: pgvector, pg_trgm, fuzzystrmatch, and more.',
-      'This codebase (@terminals-tech/openrouter-agents) uses PGlite with pgvector for semantic search and embeddings storage.',
+      'This codebase (@terminals-tech/terminals) uses PGlite with pgvector for semantic search and embeddings storage.',
       'PGlite pgvector supports: vector type, cosine distance (<=>), L2 distance (<->), and inner product (<#>).',
       'There are NO WASM limitations preventing pgvector support in PGlite - it is fully functional.'
     ],

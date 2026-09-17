@@ -2079,7 +2079,7 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
        transports: [
          {
            type: 'stdio',
-           command: 'npx @terminals-tech/openrouter-agents --stdio',
+           command: 'npx @terminals-tech/terminals --stdio',
            description: 'Standard I/O transport for IDE integration'
          },
          {
@@ -2284,8 +2284,8 @@ register("fetch_url", fetchUrlSchema, async (p, ex) => {
          port,
          suggestion: `Another instance running? Try: lsof -i tcp:${port}`,
          alternatives: [
-           'Use STDIO transport (default): npx @terminals-tech/openrouter-agents',
-           `Use different port: SERVER_PORT=${port + 1} npx @terminals-tech/openrouter-agents --http`
+           'Use STDIO transport (default): npx @terminals-tech/terminals',
+           `Use different port: SERVER_PORT=${port + 1} npx @terminals-tech/terminals --http`
          ]
        });
        process.exit(1); // Clean exit instead of crash
