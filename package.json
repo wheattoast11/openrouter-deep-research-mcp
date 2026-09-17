@@ -5,7 +5,8 @@
   "main": "src/server/mcpServer.js",
   "bin": {
     "openrouter-agents": "src/server/mcpServer.js",
-    "zero": "bin/zero"
+    "zero": "bin/zero",
+    "terminals": "src/server/mcpServer.js"
   },
   "scripts": {
     "start": "node src/server/mcpServer.js",

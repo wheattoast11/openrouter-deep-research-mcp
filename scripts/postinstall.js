@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Postinstall script for @terminals-tech/openrouter-agents
+ * Postinstall script for @terminals-tech/terminals
  * Supports: --verify flag to validate installation readiness
  */
 
@@ -121,9 +121,9 @@ async function runVerify() {
   console.log(`\n${bright}Next steps:${reset}`);
   if (!apiKey) {
     console.log(`  1. Set your API key: ${cyan}export OPENROUTER_API_KEY="sk-or-..."${reset}`);
-    console.log(`  2. Start the server: ${cyan}npx @terminals-tech/openrouter-agents --stdio${reset}`);
+    console.log(`  2. Start the server: ${cyan}npx @terminals-tech/terminals --stdio${reset}`);
   } else {
-    console.log(`  ${cyan}npx @terminals-tech/openrouter-agents --stdio${reset}`);
+    console.log(`  ${cyan}npx @terminals-tech/terminals --stdio${reset}`);
   }
   console.log('');
 }
@@ -141,13 +141,13 @@ ${cyan}================================================================${reset}
 
   ${bright}Quick setup:${reset}
   claude mcp add openrouter-agents -- \\
-    npx @terminals-tech/openrouter-agents --stdio
+    npx @terminals-tech/terminals --stdio
 
   ${bright}Verify installation:${reset}
-  npx @terminals-tech/openrouter-agents --verify
+  npx @terminals-tech/terminals --verify
 
   ${bright}Interactive setup:${reset}
-  npx @terminals-tech/openrouter-agents --setup-claude
+  npx @terminals-tech/terminals --setup-claude
 
 ${cyan}================================================================${reset}
 `);

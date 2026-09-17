@@ -6,7 +6,7 @@ Your first 5 minutes with Zero - from install to first research.
 
 ```bash
 # 1. Install globally
-npm install -g @terminals-tech/openrouter-agents
+npm install -g @terminals-tech/terminals
 
 # 2. Run setup wizard
 zero init

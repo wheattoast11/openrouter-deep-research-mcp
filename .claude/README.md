@@ -74,13 +74,13 @@ Triggered on tool calls to provide contextual usage hints:
 ### Option 1: Quick Setup (Recommended)
 
 ```bash
-claude mcp add openrouter-agents -- npx @terminals-tech/openrouter-agents --stdio
+claude mcp add openrouter-agents -- npx @terminals-tech/terminals --stdio
 ```
 
 ### Option 2: Interactive Setup
 
 ```bash
-npx @terminals-tech/openrouter-agents --setup-claude
+npx @terminals-tech/terminals --setup-claude
 ```
 
 This copies the `.claude/` directory to your project or home directory.
@@ -90,7 +90,7 @@ This copies the `.claude/` directory to your project or home directory.
 Copy the `.claude/` directory from the package:
 
 ```bash
-cp -r node_modules/@terminals-tech/openrouter-agents/.claude ./.claude
+cp -r node_modules/@terminals-tech/terminals/.claude ./.claude
 ```
 
 ## Configuration
@@ -110,7 +110,7 @@ Or in `.mcp.json`:
   "mcpServers": {
     "openrouter-agents": {
       "command": "npx",
-      "args": ["@terminals-tech/openrouter-agents", "--stdio"],
+      "args": ["@terminals-tech/terminals", "--stdio"],
       "env": {
         "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
         "INDEXER_ENABLED": "true"

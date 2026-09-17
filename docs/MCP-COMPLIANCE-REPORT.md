@@ -1,7 +1,7 @@
 # MCP Specification 2025-06-18 Compliance Report
 
 **Report Date:** December 15, 2025
-**Package:** @terminals-tech/openrouter-agents
+**Package:** @terminals-tech/terminals
 **Version:** 1.10.0 (Zero Protocol Release)
 **MCP SDK:** 1.21.1
 **Target Spec:** [MCP Specification 2025-06-18](https://spec.modelcontextprotocol.io/specification/2025-06-18/)

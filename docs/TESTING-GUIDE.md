@@ -1,6 +1,6 @@
 # Testing Guide: OpenRouter Agents
 
-**Package:** @terminals-tech/openrouter-agents
+**Package:** @terminals-tech/terminals
 **Version:** 1.10.0
 **Date:** December 5, 2025
 
@@ -60,14 +60,14 @@ npm link
 openrouter-agents --stdio
 
 # To unlink later
-npm unlink -g @terminals-tech/openrouter-agents
+npm unlink -g @terminals-tech/terminals
 ```
 
 ### Option 3: Direct npx (After npm publish)
 
 ```bash
 # Once v1.10.0 is published to npm
-npx @terminals-tech/openrouter-agents@1.10.0 --stdio
+npx @terminals-tech/terminals@1.10.0 --stdio
 ```
 
 ---

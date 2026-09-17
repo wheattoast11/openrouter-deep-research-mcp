@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Interactive setup script for Claude Code integration
- * Usage: npx @terminals-tech/openrouter-agents --setup-claude
+ * Usage: npx @terminals-tech/terminals --setup-claude
  */
 
 const fs = require('fs');
@@ -75,6 +75,15 @@ async function prompt(question) {
   });
 }
 
+// the bundled hooks/commands are hardcoded to mcp__openrouter-agents__*, so every install keys the server 'openrouter-agents' regardless of the package rename
+function existingServerKey(mcpJsonPath) {
+  try {
+    const existing = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf8'));
+    if (existing.mcpServers && existing.mcpServers['openrouter-agents']) return 'openrouter-agents';
+  } catch (_) {}
+  return null;
+}
+
 async function main() {
   log('\n' + '='.repeat(55), COLORS.cyan);
   log('  OpenRouter Agents - Claude Code Setup', COLORS.bright);
@@ -138,11 +147,12 @@ async function main() {
     // Create .mcp.json for project install
     if (choice === '1') {
       const mcpJsonPath = path.join(process.cwd(), '.mcp.json');
+      const serverKey = existingServerKey(mcpJsonPath) || 'openrouter-agents';
       const mcpConfig = {
         mcpServers: {
-          'openrouter-agents': {
+          [serverKey]: {
             command: 'npx',
-            args: ['@terminals-tech/openrouter-agents', '--stdio'],
+            args: ['@terminals-tech/terminals', '--stdio'],
             env: {
               OPENROUTER_API_KEY: '${OPENROUTER_API_KEY}',
               INDEXER_ENABLED: 'true',
